@@ -1,0 +1,33 @@
+Private Vault privacy policy
+Effective date: September 17, 2026
+
+Developer: Santosh Kanumuri
+Contact: santosh.kanumuri@hotmail.com
+
+What stays on your device
+Private Vault stores the cards, passwords, authenticator setup keys, security questions, notes, groups, app links, and photos you choose to save. Vault records and photos are encrypted in the app's private storage. The master password protects the vault key; the app does not store your master password. Appearance and optional-feature preferences are stored locally.
+
+The app has no Internet permission, server account, advertising, analytics, or developer-operated cloud sync. It does not send your vault contents or app usage history to the developer. Processing inside the app takes place on your device.
+
+Optional permissions
+Camera access is used to scan authenticator setup QR codes or capture photos you choose to save. The QR scanner does not save camera frames. Photo capture may open your camera app, whose own privacy practices apply. Imported photo originals remain outside the vault.
+
+NFC is off by default. If enabled, an explicit card scan reads supported card details for you to review and save. It does not make payments or read a card's printed CVV.
+
+Strong biometric authentication is handled by Android. Private Vault does not receive or store fingerprint images or biometric templates. A device-protected, encrypted vault key can enable biometric access for 24 hours after master-password authentication and biometric confirmation.
+
+Optional app suggestions require Usage access, which you grant in Android Settings. When enabled, opening the Vault codes picker checks up to five minutes of recent app activity to suggest linked accounts. No app-usage history is stored or transmitted. The app selector lists launchable apps to let you create links. Those links are saved in your encrypted vault. You can disable suggestions in Private Vault and revoke Usage access in Android Settings.
+
+Backups and sharing you request
+Manual exports create an encrypted backup containing your records, photos, and vault settings. If you choose a cloud document provider, that provider may upload the encrypted file under its own terms. Private Vault does not upload it itself. Backups require the password used when they were exported, even after you change the current vault password.
+
+Copying a field places its value on Android's clipboard so you can paste it into another app. Copied secrets are marked sensitive, and the app attempts to clear its own clipboard item after 30 seconds. Android can prevent background clipboard access, so clearing is not guaranteed. Your keyboard and the receiving app may handle pasted information under their own privacy practices.
+
+Retention and deletion
+Your data stays in the vault until you delete it, replace the vault during restore, clear the app's storage, or uninstall the app. Deleting an entry also removes its associated encrypted photo files. Exported backups, imported originals, and copies pasted elsewhere are not deleted with the vault; remove them separately. Logical deletion does not guarantee forensic erasure from flash storage. There is no account-recovery service or master-password reset.
+
+Security limits
+The app uses encryption, blocks ordinary screenshots, and locks access when required by its settings. These protections cannot guarantee security on a compromised operating system or against someone who has your master password. The app has not undergone an independent security audit.
+
+Support and policy changes
+If you email support, your email provider and the developer's email provider process the message. Do not send vault passwords, card numbers, authenticator setup keys, or backups. Contact Santosh Kanumuri at santosh.kanumuri@hotmail.com for privacy questions. Policy updates will be published with a revised effective date.

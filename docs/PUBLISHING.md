@@ -1,5 +1,7 @@
 # Release signing and downloads
 
+For Google Play, follow [the submission guide](PLAY-SUBMISSION.md). The privacy policy is bundled in the app; publish [the web version](privacy-policy.html) before submitting. Package registration alone does not publish a Play Store listing.
+
 The README links to the signed APK in `downloads/`. Commit that folder along with the source before pushing. The relative download link will then work on GitHub without a separate Release. Keep only the current APK in this folder. Git history will still retain older files; for ongoing releases, consider GitHub Releases to keep binaries out of the source history and update the README link accordingly.
 
 ## Signing your own build
@@ -20,6 +22,8 @@ Use the same signing key for every update of your release. Back it up securely. 
 ```
 
 The output is `app/build/outputs/apk/release/app-release.apk`. Verify it with Android SDK Build Tools' `apksigner verify` before publishing.
+
+Build the Play bundle with `.\gradlew.bat bundleRelease`. Its output is `app/build/outputs/bundle/release/app-release.aab`. Check native library alignment with `python scripts/check-native-alignment.py PATH_TO_APK_OR_AAB`, then check APK ZIP alignment using Build Tools 36's `zipalign -c -P 16 -v 4 PATH_TO_APK`. Confirm Play's generated APKs during internal testing as well.
 
 ## Updating the download
 

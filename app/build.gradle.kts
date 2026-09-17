@@ -13,14 +13,15 @@ if (privateSigningFile.exists()) privateSigningFile.inputStream().use { privateS
 
 android {
     namespace = "com.privatevault.app"
-    compileSdk = 34
+    compileSdk = 36
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
-        applicationId = "com.privatevault.app"
+        applicationId = "com.application.private_vault"
         minSdk = 29
-        targetSdk = 34
-        versionCode = 22
-        versionName = "1.5.2"
+        targetSdk = 36
+        versionCode = 23
+        versionName = "1.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -57,9 +58,9 @@ android {
 dependencies {
     implementation("com.eatthepath:java-otp:1.0.0")
     implementation("com.google.zxing:core:3.5.3")
-    implementation("androidx.camera:camera-camera2:1.3.4")
-    implementation("androidx.camera:camera-lifecycle:1.3.4")
-    implementation("androidx.camera:camera-view:1.3.4")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.1")
     implementation("androidx.fragment:fragment-ktx:1.8.2")
@@ -74,7 +75,7 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     implementation("androidx.sqlite:sqlite:2.4.0")
-    // 4.6.1 is the newest SQLCipher Android line compatible with this machine's API 34 SDK.
+    // This SQLCipher Android line supports 16 KB memory pages; verify native alignment on release.
     implementation("net.zetetic:sqlcipher-android:4.6.1@aar")
     implementation("org.bouncycastle:bcprov-jdk18on:1.77")
     implementation("com.google.crypto.tink:tink-android:1.23.0")

@@ -31,25 +31,27 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun TotpTile(entry: VaultEntry, copy: (String, String) -> Unit, open: () -> Unit) {
+internal fun TotpTile(entry: VaultEntry, copy: (String, String) -> Unit, open: () -> Unit, initiallyMasked: Boolean = false) {
+    var revealed by remember(entry.id) { mutableStateOf(!initiallyMasked) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var seconds by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(lifecycle, entry.id) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             try { while (true) { seconds = System.currentTimeMillis() / 1000; delay(250) } }
-            finally { seconds = null }
+            finally { seconds = null; if (initiallyMasked) revealed = false }
         }
     }
     val current = seconds
     val code = remember(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod, current?.div(entry.totpPeriod.coerceAtLeast(1))) {
         if (current == null) null else runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod, current) }.getOrNull()
     }
-    Card(Modifier.fillMaxWidth().clickable(onClick = open)) {
+    Card(if (initiallyMasked) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().clickable(onClick = open)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(entry.title, style = MaterialTheme.typography.titleMedium)
             if (entry.primaryValue.isNotBlank()) Text(entry.primaryValue, style = MaterialTheme.typography.bodySmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(code ?: "••• •••", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+                Text(if (revealed) code ?: "••• •••" else "••• •••", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+                if (initiallyMasked) TextButton(onClick = { revealed = !revealed }) { Text(if (revealed) "Hide" else "Show") }
                 IconButton(enabled = code != null, onClick = {
                     // Recompute on tap so a code at a time-step boundary isn't copied stale.
                     if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
@@ -97,6 +99,8 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
     var digits by remember { mutableStateOf((existing?.totpDigits ?: 6).toString()) }
     var period by remember { mutableStateOf((existing?.totpPeriod ?: 30).toString()) }
     var notes by remember { mutableStateOf(existing?.notes.orEmpty()) }
+    var linkedApps by remember { mutableStateOf(existing?.linkedApps.orEmpty()) }
+    var linkApps by remember { mutableStateOf(false) }
     var selectedGroups by remember { mutableStateOf(initialGroups) }
     var error by remember { mutableStateOf<String?>(null) }
     var scanner by remember { mutableStateOf(false) }
@@ -163,6 +167,9 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                     item { OutlinedTextField(period, { period = it }, label = { Text("Interval in seconds") }, modifier = Modifier.fillMaxWidth()) }
                 }
                 item { OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedButton(onClick = { linkApps = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Linked apps (${com.privatevault.app.security.linkedAppPackages(linkedApps).size})")
+                } }
                 if (groups.isNotEmpty()) item { Text("Link to groups", style = MaterialTheme.typography.titleSmall) }
                 items(groups, key = { it.id }) { group ->
                     Row(Modifier.fillMaxWidth().clickable { selectedGroups = if (group.id in selectedGroups) selectedGroups - group.id else selectedGroups + group.id }, verticalAlignment = Alignment.CenterVertically) {
@@ -173,10 +180,11 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
             }
         },
         confirmButton = { Button(enabled = valid, onClick = {
-            onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes), selectedGroups)
+            onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes, linkedApps = linkedApps), selectedGroups)
             secret = ""
         }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
     if (scanner) QrScanner(onResult = ::acceptQr, close = { scanner = false })
+    if (linkApps) CodeAppLinksPicker(linkedApps, dismiss = { linkApps = false }) { linkedApps = it; linkApps = false }
 }

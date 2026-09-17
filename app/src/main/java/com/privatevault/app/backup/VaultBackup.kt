@@ -193,7 +193,7 @@ class VaultBackupManager(
     }
 
     private fun serialize(snapshot: BackupData): ByteArray {
-        val root = JSONObject().put("version", 2)
+        val root = JSONObject().put("version", 3)
             .put("lightMode", snapshot.lightMode).put("nfcEnabled", snapshot.nfcEnabled)
         root.put("entries", JSONArray().apply { snapshot.entries.forEach { put(it.toJson()) } })
         root.put("groups", JSONArray().apply { snapshot.groups.forEach { put(it.toJson()) } })
@@ -204,7 +204,7 @@ class VaultBackupManager(
 
     private fun parse(bytes: ByteArray): BackupData {
         val root = JSONObject(bytes.toString(Charsets.UTF_8))
-        require(root.getInt("version") in 1..2) { "Unsupported backup version" }
+        require(root.getInt("version") in 1..3) { "Unsupported backup version" }
         fun <T> JSONArray.mapJson(block: (JSONObject) -> T) = (0 until length()).map { block(getJSONObject(it)) }
         val result = BackupData(
             root.getJSONArray("entries").mapJson { it.toEntry() },
@@ -241,6 +241,7 @@ class VaultBackupManager(
         .put("primaryValue", primaryValue).put("secondaryValue", secondaryValue)
         .put("tertiaryValue", tertiaryValue).put("fourthValue", fourthValue).put("cardKind", cardKind.name).put("network", network)
         .put("totpAlgorithm", totpAlgorithm).put("totpDigits", totpDigits).put("totpPeriod", totpPeriod)
+        .put("linkedApps", linkedApps)
         .put("notes", notes).put("color", color).put("tags", tags).put("favorite", favorite)
         .put("lastOpenedAt", lastOpenedAt).put("sortOrder", sortOrder)
         .put("createdAt", createdAt).put("updatedAt", updatedAt)
@@ -258,6 +259,7 @@ class VaultBackupManager(
         totpAlgorithm = optString("totpAlgorithm", "SHA1"),
         totpDigits = optInt("totpDigits", 6),
         totpPeriod = optInt("totpPeriod", 30),
+        linkedApps = optString("linkedApps", ""),
         notes = getString("notes"),
         color = getLong("color"),
         tags = optString("tags", ""),

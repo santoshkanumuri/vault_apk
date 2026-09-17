@@ -43,6 +43,7 @@ data class VaultEntry(
     val totpAlgorithm: String = "SHA1",
     val totpDigits: Int = 6,
     val totpPeriod: Int = 30,
+    val linkedApps: String = "",
     val notes: String = "",
     val color: Long = 0xFF08704AL,
     val tags: String = "",
@@ -115,6 +116,9 @@ interface VaultDao {
     @Transaction
     @Query("SELECT * FROM entries ORDER BY updatedAt DESC")
     suspend fun allEntries(): List<EntryWithDetails>
+
+    @Query("SELECT * FROM entries WHERE type = 'AUTHENTICATOR' ORDER BY title COLLATE NOCASE, primaryValue COLLATE NOCASE")
+    suspend fun authenticatorEntries(): List<VaultEntry>
 
     @Transaction
     @Query("SELECT * FROM entries WHERE id = :id")
@@ -228,7 +232,7 @@ class EntryTypeConverter {
 
 @Database(
     entities = [VaultEntry::class, VaultGroup::class, EntryGroupCrossRef::class, VaultPhoto::class, VaultSettings::class],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 @androidx.room.TypeConverters(EntryTypeConverter::class)
@@ -236,6 +240,11 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun dao(): VaultDao
 
     companion object {
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE entries ADD COLUMN linkedApps TEXT NOT NULL DEFAULT ''")
+            }
+        }
         private val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE entries ADD COLUMN totpAlgorithm TEXT NOT NULL DEFAULT 'SHA1'")
@@ -271,7 +280,7 @@ abstract class VaultDatabase : RoomDatabase() {
             val factory = SupportOpenHelperFactory(key.copyOf())
             return Room.databaseBuilder(context, VaultDatabase::class.java, "vault.db")
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
         }
     }

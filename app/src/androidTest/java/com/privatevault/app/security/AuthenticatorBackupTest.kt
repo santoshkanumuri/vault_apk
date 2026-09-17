@@ -35,10 +35,11 @@ class AuthenticatorBackupTest {
             val group = VaultGroup(name = "Example bank", notes = "Group notes")
             source.dao().insertGroup(group)
             val authenticator = VaultEntry(type = EntryType.AUTHENTICATOR, title = "Example", primaryValue = "account", secondaryValue = "JBSWY3DPEHPK3PXP", totpAlgorithm = "SHA256", totpDigits = 8, totpPeriod = 60, favorite = true, notes = "Keep recovery separately", tags = "finance", sortOrder = 4, lastOpenedAt = 123)
-            val records = listOf(authenticator) + listOf(EntryType.CARD, EntryType.PASSWORD, EntryType.QUESTION, EntryType.NOTE).map {
+            val records = listOf(authenticator.copy(linkedApps = "com.example.bank\ncom.example.other")) + listOf(EntryType.CARD, EntryType.PASSWORD, EntryType.QUESTION, EntryType.NOTE).map {
                 VaultEntry(type = it, title = it.name, primaryValue = "sample", secondaryValue = "private", tertiaryValue = "12/30", fourthValue = "123", network = "RuPay", color = 0xFF202020, notes = "Notes")
             }
             records.forEach { source.dao().saveEntry(it, setOf(group.id)) }
+            assertEquals(listOf(authenticator.id), source.dao().authenticatorEntries().map { it.id })
             source.dao().saveSettings(VaultSettings(lightMode = true, nfcEnabled = true))
             val bitmap = Bitmap.createBitmap(12, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
             val photoBytes = ByteArrayOutputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it); it.toByteArray() }
@@ -47,7 +48,7 @@ class AuthenticatorBackupTest {
             sourcePhotos.encrypt(photoBytes.inputStream(), photo.encryptedFileName, sourceKey)
             sourcePhotos.createThumbnail(photo.encryptedFileName, photo.encryptedThumbnailFileName, sourceKey)
             source.dao().insertPhoto(photo)
-            source.dao().saveEntry(authenticator.copy(notes = "Updated notes"), setOf(group.id))
+            source.dao().saveEntry(records.first().copy(notes = "Updated notes"), setOf(group.id))
             assertEquals(1, source.dao().entry(authenticator.id)!!.photos.size)
             source.dao().insertGroup(group.copy(name = "Renamed bank"))
             assertEquals(records.size, source.dao().allLinks().size)

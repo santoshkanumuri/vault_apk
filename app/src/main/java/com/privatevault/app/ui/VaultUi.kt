@@ -46,6 +46,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -148,7 +149,7 @@ import java.util.UUID
 import java.util.Calendar
 import java.util.Locale
 
-private val VaultColors = darkColorScheme(
+internal val VaultColors = darkColorScheme(
     primary = Color(0xFF43E6A8),
     onPrimary = Color(0xFF002117),
     secondary = Color(0xFFF2C778),
@@ -161,7 +162,7 @@ private val VaultColors = darkColorScheme(
     error = Color(0xFFFFB4AB)
 )
 
-private val VaultLightColors = lightColorScheme(
+internal val VaultLightColors = lightColorScheme(
     primary = Color(0xFF006B4D),
     onPrimary = Color.White,
     secondary = Color(0xFF795900),
@@ -560,7 +561,7 @@ private fun EntryCollection(
     } else {
         LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(entries, key = { it.entry.id }) { item ->
-                if (item.entry.type == EntryType.AUTHENTICATOR) TotpTile(item.entry, copy) { select(item.entry.id) }
+                if (item.entry.type == EntryType.AUTHENTICATOR) TotpTile(item.entry, copy, { select(item.entry.id) })
                 else EntryRow(item, item.entry.id == selectedId) { select(item.entry.id) }
             }
         }
@@ -772,7 +773,7 @@ private fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy:
                     )
                 }
             } else if (item.entry.type == EntryType.AUTHENTICATOR) {
-                item { TotpTile(item.entry, copy) {} }
+                item { TotpTile(item.entry, copy, {}) }
                 item { PlainRow("Account", item.entry.primaryValue) }
                 item { PlainRow("Code settings", "${item.entry.totpDigits} digits · ${item.entry.totpPeriod} seconds · ${item.entry.totpAlgorithm}") }
             } else if (item.entry.type == EntryType.PASSWORD) {
@@ -1239,6 +1240,7 @@ private fun GroupEntryDetails(
 
 @Composable
 private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
+    val context = LocalContext.current
     val lightMode by viewModel.lightMode.collectAsStateWithLifecycle()
     val nfcEnabled by viewModel.nfcEnabled.collectAsStateWithLifecycle()
     var action by remember { mutableStateOf<String?>(null) }
@@ -1269,6 +1271,9 @@ private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
                     modifier = Modifier.semantics { contentDescription = "Light mode" })
             }
             NfcPreference(nfcEnabled, viewModel.nfcSupported, viewModel::setNfcEnabled)
+            CodeAppDetectionPreference()
+            OutlinedButton(onClick = { requestVaultCodesTile(context) }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Add Vault codes tile") }
+            Text("Open authenticator codes from Quick Settings after unlocking. Your password autofill app stays unchanged.", style = MaterialTheme.typography.bodySmall)
             FilledTonalButton(onClick = { action = "export" }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Export encrypted backup") }
             FilledTonalButton(onClick = { action = "restore" }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Restore encrypted backup") }
             OutlinedButton(onClick = { action = "password" }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Change master password") }

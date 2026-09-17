@@ -210,6 +210,7 @@ fun PrivateVaultApp(
     val message by viewModel.message.collectAsStateWithLifecycle()
     val requestDailyBiometric by viewModel.requestDailyBiometric.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    var showPrivacy by remember { mutableStateOf(false) }
     LaunchedEffect(message) {
         message?.let { snackbar.showSnackbar(it); viewModel.clearMessage() }
     }
@@ -234,6 +235,8 @@ fun PrivateVaultApp(
                     }
                 }
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
+                if (status !is VaultStatus.Unlocked) TextButton(onClick = { showPrivacy = true }, modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding()) { Text("Privacy policy") }
+                if (showPrivacy) PrivacyPolicyDialog { showPrivacy = false }
             }
         }
     }
@@ -1240,6 +1243,7 @@ private fun GroupEntryDetails(
 
 @Composable
 private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
+    var showPrivacy by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val lightMode by viewModel.lightMode.collectAsStateWithLifecycle()
     val nfcEnabled by viewModel.nfcEnabled.collectAsStateWithLifecycle()
@@ -1272,6 +1276,7 @@ private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
             }
             NfcPreference(nfcEnabled, viewModel.nfcSupported, viewModel::setNfcEnabled)
             CodeAppDetectionPreference()
+            TextButton(onClick = { showPrivacy = true }) { Text("Privacy policy") }
             OutlinedButton(onClick = { requestVaultCodesTile(context) }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Add Vault codes tile") }
             Text("Open authenticator codes from Quick Settings after unlocking. Your password autofill app stays unchanged.", style = MaterialTheme.typography.bodySmall)
             FilledTonalButton(onClick = { action = "export" }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Export encrypted backup") }
@@ -1281,6 +1286,7 @@ private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
         }
     }, confirmButton = { TextButton(onClick = close) { Text("Close") } })
 
+    if (showPrivacy) PrivacyPolicyDialog { showPrivacy = false }
     if (action == "export" || action == "restore") AlertDialog(
         modifier = wideDialogModifier,
         properties = wideDialogProperties,

@@ -8,11 +8,15 @@ No account, server, ads, or cloud sync. Your vault stays on your phone.
 
 ## Download
 
-**[Download Private Vault v1.5.2](downloads/private-vault-v1.5.2.apk?raw=true)**
+**[Download Private Vault v1.6.0](downloads/private-vault-v1.6.0.apk?raw=true)**
 
-Requires **Android 10 or newer**. Signed release APK, about 77 MB. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.5.2.md)
+Requires **Android 10 or newer**. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.6.0.md) · [Privacy policy](docs/privacy-policy.html)
 
-Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed. Install updates over the existing app to keep your vault; do not uninstall first.
+Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
+
+**Moving from v1.5.2 or earlier:** v1.6.0 uses the new package `com.application.private_vault` and installs as a separate app. Export an encrypted backup from the old app, restore it into the new app, and check your records before removing the old installation. Later updates using the same package and signing identity can install over this version.
+
+For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Package registration is separate from publishing a store listing.
 
 ## Features
 
@@ -59,7 +63,7 @@ Tink Streaming AEAD encrypts the backup. Restore validates the encrypted file an
 
 ## Build from source
 
-Install **JDK 17** and the **Android SDK with API 34**, or open the project in Android Studio. The Gradle wrapper downloads build dependencies; development needs Internet access even though the app does not.
+Install **JDK 17**, **Android SDK API 36**, and **Build Tools 36.0.0**, or open the project in Android Studio. The Gradle wrapper downloads build dependencies; development needs Internet access even though the app does not.
 
 Set the SDK path in your local `local.properties`, for example:
 

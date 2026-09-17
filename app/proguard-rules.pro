@@ -1,0 +1,3 @@
+-keep class net.zetetic.database.sqlcipher.** { *; }
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**

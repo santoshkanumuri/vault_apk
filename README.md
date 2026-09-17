@@ -8,9 +8,9 @@ No account, server, ads, or cloud sync. Your vault stays on your phone.
 
 ## Download
 
-**[Download Private Vault v1.5.0](downloads/private-vault-v1.5.0.apk?raw=true)**
+**[Download Private Vault v1.5.2](downloads/private-vault-v1.5.2.apk?raw=true)**
 
-Requires **Android 10 or newer**. Signed release APK, about 77 MB. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.5.0.md)
+Requires **Android 10 or newer**. Signed release APK, about 77 MB. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.5.2.md)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed. Install updates over the existing app to keep your vault; do not uninstall first.
 
@@ -20,6 +20,8 @@ Open the download on your phone and allow installation from your browser or file
 - **Passwords and security questions:** save login details and answers, with notes and photos.
 - **Authenticator:** generate TOTP codes offline. Scan a setup QR, import a QR image, or enter a setup key. Supports SHA1/SHA256/SHA512, 6–8 digits, and configurable intervals. The phone's clock must be correct. SMS, push approvals, HOTP, and Google Authenticator transfer QR codes are not supported.
 - **Groups:** keep a bank's cards, logins, questions, notes, and codes together. An entry can belong to several groups. Deleting a group keeps its entries.
+- **Quick access to codes:** add the Vault codes tile from More > Settings. Unlock, choose an authenticator account, and copy its current code without changing your password autofill app. The picker closes on backgrounding and follows the same 24-hour fingerprint rule.
+- **App-linked codes:** choose Linked apps when editing an authenticator account. Optional Usage access lets the tile suggest accounts for the previous app. Codes start masked, with Copy, Show/Hide, and Show all controls. App links are included in encrypted backups. Browser websites cannot be identified this way.
 - **Photos:** full-resolution capture and original-file import, encrypted thumbnails, crop, rotate, cover selection, and zoom. Imported originals remain outside the vault.
 - **Home:** favorites, recently opened entries, expiry warnings, and quick add. Search titles, tags, notes, and group names without indexing passwords, answers, or authenticator keys.
 - **Appearance:** light mode or a pure black dark mode, with layouts for phones and larger screens.

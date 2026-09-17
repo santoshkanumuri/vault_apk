@@ -19,8 +19,8 @@ android {
         applicationId = "com.privatevault.app"
         minSdk = 29
         targetSdk = 34
-        versionCode = 20
-        versionName = "1.5.0"
+        versionCode = 22
+        versionName = "1.5.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

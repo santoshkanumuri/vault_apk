@@ -36,6 +36,37 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private var preparedRestore: com.privatevault.app.backup.PreparedRestore? = null
     private val _restoreSummary = MutableStateFlow<String?>(null)
     val restoreSummary = _restoreSummary.asStateFlow()
+    private var pendingLogins = emptyList<VaultEntry>()
+    private val _importPreview = MutableStateFlow<List<String>>(emptyList())
+    val importPreview = _importPreview.asStateFlow()
+
+    fun cancelPasswordImport() { pendingLogins = emptyList(); _importPreview.value = emptyList() }
+
+    fun previewPasswordImport(uri: Uri) = securedLaunch {
+        cancelPasswordImport()
+        val activeKey = requireNotNull(sessionKey)
+        val parsed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+            java.io.InputStreamReader(requireNotNull(getApplication<Application>().contentResolver.openInputStream(uri)), decoder).buffered().use {
+                com.privatevault.app.security.readBrowserPasswords(it)
+            }
+        }
+        if (sessionKey === activeKey && _status.value is VaultStatus.Unlocked) {
+            pendingLogins = parsed
+            _importPreview.value = parsed.map { "${it.title} · ${it.primaryValue}" }
+        }
+    }
+
+    fun confirmPasswordImport() = securedLaunch {
+        val incoming = pendingLogins
+        cancelPasswordImport()
+        if (incoming.isNotEmpty()) {
+            val added = dao().importLogins(incoming)
+            refresh()
+            _message.value = "Imported $added logins. Skipped ${incoming.size - added} exact duplicates. Delete the readable CSV export after checking your logins."
+        }
+    }
 
     fun cancelRestore() {
         preparedRestore?.close()
@@ -88,6 +119,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val status = _status.asStateFlow()
     private val _entries = MutableStateFlow<List<EntryWithDetails>>(emptyList())
     val entries = _entries.asStateFlow()
+    private val _passkeys = MutableStateFlow<List<com.privatevault.app.data.PasskeySummary>>(emptyList())
+    val passkeys = _passkeys.asStateFlow()
     private val _groups = MutableStateFlow<List<VaultGroup>>(emptyList())
     val groups = _groups.asStateFlow()
     private val _message = MutableStateFlow<String?>(null)
@@ -213,6 +246,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun skipDailyBiometric() { _requestDailyBiometric.value = false }
 
     fun lock(reason: LockReason) {
+        cancelPasswordImport()
         cancelRestore()
         clearCamera()
         cancelNfcScan()
@@ -224,6 +258,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         database?.close()
         database = null
         _entries.value = emptyList()
+        _passkeys.value = emptyList()
         _groups.value = emptyList()
         sessionKey?.fill(0)
         sessionKey = null
@@ -263,6 +298,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         backgroundDeadline = null
         backgrounded = false
         touch()
+        val activeDatabase = database
+        if (activeDatabase != null && _status.value is VaultStatus.Unlocked) viewModelScope.launch {
+            // Autofill's separate authenticated activity can save while this screen is away.
+            runCatching { activeDatabase.dao().allEntries() }.onSuccess { current ->
+                if (database === activeDatabase && _status.value is VaultStatus.Unlocked) _entries.value = current
+            }
+        }
     }
 
     fun saveEntry(entry: VaultEntry, groupIds: Set<String>) = securedLaunch {
@@ -272,6 +314,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         dao().saveEntry(entry, groupIds)
         refresh()
     }
+
+    fun refreshPasskeys() = securedLaunch { _passkeys.value = dao().passkeySummaries() }
+    fun deletePasskey(id: String) = securedLaunch { dao().deletePasskey(id); refreshPasskeys() }
 
     fun markOpened(id: String) = securedLaunch {
         dao().markOpened(id, System.currentTimeMillis())
@@ -292,6 +337,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             primaryValue = if (source.type == com.privatevault.app.data.EntryType.CARD) "" else source.primaryValue,
             secondaryValue = "",
             fourthValue = "",
+            linkedAuthenticatorId = "",
             favorite = false,
             lastOpenedAt = 0,
             sortOrder = System.currentTimeMillis(),
@@ -303,7 +349,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteEntry(item: EntryWithDetails) = securedLaunch {
-        dao().deleteEntry(item.entry)
+        dao().deleteEntryAndLinks(item.entry)
         item.photos.forEach {
             photoStore.delete(it.encryptedFileName)
             if (it.encryptedThumbnailFileName.isNotBlank()) photoStore.delete(it.encryptedThumbnailFileName)
@@ -407,7 +453,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             if (sessionKey !== activeKey || _status.value !is VaultStatus.Unlocked) { prepared.close(); return@securedLaunch }
             preparedRestore = prepared
             val data = prepared.data
-            _restoreSummary.value = "Validated ${data.entries.size} entries, ${data.groups.size} groups, ${data.photos.size} photos, and ${data.entries.count { it.type == com.privatevault.app.data.EntryType.AUTHENTICATOR }} authenticators. Replace the contents of this vault?"
+            _restoreSummary.value = "Validated ${data.entries.size} entries, ${data.groups.size} groups, ${data.photos.size} photos, ${data.passkeys.size} passkeys, and ${data.entries.count { it.type == com.privatevault.app.data.EntryType.AUTHENTICATOR }} authenticators. Replace the contents of this vault?"
         } finally {
             password.fill('\u0000')
         }
@@ -435,6 +481,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private fun dao() = requireNotNull(database) { "Vault is locked" }.dao()
 
     private suspend fun refresh() {
+        _passkeys.value = dao().passkeySummaries()
         _entries.value = dao().allEntries()
         _groups.value = dao().allGroupsWithEntries().map { it.group }
     }
@@ -442,6 +489,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private fun Throwable.userMessage(fallback: String): String = message?.takeIf { it.length < 160 } ?: fallback
 
     override fun onCleared() {
+        cancelPasswordImport()
         cancelRestore()
         clearCamera()
         database?.close()

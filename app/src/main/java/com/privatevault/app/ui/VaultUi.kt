@@ -68,6 +68,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -305,6 +308,7 @@ private fun CenteredAuthCard(title: String, subtitle: String, content: @Composab
 @Composable
 private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) -> Unit, onBiometricAction: (() -> Unit) -> Unit) {
     val restoreSummary by viewModel.restoreSummary.collectAsStateWithLifecycle()
+    val importPreview by viewModel.importPreview.collectAsStateWithLifecycle()
     val entries by viewModel.entries.collectAsStateWithLifecycle()
     val groups by viewModel.groups.collectAsStateWithLifecycle()
     var tabIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -340,9 +344,9 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = { if (!wide) VaultNavigation(tabIndex) { tabIndex = it; selectedId = null } }
         ) { padding ->
-            Row(Modifier.fillMaxSize().padding(padding)) {
+            Row(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
                 if (wide) VaultRail(tabIndex) { tabIndex = it; selectedId = null }
-                Column(Modifier.weight(1f).fillMaxHeight().statusBarsPadding()) {
+                Column(Modifier.weight(1f).fillMaxHeight()) {
                     VaultToolbar(
                         screenTitle, search, { search = it },
                         showSearch = tab != VaultTab.CARDS && tab != VaultTab.MORE,
@@ -368,7 +372,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
         if (!wide && selected != null) {
             Dialog(onDismissRequest = { selectedId = null }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    EntryDetail(selected, viewModel, onCopySecret, onBiometricAction, { editing = selected.entry }, { selectedId = null }, Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding())
+                    EntryDetail(selected, viewModel, onCopySecret, onBiometricAction, { editing = selected.entry }, { selectedId = null }, Modifier.fillMaxSize().safeDrawingPadding().imePadding())
                 }
             }
         }
@@ -393,6 +397,15 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
         close = { showGroups = false }
     )
     if (showSettings) SettingsDialog(viewModel, { showSettings = false })
+    if (importPreview.isNotEmpty()) AlertDialog(properties = wideDialogProperties,
+        onDismissRequest = viewModel::cancelPasswordImport,
+        title = { Text("Import ${importPreview.size} logins?") },
+        text = { LazyColumn(Modifier.heightIn(max = 400.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item { Text("Exact duplicates are skipped. Different passwords are kept as separate logins. Existing entries are not replaced. The original CSV contains readable passwords; delete it after checking the import.") }
+            items(importPreview.size) { Text(importPreview[it]) }
+        } },
+        confirmButton = { Button(onClick = viewModel::confirmPasswordImport) { Text("Import logins") } },
+        dismissButton = { TextButton(onClick = viewModel::cancelPasswordImport) { Text("Cancel") } })
     restoreSummary?.let { summary ->
         AlertDialog(properties = wideDialogProperties, onDismissRequest = viewModel::cancelRestore,
             title = { Text("Backup ready to restore") },
@@ -713,7 +726,8 @@ private fun EntryRow(item: EntryWithDetails, selected: Boolean, onClick: () -> U
 }
 
 @Composable
-private fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy: (String, String) -> Unit, authenticate: (() -> Unit) -> Unit, edit: () -> Unit, close: () -> Unit, modifier: Modifier) {
+internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy: (String, String) -> Unit, authenticate: (() -> Unit) -> Unit, edit: () -> Unit, close: () -> Unit, modifier: Modifier) {
+    val vaultEntries by viewModel.entries.collectAsStateWithLifecycle()
     var revealed by remember(item.entry.id) { mutableStateOf(setOf<String>()) }
     var confirmDelete by remember { mutableStateOf(false) }
     var selectedPhoto by remember { mutableStateOf<VaultPhoto?>(null) }
@@ -732,9 +746,9 @@ private fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy:
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) launchCamera() }
     val cameraContext = androidx.compose.ui.platform.LocalContext.current
     Column(modifier.background(MaterialTheme.colorScheme.background)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(item.entry.title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+                Text(item.entry.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
                 Text(item.entry.type.label().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
             TextButton(onClick = { viewModel.toggleFavorite(item.entry) }, modifier = Modifier.height(48.dp)) { Text(if (item.entry.favorite) "★ Favorite" else "☆ Favorite") }
@@ -782,8 +796,16 @@ private fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy:
             } else if (item.entry.type == EntryType.PASSWORD) {
                 item { SectionTitle("Login") }
                 item { PlainRow("Username", item.entry.primaryValue, copy) }
+                if (item.entry.tertiaryValue.isNotBlank()) item { PlainRow("Website", item.entry.tertiaryValue, copy) }
                 item { SectionTitle("Security") }
                 item { SecretRow("Password", item.entry.secondaryValue, revealed.contains("secondary"), { revealed = toggle(revealed, "secondary") }, copy) }
+                val linked = vaultEntries.firstOrNull { it.entry.id == item.entry.linkedAuthenticatorId && it.entry.type == EntryType.AUTHENTICATOR }?.entry
+                if (linked != null) item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Linked authenticator", style = MaterialTheme.typography.titleSmall)
+                        TotpTile(linked, copy, {}, initiallyMasked = true)
+                    }
+                }
             } else if (item.entry.type == EntryType.QUESTION) {
                 item { SectionTitle("Security question") }
                 item { PlainRow("Question", item.entry.primaryValue) }
@@ -818,16 +840,16 @@ private fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy:
         Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 8.dp) {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = { viewModel.externalFlowActive = true; pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.weight(1f).height(50.dp)) { Text("＋ Add photo") }
+                    FilledTonalButton(onClick = { viewModel.externalFlowActive = true; pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("＋ Add photo") }
                     OutlinedButton(onClick = {
                         if (androidx.core.content.ContextCompat.checkSelfPermission(cameraContext, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) launchCamera()
                         else cameraPermission.launch(android.Manifest.permission.CAMERA)
-                    }, modifier = Modifier.weight(1f).height(50.dp)) { Text("Camera") }
+                    }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Camera") }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = edit, modifier = Modifier.weight(1f).height(48.dp)) { Text("Edit") }
-                    if (item.entry.type != EntryType.AUTHENTICATOR) OutlinedButton(onClick = { viewModel.duplicateEntry(item); close() }, modifier = Modifier.weight(1f).height(48.dp)) { Text("Duplicate") }
-                    DeleteButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f).height(48.dp))
+                    OutlinedButton(onClick = edit, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Edit") }
+                    if (item.entry.type != EntryType.AUTHENTICATOR) OutlinedButton(onClick = { viewModel.duplicateEntry(item); close() }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Duplicate") }
+                    DeleteButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
                 }
             }
         }
@@ -957,6 +979,7 @@ private fun SecretRow(label: String, value: String, revealed: Boolean, toggle: (
 
 @Composable
 private fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<VaultGroup>, initialGroups: Set<String>, viewModel: VaultViewModel, onDismiss: () -> Unit, onSave: (VaultEntry, Set<String>) -> Unit) {
+    val vaultEntries by viewModel.entries.collectAsStateWithLifecycle()
     var title by remember { mutableStateOf(existing?.title.orEmpty()) }
     var primary by remember { mutableStateOf(existing?.primaryValue.orEmpty()) }
     var secondary by remember { mutableStateOf(existing?.secondaryValue.orEmpty()) }
@@ -964,6 +987,9 @@ private fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Vau
     var fourth by remember { mutableStateOf(existing?.fourthValue.orEmpty()) }
     var cardKind by remember { mutableStateOf(existing?.cardKind ?: CardKind.CREDIT) }
     var network by remember { mutableStateOf(existing?.network.orEmpty()) }
+    var loginApps by remember { mutableStateOf(existing?.linkedApps.orEmpty()) }
+    var loginSignatures by remember { mutableStateOf(existing?.autofillSignatures.orEmpty()) }
+    var linkedCode by remember { mutableStateOf(existing?.linkedAuthenticatorId.orEmpty()) }
     val nfcEnabled by viewModel.nfcEnabled.collectAsStateWithLifecycle()
     val scanning by viewModel.nfcScanning.collectAsStateWithLifecycle()
     val scanned by viewModel.nfcResult.collectAsStateWithLifecycle()
@@ -990,7 +1016,7 @@ private fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Vau
     val valid = title.isNotBlank() && when (type) { EntryType.CARD -> primary.isNotBlank(); EntryType.QUESTION -> primary.isNotBlank() && secondary.isNotBlank(); EntryType.PASSWORD -> secondary.isNotBlank(); EntryType.NOTE -> notes.isNotBlank(); EntryType.AUTHENTICATOR -> false }
 
     AlertDialog(modifier = wideDialogModifier, properties = wideDialogProperties, onDismissRequest = onDismiss, title = { Text(if (existing == null) "Add ${type.label()}" else "Edit ${type.label()}") }, text = {
-        LazyColumn(Modifier.imePadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { OutlinedTextField(title, { title = it }, label = { Text(when (type) { EntryType.CARD -> "Card label"; EntryType.NOTE -> "Note title"; else -> "Service" }) }, modifier = Modifier.fillMaxWidth()) }
             when (type) {
                 EntryType.CARD -> {
@@ -1043,6 +1069,11 @@ private fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Vau
                 EntryType.PASSWORD -> {
                     item { OutlinedTextField(primary, { primary = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth()) }
                     item { SecretField("Password", secondary) { secondary = it } }
+                    item { OutlinedTextField(tertiary, { tertiary = it }, label = { Text("Website URL") }, supportingText = { Text("Use the exact HTTPS website for browser autofill.") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                    item { LoginOptions(loginApps, loginSignatures, linkedCode,
+                        vaultEntries.map { it.entry }.filter { it.type == EntryType.AUTHENTICATOR },
+                        onApps = { apps, signatures -> loginApps = apps; loginSignatures = signatures },
+                        onCode = { linkedCode = it }, generate = { secondary = com.privatevault.app.security.generateLoginPassword() }) }
                 }
                 EntryType.QUESTION -> {
                     item { OutlinedTextField(primary, { primary = it }, label = { Text("Security question") }, modifier = Modifier.fillMaxWidth()) }
@@ -1062,7 +1093,7 @@ private fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Vau
         }
     }, confirmButton = {
         Button(onClick = {
-            onSave((existing ?: VaultEntry(type = type, title = title)).copy(title = title.trim(), primaryValue = primary.trim(), secondaryValue = if (type == EntryType.CARD) secondary.trim() else secondary, tertiaryValue = tertiary.trim(), fourthValue = fourth.trim(), cardKind = cardKind, network = network.trim(), notes = notes.trim(), tags = tags.trim(), color = color), selectedGroups)
+            onSave((existing ?: VaultEntry(type = type, title = title)).copy(title = title.trim(), primaryValue = primary.trim(), secondaryValue = if (type == EntryType.CARD) secondary.trim() else secondary, tertiaryValue = tertiary.trim(), fourthValue = fourth.trim(), cardKind = cardKind, network = network.trim(), notes = notes.trim(), tags = tags.trim(), color = color, linkedApps = loginApps, autofillSignatures = loginSignatures, linkedAuthenticatorId = linkedCode), selectedGroups)
         }, enabled = valid) { Text("Save") }
     }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
     if (scanning) AlertDialog(
@@ -1160,7 +1191,7 @@ private fun GroupManager(
     }
     if (editing) AlertDialog(properties = wideDialogProperties, onDismissRequest = { editing = false },
         title = { Text(if (selected == null) "New group" else "Edit group") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(name, { name = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(notes, { notes = it }, label = { Text("Group notes") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
         } },
@@ -1243,6 +1274,11 @@ private fun GroupEntryDetails(
 
 @Composable
 private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
+    val passkeys by viewModel.passkeys.collectAsStateWithLifecycle()
+    var deletePasskey by remember { mutableStateOf<com.privatevault.app.data.PasskeySummary?>(null) }
+    var page by remember { mutableStateOf<String?>(null) }
+    val pageScroll = remember(page) { androidx.compose.foundation.ScrollState(0) }
+    LaunchedEffect(page) { if (page == "Passkeys") viewModel.refreshPasskeys() }
     var showPrivacy by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val lightMode by viewModel.lightMode.collectAsStateWithLifecycle()
@@ -1266,33 +1302,101 @@ private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
         pendingBackupPassword = null
         if (uri != null && pass != null) viewModel.restoreBackup(uri, pass) else { pass?.fill('\u0000'); viewModel.touch() }
     }
+    val importPasswords = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        viewModel.externalFlowActive = false
+        if (uri != null) viewModel.previewPasswordImport(uri) else viewModel.touch()
+    }
 
-    AlertDialog(modifier = wideDialogModifier, properties = wideDialogProperties, onDismissRequest = close, title = { Text("Settings") }, text = {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Dialog(onDismissRequest = { if (page != null) page = null else close() },
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
+      Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = 16.dp)) {
+          Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { if (page != null) page = null else close() }) { Text("Back") }
+            Text(page ?: "Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+          }
+          Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().align(Alignment.CenterHorizontally).weight(1f).verticalScroll(pageScroll).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            if (page == null) {
+                listOf("Security" to "Master password and lock behavior", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and Chrome/Brave passwords", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "About" to "Privacy and security limits").forEach { (name, description) ->
+                    Card(Modifier.fillMaxWidth().clickable { page = name }) {
+                        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(name, style = MaterialTheme.typography.titleMedium)
+                            Text(description, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+            if (page == "Appearance") {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Light mode", Modifier.weight(1f))
                 Switch(checked = lightMode, onCheckedChange = viewModel::setLightMode,
                     modifier = Modifier.semantics { contentDescription = "Light mode" })
             }
-            NfcPreference(nfcEnabled, viewModel.nfcSupported, viewModel::setNfcEnabled)
-            CodeAppDetectionPreference()
-            TextButton(onClick = { showPrivacy = true }) { Text("Privacy policy") }
+            }
+            if (page == "Passkeys") {
+                Text("Create passkeys from a supported website in Chrome or Brave. They are encrypted with your vault and included in backups. Deleting one here does not remove its registration on the website.")
+                if (android.os.Build.VERSION.SDK_INT >= 34) {
+                    OutlinedButton(onClick = {
+                        runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Enable Private Vault for passkeys") }
+                } else Text("Creating and using passkeys requires Android 14 or newer. Stored passkeys remain included in backups.")
+                Text("Currently supports ES256 passkeys for the exact website host. Native apps and related or parent-domain requests are not supported yet.", style = MaterialTheme.typography.bodySmall)
+                if (passkeys.isEmpty()) Text("No passkeys saved yet.")
+                passkeys.forEach { key ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text(key.rpId, style = MaterialTheme.typography.titleMedium)
+                            Text(key.username)
+                            TextButton(onClick = { deletePasskey = key }) { Text("Delete passkey", color = MaterialTheme.colorScheme.error) }
+                        }
+                    }
+                }
+            }
+            if (page == "Cards and NFC") NfcPreference(nfcEnabled, viewModel.nfcSupported, viewModel::setNfcEnabled)
+            if (page == "Autofill and codes") {
+            AutofillPreference()
+            HorizontalDivider()
             OutlinedButton(onClick = { requestVaultCodesTile(context) }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Add Vault codes tile") }
             Text("Open authenticator codes from Quick Settings after unlocking. Your password autofill app stays unchanged.", style = MaterialTheme.typography.bodySmall)
-            FilledTonalButton(onClick = { action = "export" }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Export encrypted backup") }
-            FilledTonalButton(onClick = { action = "restore" }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Restore encrypted backup") }
-            OutlinedButton(onClick = { action = "password" }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Change master password") }
+            CodeAppDetectionPreference()
+            }
+            if (page == "Backup and import") {
+            FilledTonalButton(onClick = { action = "export" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Export encrypted backup") }
+            FilledTonalButton(onClick = { action = "restore" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Restore encrypted backup") }
             Text("A cloud file provider may upload an encrypted backup outside this app.", style = MaterialTheme.typography.bodySmall)
+            HorizontalDivider()
+            Text("Import browser passwords", style = MaterialTheme.typography.titleMedium)
+            Text("Export passwords as CSV from Chrome or Brave, then choose that file here. You will review the accounts before saving. CSV files contain readable passwords. This does not import passkeys.")
+            OutlinedButton(onClick = { viewModel.externalFlowActive = true; importPasswords.launch(arrayOf("text/*", "application/csv", "application/vnd.ms-excel", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("Choose password CSV") }
+            }
+            if (page == "Security") {
+                Text("Strong fingerprint access lasts up to 24 hours after master-password authentication and biometric confirmation. The phone PIN cannot unlock the vault.")
+                Text("Screen-off locks immediately. Ordinary app switching allows up to 10 seconds. Inactivity locks after one minute.")
+                OutlinedButton(onClick = { action = "password" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Change master password") }
+            }
+            if (page == "About") {
+                Text("Private Vault", style = MaterialTheme.typography.titleLarge)
+                Text("Local encrypted storage. No account or cloud sync. Keep encrypted backups and recovery codes somewhere safe. This app has not undergone an independent security audit.")
+                TextButton(onClick = { showPrivacy = true }) { Text("Privacy policy") }
+            }
+          }
         }
-    }, confirmButton = { TextButton(onClick = close) { Text("Close") } })
+      }
+    }
 
     if (showPrivacy) PrivacyPolicyDialog { showPrivacy = false }
+    deletePasskey?.let { key ->
+        AlertDialog(onDismissRequest = { deletePasskey = null }, title = { Text("Delete passkey?") },
+            text = { Text("Remove the passkey for ${key.username} at ${key.rpId}? Make sure you have another way to sign in. Older backups may still contain it.") },
+            confirmButton = { DeleteButton(onClick = { viewModel.deletePasskey(key.id); deletePasskey = null }) },
+            dismissButton = { TextButton(onClick = { deletePasskey = null }) { Text("Cancel") } })
+    }
     if (action == "export" || action == "restore") AlertDialog(
         modifier = wideDialogModifier,
         properties = wideDialogProperties,
         onDismissRequest = { action = null; password = "" },
         title = { Text(if (action == "export") "Protect backup" else "Replace this vault?") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(if (action == "export") "This backup will always require the current master password." else "The backup will be validated first. You will review its contents before confirming replacement.")
             SecretField(if (action == "export") "Current master password" else "Backup password", password) { password = it }
         } },
@@ -1332,7 +1436,7 @@ private fun SecretField(label: String, value: String, onValue: (String) -> Unit)
 
 private fun EntryType.label() = when (this) { EntryType.CARD -> "card"; EntryType.QUESTION -> "security question"; EntryType.PASSWORD -> "password"; EntryType.NOTE -> "note"; EntryType.AUTHENTICATOR -> "authenticator" }
 private fun CardKind.label() = when (this) { CardKind.CREDIT -> "Credit"; CardKind.DEBIT -> "Debit" }
-private val wideDialogModifier = Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 16.dp)
+private val wideDialogModifier = Modifier.imePadding().widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 16.dp)
 private val wideDialogProperties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn)
 internal data class CardColor(val name: String, val value: Long)
 // Selected from https://colorhunt.co/palettes/retro, with pure white added.

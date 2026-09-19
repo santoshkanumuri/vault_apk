@@ -29,6 +29,8 @@ Save credit and debit card details, choose card colors, and browse a stacked car
 
 Generate time-based authenticator codes from a setup QR or manual key. Add the Vault codes Quick Settings tile to copy a code without changing your password autofill app. Optional Usage access suggests accounts linked to the previous app. Codes in the picker start masked, with separate Copy and Show controls.
 
+Optional Autofill fills supported native apps and exact HTTPS websites in verified Chrome and Brave releases after authentication and account selection. Select Private Vault as your Autofill provider to use it. Import Chrome/Brave password CSV files with a preview. Supported signup and password-change forms can generate and save a separate login before filling. Browser Save/Update prompts require your confirmation. On Android 14 or newer, create and use ES256 passkeys for supported websites in verified browsers. Passkeys are included in encrypted backups. Existing passkeys cannot be imported from password CSV files; native-app and related-domain passkey requests are not supported.
+
 Optional NFC scans fill supported card details for review. This app does not make payments, provide banking services, or replace a payment wallet.
 
 Your master password cannot be recovered. Keep encrypted backups and account recovery codes somewhere safe. A correct device clock is required for authenticator codes. Imported photos and exported backups remain wherever you originally saved them.
@@ -52,6 +54,8 @@ No developer-provided login is needed. On first launch, create a local vault wit
 To test authenticator codes, open Codes, add an account manually, and use the public dummy setup key JBSWY3DPEHPK3PXP. It is not connected to a real account. Keep the default SHA1, 6 digits, 30-second interval. Edit Linked apps to select a test app.
 
 Open More > Settings to export and restore an encrypted backup. Export requires the current password. Restore validates the backup before offering replacement. Use the exported backup password, not a developer credential.
+
+Settings now groups these actions under Backup and import. Autofill and codes contains the provider selection and tile controls. For native autofill, authorize a dummy app in a saved login's editor. For browser filling, save the exact HTTPS URL and enable the browser's third-party autofill option. Browser fills require a supported release signing certificate; different subdomains do not match.
 
 Biometric features need a device with a strong biometric enrolled. They are optional for basic vault access; use the master password otherwise. CVV reveal requires biometric authentication. NFC scanning needs compatible NFC hardware and a supported physical card; manual card entry remains available. The app never reads the printed CVV through NFC.
 

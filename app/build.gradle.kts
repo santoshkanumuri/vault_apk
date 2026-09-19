@@ -20,8 +20,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 29
         targetSdk = 36
-        versionCode = 23
-        versionName = "1.6.0"
+        versionCode = 25
+        versionName = "1.8.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -56,6 +56,10 @@ android {
 }
 
 dependencies {
+    implementation("androidx.credentials:credentials:1.5.0")
+    implementation("com.webauthn4j:webauthn4j-core:0.31.10.RELEASE")
+    implementation("androidx.autofill:autofill:1.1.0")
+    implementation("org.apache.commons:commons-csv:1.14.1")
     implementation("com.eatthepath:java-otp:1.0.0")
     implementation("com.google.zxing:core:3.5.3")
     implementation("androidx.camera:camera-camera2:1.4.2")

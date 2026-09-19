@@ -180,7 +180,7 @@ class VaultBackupManager(
         try {
             val parsed = prepared.data
             val oldPhotos = dao.backupSnapshot().photos
-            dao.replaceAll(parsed.entries, parsed.groups, parsed.links, parsed.photos, com.privatevault.app.data.VaultSettings(lightMode = parsed.lightMode, nfcEnabled = parsed.nfcEnabled))
+            dao.replaceAll(parsed.entries, parsed.groups, parsed.links, parsed.photos, com.privatevault.app.data.VaultSettings(lightMode = parsed.lightMode, nfcEnabled = parsed.nfcEnabled), parsed.passkeys)
             prepared.committed = true
             oldPhotos.forEach { photo ->
                 runCatching { photoStore.delete(photo.encryptedFileName) }
@@ -193,18 +193,21 @@ class VaultBackupManager(
     }
 
     private fun serialize(snapshot: BackupData): ByteArray {
-        val root = JSONObject().put("version", 3)
+        val root = JSONObject().put("version", 5)
             .put("lightMode", snapshot.lightMode).put("nfcEnabled", snapshot.nfcEnabled)
         root.put("entries", JSONArray().apply { snapshot.entries.forEach { put(it.toJson()) } })
         root.put("groups", JSONArray().apply { snapshot.groups.forEach { put(it.toJson()) } })
         root.put("links", JSONArray().apply { snapshot.links.forEach { put(JSONObject().put("entryId", it.entryId).put("groupId", it.groupId)) } })
         root.put("photos", JSONArray().apply { snapshot.photos.forEach { put(it.toJson()) } })
+        root.put("passkeys", JSONArray().apply { snapshot.passkeys.forEach { key -> put(JSONObject()
+            .put("id", key.id).put("rpId", key.rpId).put("userHandle", key.userHandle).put("username", key.username)
+            .put("displayName", key.displayName).put("privateKey", key.privateKey).put("publicKey", key.publicKey).put("createdAt", key.createdAt)) } })
         return root.toString().toByteArray().also { require(it.size <= 16 * 1024 * 1024) { "Backup metadata is too large" } }
     }
 
     private fun parse(bytes: ByteArray): BackupData {
         val root = JSONObject(bytes.toString(Charsets.UTF_8))
-        require(root.getInt("version") in 1..3) { "Unsupported backup version" }
+        require(root.getInt("version") in 1..5) { "Unsupported backup version" }
         fun <T> JSONArray.mapJson(block: (JSONObject) -> T) = (0 until length()).map { block(getJSONObject(it)) }
         val result = BackupData(
             root.getJSONArray("entries").mapJson { it.toEntry() },
@@ -220,8 +223,14 @@ class VaultBackupManager(
                 )
             },
             lightMode = root.optBoolean("lightMode", false),
-            nfcEnabled = root.optBoolean("nfcEnabled", false)
+            nfcEnabled = root.optBoolean("nfcEnabled", false),
+            passkeys = (if (root.getInt("version") >= 5) root.getJSONArray("passkeys") else JSONArray()).mapJson {
+                com.privatevault.app.data.VaultPasskey(it.getString("id"), it.getString("rpId"), it.getString("userHandle"),
+                    it.getString("username"), it.getString("displayName"), it.getString("privateKey"), it.getString("publicKey"), it.getLong("createdAt"))
+            }
         )
+        require(result.passkeys.map { it.id }.distinct().size == result.passkeys.size) { "Duplicate passkeys" }
+        result.passkeys.forEach(com.privatevault.app.passkeys.PasskeyCrypto::validateStored)
         require(result.entries.map { it.id }.distinct().size == result.entries.size) { "Duplicate entries" }
         require(result.groups.map { it.id }.distinct().size == result.groups.size) { "Duplicate groups" }
         require(result.photos.map { it.id }.distinct().size == result.photos.size) { "Duplicate photos" }
@@ -230,6 +239,9 @@ class VaultBackupManager(
         val groupIds = result.groups.map { it.id }.toSet()
         require(result.links.all { it.entryId in entryIds && it.groupId in groupIds }) { "Broken group links" }
         require(result.photos.all { it.entryId in entryIds }) { "Orphaned photos" }
+        val codeIds = result.entries.filter { it.type == EntryType.AUTHENTICATOR }.map { it.id }.toSet()
+        require(result.entries.all { it.linkedAuthenticatorId.isBlank() ||
+            (it.type == EntryType.PASSWORD && it.linkedAuthenticatorId in codeIds) }) { "Broken authenticator links" }
         result.entries.filter { it.type == EntryType.AUTHENTICATOR }.forEach {
             Totp.validate(it.secondaryValue, it.totpAlgorithm, it.totpDigits, it.totpPeriod)
         }
@@ -242,6 +254,7 @@ class VaultBackupManager(
         .put("tertiaryValue", tertiaryValue).put("fourthValue", fourthValue).put("cardKind", cardKind.name).put("network", network)
         .put("totpAlgorithm", totpAlgorithm).put("totpDigits", totpDigits).put("totpPeriod", totpPeriod)
         .put("linkedApps", linkedApps)
+        .put("autofillSignatures", autofillSignatures).put("linkedAuthenticatorId", linkedAuthenticatorId)
         .put("notes", notes).put("color", color).put("tags", tags).put("favorite", favorite)
         .put("lastOpenedAt", lastOpenedAt).put("sortOrder", sortOrder)
         .put("createdAt", createdAt).put("updatedAt", updatedAt)
@@ -260,6 +273,8 @@ class VaultBackupManager(
         totpDigits = optInt("totpDigits", 6),
         totpPeriod = optInt("totpPeriod", 30),
         linkedApps = optString("linkedApps", ""),
+        autofillSignatures = optString("autofillSignatures", ""),
+        linkedAuthenticatorId = optString("linkedAuthenticatorId", ""),
         notes = getString("notes"),
         color = getLong("color"),
         tags = optString("tags", ""),
@@ -279,7 +294,8 @@ data class BackupData(
     val links: List<EntryGroupCrossRef>,
     val photos: List<VaultPhoto>,
     val lightMode: Boolean = false,
-    val nfcEnabled: Boolean = false
+    val nfcEnabled: Boolean = false,
+    val passkeys: List<com.privatevault.app.data.VaultPasskey> = emptyList()
 )
 
 class PreparedRestore internal constructor(val data: BackupData, private val files: List<String>, private val store: EncryptedPhotoStore) : AutoCloseable {

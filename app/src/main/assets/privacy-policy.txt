@@ -1,5 +1,5 @@
 Private Vault privacy policy
-Effective date: September 17, 2026
+Effective date: September 18, 2026
 
 Developer: Santosh Kanumuri
 Contact: santosh.kanumuri@hotmail.com
@@ -19,6 +19,16 @@ Strong biometric authentication is handled by Android. Private Vault does not re
 Optional app suggestions require Usage access, which you grant in Android Settings. When enabled, opening the Vault codes picker checks up to five minutes of recent app activity to suggest linked accounts. No app-usage history is stored or transmitted. The app selector lists launchable apps to let you create links. Those links are saved in your encrypted vault. You can disable suggestions in Private Vault and revoke Usage access in Android Settings.
 
 Backups and sharing you request
+Optional password autofill uses Android's Autofill service, which you must select in Android Settings. It inspects form structure to identify supported login or authenticator-code fields. After unlocking and selecting an account, the app sends the chosen username/password or linked code to the authorized app or website through Android, without using the clipboard. The receiving app, browser, and filled website can read those values. App package names and signing identities are saved in the encrypted vault to restrict native-app filling. Website filling checks supported browser release certificates and the exact HTTPS origin saved with the login. Keyboard suggestions show a generic app name and unlock action before authentication.
+
+Supported signup and password-change forms can receive a locally generated password after authentication and confirmation. The app saves it as a separate encrypted login before filling, so it remains recoverable if the browser does not offer a save prompt. Your current login stays unchanged. Submit the website form yourself and check that it accepted the new password before removing an older login.
+
+On Android 14 or newer, you can enable Private Vault as a passkey provider. Supported website requests require a verified browser, exact website host, vault authentication, and your confirmation. Passkey private keys stay in the encrypted vault and are included in authenticated encrypted backups. A website receives the public credential or a signature, never the private key. Passkey account labels appear after unlocking. Native-app passkey requests and related or parent-domain requests are not supported. Deleting a passkey from the vault does not delete its website registration or remove it from older backup files.
+
+For supported browser login forms, Android can offer to save the login. After you accept that prompt, Private Vault temporarily holds the submitted username and password in process memory for up to two minutes while you unlock and review it. It saves or updates the encrypted record only after your confirmation. Cancellation or expiry clears the pending password. No plaintext form file is created. Username-first filling checks each page separately and does not carry passwords to a different website.
+
+Optional Chrome/Brave CSV import reads the password file you select, previews account names, and saves confirmed entries in the encrypted vault. Private Vault does not keep a plaintext copy of the imported file. The original CSV contains readable passwords and remains outside the vault until you delete it.
+
 Manual exports create an encrypted backup containing your records, photos, and vault settings. If you choose a cloud document provider, that provider may upload the encrypted file under its own terms. Private Vault does not upload it itself. Backups require the password used when they were exported, even after you change the current vault password.
 
 Copying a field places its value on Android's clipboard so you can paste it into another app. Copied secrets are marked sensitive, and the app attempts to clear its own clipboard item after 30 seconds. Android can prevent background clipboard access, so clearing is not guaranteed. Your keyboard and the receiving app may handle pasted information under their own privacy practices.

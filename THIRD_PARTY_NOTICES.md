@@ -9,10 +9,15 @@ These are the main libraries used by Private Vault. Their code remains subject t
 | SQLCipher Community Edition | Encrypted database | BSD-style SQLCipher license |
 | Bouncy Castle | Argon2id and Base32 | Bouncy Castle license |
 | Google Tink | Streaming backup encryption | Apache-2.0 |
+| Apache Commons CSV, IO and Codec | Browser password CSV parsing | Apache-2.0 |
 | java-otp | TOTP generation | MIT |
 | ZXing | QR decoding | Apache-2.0 |
 | EMV NFC Paycard Enrollment | Contactless card reading | Apache-2.0 |
 | SLF4J | Logging facade with a no-op binding | MIT |
+| WebAuthn4J | Passkey authenticator and attestation encoding | Apache-2.0 |
+| Jackson | WebAuthn4J JSON and CBOR encoding | Apache-2.0 |
+
+AndroidX Autofill and Credentials provide keyboard suggestions and Android Credential Manager integration under Apache-2.0.
 
 Versions are in [app/build.gradle.kts](app/build.gradle.kts). Original license texts and notices in upstream distributions still apply.
 

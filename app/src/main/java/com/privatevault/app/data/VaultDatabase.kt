@@ -44,6 +44,8 @@ data class VaultEntry(
     val totpDigits: Int = 6,
     val totpPeriod: Int = 30,
     val linkedApps: String = "",
+    val autofillSignatures: String = "",
+    val linkedAuthenticatorId: String = "",
     val notes: String = "",
     val color: Long = 0xFF08704AL,
     val tags: String = "",
@@ -120,6 +122,18 @@ interface VaultDao {
     @Query("SELECT * FROM entries WHERE type = 'AUTHENTICATOR' ORDER BY title COLLATE NOCASE, primaryValue COLLATE NOCASE")
     suspend fun authenticatorEntries(): List<VaultEntry>
 
+    @Query("SELECT * FROM entries WHERE type IN ('PASSWORD', 'AUTHENTICATOR') ORDER BY title COLLATE NOCASE")
+    suspend fun loginAndCodeEntries(): List<VaultEntry>
+
+    @Query("UPDATE entries SET linkedAuthenticatorId = '' WHERE linkedAuthenticatorId = :id")
+    suspend fun clearAuthenticatorLinks(id: String)
+
+    @Transaction
+    suspend fun deleteEntryAndLinks(entry: VaultEntry) {
+        clearAuthenticatorLinks(entry.id)
+        deleteEntry(entry)
+    }
+
     @Transaction
     @Query("SELECT * FROM entries WHERE id = :id")
     suspend fun entry(id: String): EntryWithDetails?
@@ -128,6 +142,39 @@ interface VaultDao {
     suspend fun insertEntry(entry: VaultEntry)
 
     @Update suspend fun updateEntry(entry: VaultEntry)
+
+    @Transaction
+    suspend fun saveBrowserLogin(origin: String, username: String, password: String, expected: VaultEntry?) {
+        require(com.privatevault.app.security.httpsOrigin(origin) == origin && username.isNotBlank() && password.isNotEmpty())
+        if (expected == null) {
+            val duplicate = loginAndCodeEntries().any { it.type == EntryType.PASSWORD &&
+                com.privatevault.app.security.httpsOrigin(it.tertiaryValue) == origin && it.primaryValue == username && it.secondaryValue == password }
+            if (!duplicate) insertEntry(VaultEntry(type = EntryType.PASSWORD, title = origin.removePrefix("https://"),
+                primaryValue = username, secondaryValue = password, tertiaryValue = origin))
+        } else {
+            val current = entry(expected.id)?.entry
+            check(current == expected) { "This login changed. Cancel and try saving again." }
+            require(expected.type == EntryType.PASSWORD && expected.primaryValue == username &&
+                com.privatevault.app.security.httpsOrigin(expected.tertiaryValue) == origin)
+            updateEntry(expected.copy(secondaryValue = password, updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    @Transaction
+    suspend fun saveGeneratedLogin(origin: String, username: String, password: String, expected: VaultEntry?) {
+        require(com.privatevault.app.security.httpsOrigin(origin) == origin && username.isNotBlank() && username.length <= 1024 && password.isNotEmpty())
+        val previous = expected?.let { entry(it.id) }
+        if (expected != null) {
+            check(previous?.entry == expected)
+            require(expected.type == EntryType.PASSWORD && expected.primaryValue == username &&
+                com.privatevault.app.security.httpsOrigin(expected.tertiaryValue) == origin)
+        }
+        val generated = VaultEntry(type = EntryType.PASSWORD, title = "${expected?.title ?: origin.removePrefix("https://")} (generated)",
+            primaryValue = username, secondaryValue = password, tertiaryValue = origin,
+            linkedAuthenticatorId = expected?.linkedAuthenticatorId.orEmpty(),
+            notes = "Generated for a website form. Confirm that the website accepted it before removing an older login.")
+        saveEntry(generated, previous?.groups.orEmpty().map { it.id }.toSet())
+    }
 
     @Query("UPDATE entries SET lastOpenedAt = :openedAt WHERE id = :id")
     suspend fun markOpened(id: String, openedAt: Long)
@@ -171,7 +218,7 @@ interface VaultDao {
     suspend fun backupSnapshot(): com.privatevault.app.backup.BackupData {
         val entries = allEntries()
         val options = settings() ?: VaultSettings()
-        return com.privatevault.app.backup.BackupData(entries.map { it.entry }, allGroupsWithEntries().map { it.group }, allLinks(), entries.flatMap { it.photos }, options.lightMode, options.nfcEnabled)
+        return com.privatevault.app.backup.BackupData(entries.map { it.entry }, allGroupsWithEntries().map { it.group }, allLinks(), entries.flatMap { it.photos }, options.lightMode, options.nfcEnabled, allPasskeys())
     }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -192,6 +239,11 @@ interface VaultDao {
 
     @Query("DELETE FROM entries") suspend fun clearEntries()
     @Query("DELETE FROM vault_groups") suspend fun clearGroups()
+    @Query("SELECT * FROM passkeys ORDER BY rpId, username") suspend fun allPasskeys(): List<VaultPasskey>
+    @Query("SELECT id, rpId, username, createdAt FROM passkeys ORDER BY rpId, username") suspend fun passkeySummaries(): List<PasskeySummary>
+    @Insert suspend fun insertPasskeys(passkeys: List<VaultPasskey>)
+    @Query("DELETE FROM passkeys") suspend fun clearPasskeys()
+    @Query("DELETE FROM passkeys WHERE id = :id") suspend fun deletePasskey(id: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertEntries(entries: List<VaultEntry>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertGroups(groups: List<VaultGroup>)
@@ -200,9 +252,26 @@ interface VaultDao {
 
     @Transaction
     suspend fun saveEntry(entry: VaultEntry, groupIds: Set<String>) {
+        require(entry.linkedAuthenticatorId.isBlank() || (entry.type == EntryType.PASSWORD &&
+            this.entry(entry.linkedAuthenticatorId)?.entry?.type == EntryType.AUTHENTICATOR)) { "Choose an existing authenticator." }
         insertEntry(entry.copy(updatedAt = System.currentTimeMillis()))
         clearLinks(entry.id)
         groupIds.forEach { link(EntryGroupCrossRef(entry.id, it)) }
+    }
+
+    @Transaction
+    suspend fun importLogins(incoming: List<VaultEntry>): Int {
+        val known = loginAndCodeEntries().toMutableList()
+        var added = 0
+        for (entry in incoming) {
+            require(entry.type == EntryType.PASSWORD)
+            if (known.none { com.privatevault.app.security.sameImportedLogin(it, entry) }) {
+                insertEntry(entry)
+                known.add(entry)
+                added++
+            }
+        }
+        return added
     }
 
     @Transaction
@@ -211,10 +280,13 @@ interface VaultDao {
         groups: List<VaultGroup>,
         links: List<EntryGroupCrossRef>,
         photos: List<VaultPhoto>,
-        settings: VaultSettings = VaultSettings()
+        settings: VaultSettings = VaultSettings(),
+        passkeys: List<VaultPasskey> = emptyList()
     ) {
         clearEntries()
         clearGroups()
+        clearPasskeys()
+        insertPasskeys(passkeys)
         insertGroups(groups)
         insertEntries(entries)
         insertLinks(links)
@@ -231,8 +303,8 @@ class EntryTypeConverter {
 }
 
 @Database(
-    entities = [VaultEntry::class, VaultGroup::class, EntryGroupCrossRef::class, VaultPhoto::class, VaultSettings::class],
-    version = 6,
+    entities = [VaultEntry::class, VaultGroup::class, EntryGroupCrossRef::class, VaultPhoto::class, VaultSettings::class, VaultPasskey::class],
+    version = 8,
     exportSchema = false
 )
 @androidx.room.TypeConverters(EntryTypeConverter::class)
@@ -240,6 +312,17 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun dao(): VaultDao
 
     companion object {
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS passkeys (id TEXT NOT NULL PRIMARY KEY, rpId TEXT NOT NULL, userHandle TEXT NOT NULL, username TEXT NOT NULL, displayName TEXT NOT NULL, privateKey TEXT NOT NULL, publicKey TEXT NOT NULL, createdAt INTEGER NOT NULL)")
+            }
+        }
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE entries ADD COLUMN autofillSignatures TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE entries ADD COLUMN linkedAuthenticatorId TEXT NOT NULL DEFAULT ''")
+            }
+        }
         private val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE entries ADD COLUMN linkedApps TEXT NOT NULL DEFAULT ''")
@@ -280,7 +363,7 @@ abstract class VaultDatabase : RoomDatabase() {
             val factory = SupportOpenHelperFactory(key.copyOf())
             return Room.databaseBuilder(context, VaultDatabase::class.java, "vault.db")
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 .build()
         }
     }

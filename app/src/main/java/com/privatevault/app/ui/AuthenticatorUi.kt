@@ -11,6 +11,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.QuestionAnswer
+import androidx.compose.material.icons.outlined.Notes
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -73,20 +79,26 @@ internal fun TotpTile(entry: VaultEntry, copy: (String, String) -> Unit, open: (
 internal fun MoreScreen(groupCount: Int, entries: List<EntryWithDetails>, groups: () -> Unit, questions: () -> Unit, notes: () -> Unit, settings: () -> Unit) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("Your vault", style = MaterialTheme.typography.titleMedium) }
-        item { MoreItem("Groups", "$groupCount groups · linked accounts in one place", groups) }
-        item { MoreItem("Security questions", "${entries.count { it.entry.type == EntryType.QUESTION }} saved questions", questions) }
-        item { MoreItem("Notes", "${entries.count { it.entry.type == EntryType.NOTE }} private notes", notes) }
-        item { MoreItem("Settings", "Appearance, NFC, encrypted backup and restore", settings) }
+        item { MoreItem("Groups", "$groupCount groups · linked accounts in one place", Icons.Outlined.Folder, groups) }
+        item { MoreItem("Security questions", "${entries.count { it.entry.type == EntryType.QUESTION }} saved questions", Icons.Outlined.QuestionAnswer, questions) }
+        item { MoreItem("Notes", "${entries.count { it.entry.type == EntryType.NOTE }} private notes", Icons.Outlined.Notes, notes) }
+        item { HorizontalDivider() }
+        item { Text("Manage Private Vault", style = MaterialTheme.typography.titleMedium) }
+        item { MoreItem("Settings", "Security, autofill, backup, browser import and appearance", Icons.Outlined.Settings, settings) }
     }
 }
 
 @Composable
-private fun MoreItem(title: String, subtitle: String, open: () -> Unit) {
+private fun MoreItem(title: String, subtitle: String, icon: ImageVector, open: () -> Unit) {
     Card(Modifier.fillMaxWidth().clickable(onClick = open)) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
             Text(subtitle, style = MaterialTheme.typography.bodyMedium)
         }
+        Icon(Icons.Outlined.ChevronRight, null)
+      }
     }
 }
 

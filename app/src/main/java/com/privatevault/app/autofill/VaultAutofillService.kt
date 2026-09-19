@@ -62,8 +62,11 @@ internal fun nativeLoginFields(structure: AssistStructure, browser: Boolean = fa
         if (visible && node.isEnabled) node.autofillId?.let { id ->
             val variation = node.inputType and InputType.TYPE_MASK_VARIATION
             val htmlType = attributes["type"]?.lowercase(java.util.Locale.ROOT)
+            val username = isUsernameField(hints, attributes,
+                node.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT &&
+                    variation in setOf(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS, InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS), browser)
             val recognized = hints.any { it in setOf("2faAppOTPCode", "oneTimeCode", "one-time-code", "password", "current-password", "newPassword", "new-password", "username", "newUsername", "emailAddress") } ||
-                htmlType == "password" || htmlType == "email" || variation == InputType.TYPE_TEXT_VARIATION_PASSWORD || variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+                username || htmlType == "password" || variation == InputType.TYPE_TEXT_VARIATION_PASSWORD || variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
             if (browser && recognized && origin == null) unsafe = true
             when {
                 hints.any { it == "newPassword" || it == "new-password" } -> {
@@ -75,7 +78,7 @@ internal fun nativeLoginFields(structure: AssistStructure, browser: Boolean = fa
                     passwords.add(id)
                     if ("current-password" !in hints) unlabelledPassword = true
                 }
-                "username" in hints || "newUsername" in hints || "emailAddress" in hints || htmlType == "email" -> usernames.add(id)
+                username -> usernames.add(id)
             }
         }
         for (i in 0 until node.childCount) visit(node.getChildAt(i), depth + 1, origin, visible)

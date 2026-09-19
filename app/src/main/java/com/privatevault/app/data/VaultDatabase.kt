@@ -60,7 +60,8 @@ data class VaultEntry(
 data class VaultGroup(
     @androidx.room.PrimaryKey val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val notes: String = ""
+    val notes: String = "",
+    val folderType: EntryType? = null
 )
 
 @Entity(
@@ -254,6 +255,9 @@ interface VaultDao {
     suspend fun saveEntry(entry: VaultEntry, groupIds: Set<String>) {
         require(entry.linkedAuthenticatorId.isBlank() || (entry.type == EntryType.PASSWORD &&
             this.entry(entry.linkedAuthenticatorId)?.entry?.type == EntryType.AUTHENTICATOR)) { "Choose an existing authenticator." }
+        val selectedGroups = allGroupsWithEntries().map { it.group }.filter { it.id in groupIds }
+        require(selectedGroups.size == groupIds.size && selectedGroups.all { it.folderType == null || it.folderType == entry.type } &&
+            selectedGroups.count { it.folderType != null } <= 1) { "Choose one folder for this entry type." }
         insertEntry(entry.copy(updatedAt = System.currentTimeMillis()))
         clearLinks(entry.id)
         groupIds.forEach { link(EntryGroupCrossRef(entry.id, it)) }
@@ -304,7 +308,7 @@ class EntryTypeConverter {
 
 @Database(
     entities = [VaultEntry::class, VaultGroup::class, EntryGroupCrossRef::class, VaultPhoto::class, VaultSettings::class, VaultPasskey::class],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 @androidx.room.TypeConverters(EntryTypeConverter::class)
@@ -312,6 +316,11 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun dao(): VaultDao
 
     companion object {
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vault_groups ADD COLUMN folderType TEXT")
+            }
+        }
         private val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS passkeys (id TEXT NOT NULL PRIMARY KEY, rpId TEXT NOT NULL, userHandle TEXT NOT NULL, username TEXT NOT NULL, displayName TEXT NOT NULL, privateKey TEXT NOT NULL, publicKey TEXT NOT NULL, createdAt INTEGER NOT NULL)")
@@ -363,7 +372,7 @@ abstract class VaultDatabase : RoomDatabase() {
             val factory = SupportOpenHelperFactory(key.copyOf())
             return Room.databaseBuilder(context, VaultDatabase::class.java, "vault.db")
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                 .build()
         }
     }

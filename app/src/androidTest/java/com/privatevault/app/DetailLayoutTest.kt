@@ -44,4 +44,32 @@ class DetailLayoutTest {
             }
         }
     }
+
+    @Test fun editorActionsStayVisibleAtLargeTextSize() {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as android.app.Application
+        val model = VaultViewModel(app)
+        val type = mutableStateOf(EntryType.NOTE)
+        compose.setContent {
+            val density = LocalDensity.current.density
+            CompositionLocalProvider(LocalDensity provides Density(density, 1.8f)) {
+                MaterialTheme {
+                    EntryEditor(null, type.value, emptyList(), emptySet(), model, {}, { _, _ -> })
+                }
+            }
+        }
+        for (entryType in listOf(EntryType.NOTE, EntryType.PASSWORD, EntryType.QUESTION, EntryType.CARD)) {
+            compose.runOnIdle { type.value = entryType }
+            compose.onNodeWithText("Cancel").assertIsDisplayed()
+            compose.onNodeWithText("Save").assertIsDisplayed()
+            val height = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.heightPixels
+            for (label in listOf("Cancel", "Save")) {
+                val bounds = compose.onNodeWithText(label).fetchSemanticsNode().boundsInWindow
+                assertTrue("$entryType $label is below the screen", bounds.top >= 0 && bounds.bottom <= height)
+            }
+        }
+        compose.runOnIdle { type.value = EntryType.NOTE }
+        compose.onNodeWithText("Note title").performClick()
+        compose.onNodeWithText("Save").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").assertIsDisplayed()
+    }
 }

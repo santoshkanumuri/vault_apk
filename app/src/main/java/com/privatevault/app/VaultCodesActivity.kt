@@ -404,13 +404,13 @@ class VaultCodesActivity : FragmentActivity() {
                     if (unlocked && passkeyOperation != null && Build.VERSION.SDK_INT >= 34) {
                         val operation = requireNotNull(passkeyOperation)
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            item { Text(operation.origin) }
+                            item { Text(operation.displaySource(this@VaultCodesActivity)) }
                             if (operation.create) {
                                 item { Text("Create a passkey for ${operation.input.getJSONObject("user").getString("name")}? Keep an encrypted backup to transfer it to another phone.") }
                                 item { Button(enabled = !busy, onClick = { usePasskey(null) }, modifier = Modifier.fillMaxWidth()) { Text("Create passkey") } }
                             } else {
                                 val matches = passkeys.filter { com.privatevault.app.passkeys.PasskeyCrypto.matches(it, operation.input) }
-                                if (matches.isEmpty()) item { Text("No passkeys for this website in this vault.") }
+                                if (matches.isEmpty()) item { Text("No matching passkeys in this vault.") }
                                 items(matches, key = { it.id }) { passkey ->
                                     Button(enabled = !busy, onClick = { usePasskey(passkey) }, modifier = Modifier.fillMaxWidth()) { Text("Sign in as ${passkey.username}") }
                                 }

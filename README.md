@@ -8,9 +8,9 @@ No account, server, ads, or cloud sync. Your vault stays on your phone.
 
 ## Download
 
-**[Download Private Vault v1.8.0](downloads/private-vault-v1.8.0.apk?raw=true)**
+**[Download Private Vault v1.9.0](downloads/private-vault-v1.9.0.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.8.0.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.0.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 
@@ -27,10 +27,11 @@ For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Pa
 - **Browser password import:** import a Chrome or Brave password CSV under Settings > Backup and import. Review account names before saving. Exact duplicates are skipped and conflicting passwords remain separate. The original CSV contains readable passwords; delete it after verifying the import.
 - **Authenticator:** generate TOTP codes offline. Scan a setup QR, import a QR image, or enter a setup key. Supports SHA1/SHA256/SHA512, 6–8 digits, and configurable intervals. The phone's clock must be correct. SMS, push approvals, HOTP, and Google Authenticator transfer QR codes are not supported.
 - **Groups:** keep a bank's cards, logins, questions, notes, and codes together. An entry can belong to several groups. Deleting a group keeps its entries.
+- **Folders:** organize cards, passwords, questions, and notes inside their own categories. Folders appear before unfiled items, and entry cards show their folder. Deleting a folder keeps its entries. Folders and links are included in encrypted backups.
 - **Quick access to codes:** add the Vault codes tile from More > Settings. Unlock, choose an authenticator account, and copy its current code without changing your password autofill app. The picker closes on backgrounding and follows the same 24-hour fingerprint rule.
 - **App-linked codes:** choose Linked apps when editing an authenticator account. Optional Usage access lets the tile suggest accounts for the previous app. Codes start masked, with Copy, Show/Hide, and Show all controls. App links are included in encrypted backups. Browser websites cannot be identified this way.
 - **Photos:** full-resolution capture and original-file import, encrypted thumbnails, crop, rotate, cover selection, and zoom. Imported originals remain outside the vault.
-- **Home:** favorites, recently opened entries, expiry warnings, and quick add. Search titles, tags, notes, and group names without indexing passwords, answers, or authenticator keys.
+- **Home:** favorites, recently opened entries, expiry warnings, and quick add. Search across entry types, usernames, questions, card last four digits, folders, groups, tags, and notes. Passwords, answers, CVVs, full card numbers, and authenticator keys stay out of search.
 - **Appearance:** light mode or a pure black dark mode, with layouts for phones and larger screens.
 - **Optional NFC:** off by default. Start a scan from the card form to fill readable details, then review before saving. Not every card exposes its details. NFC does not provide the printed CVV or make payments.
 
@@ -40,7 +41,7 @@ Settings has separate Security, Autofill and codes, Passkeys, Backup and import,
 
 Signup and password-change forms with explicit new-password fields can generate a password locally. Confirm **Save new login and fill** to save it before filling. The generated login keeps the selected account's groups and authenticator link; the old login stays unchanged. Submit the website form yourself and confirm it accepted the new password before removing an older login.
 
-Passkeys require Android 14 or newer. Enable Private Vault under **Settings > Passkeys**. Supported requests come from verified Chrome or Brave, use ES256 and match the exact website host. Native-app passkeys, parent-domain and related-origin requests, and importing existing passkeys are not supported. Some browsers also require Private Vault as the Autofill provider with third-party autofill enabled.
+Passkeys require Android 14 or newer. Enable Private Vault under **Settings > Passkeys**. Verified Chrome and Brave requests use the exact HTTPS website host. Native Android app requests use the app's signing certificate as their origin; the confirmation screen shows the app and requested site. The app's server must accept that origin. Passkeys use ES256. Parent-domain and related-origin browser requests, importing existing passkeys, and extra passkey extensions are not supported. Some apps only offer selected passkey providers. Some browsers also require Private Vault as the Autofill provider with third-party autofill enabled.
 
 Password history and saving credentials spread across multiple pages remain unsupported. Username-first filling authenticates and selects an account on each page.
 
@@ -66,7 +67,7 @@ There is no password-reset service. This is a personal project, not an independe
 4. Open **More → Settings → Restore encrypted backup**, choose the file, and enter the password used when that backup was created.
 5. Review the validated backup summary, then confirm replacement.
 
-Backups include entries, passkey private keys and metadata, authenticator keys and settings, groups and links, notes, full photos, cover selections, favorites, ordering, and appearance/NFC preferences. Thumbnails are recreated. Restore replaces the destination's contents; it does not merge two vaults.
+Backups include entries, passkey private keys and metadata, authenticator keys and settings, groups, folders and links, notes, full photos, cover selections, favorites, ordering, and appearance/NFC preferences. Thumbnails are recreated. Restore replaces the destination's contents; it does not merge two vaults.
 
 The destination vault keeps its own master password. Fingerprint enrollment and the 24-hour biometric session must be enabled again. Changing your master password does not change the password on older backups.
 

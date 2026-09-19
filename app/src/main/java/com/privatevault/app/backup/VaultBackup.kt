@@ -193,7 +193,7 @@ class VaultBackupManager(
     }
 
     private fun serialize(snapshot: BackupData): ByteArray {
-        val root = JSONObject().put("version", 5)
+        val root = JSONObject().put("version", 6)
             .put("lightMode", snapshot.lightMode).put("nfcEnabled", snapshot.nfcEnabled)
         root.put("entries", JSONArray().apply { snapshot.entries.forEach { put(it.toJson()) } })
         root.put("groups", JSONArray().apply { snapshot.groups.forEach { put(it.toJson()) } })
@@ -207,11 +207,12 @@ class VaultBackupManager(
 
     private fun parse(bytes: ByteArray): BackupData {
         val root = JSONObject(bytes.toString(Charsets.UTF_8))
-        require(root.getInt("version") in 1..5) { "Unsupported backup version" }
+        require(root.getInt("version") in 1..6) { "Unsupported backup version" }
         fun <T> JSONArray.mapJson(block: (JSONObject) -> T) = (0 until length()).map { block(getJSONObject(it)) }
         val result = BackupData(
             root.getJSONArray("entries").mapJson { it.toEntry() },
-            root.getJSONArray("groups").mapJson { VaultGroup(it.getString("id"), it.getString("name"), it.getString("notes")) },
+            root.getJSONArray("groups").mapJson { VaultGroup(it.getString("id"), it.getString("name"), it.getString("notes"),
+                it.optString("folderType", "").takeIf(String::isNotBlank)?.let(EntryType::valueOf)) },
             root.getJSONArray("links").mapJson { EntryGroupCrossRef(it.getString("entryId"), it.getString("groupId")) },
             root.getJSONArray("photos").mapJson {
                 VaultPhoto(
@@ -238,6 +239,10 @@ class VaultBackupManager(
         val entryIds = result.entries.map { it.id }.toSet()
         val groupIds = result.groups.map { it.id }.toSet()
         require(result.links.all { it.entryId in entryIds && it.groupId in groupIds }) { "Broken group links" }
+        val folders = result.groups.filter { it.folderType != null }.associateBy { it.id }
+        val types = result.entries.associate { it.id to it.type }
+        require(result.links.all { folders[it.groupId]?.folderType == null || folders[it.groupId]?.folderType == types[it.entryId] } &&
+            result.links.groupBy { it.entryId }.values.all { links -> links.count { it.groupId in folders } <= 1 }) { "Invalid folder links" }
         require(result.photos.all { it.entryId in entryIds }) { "Orphaned photos" }
         val codeIds = result.entries.filter { it.type == EntryType.AUTHENTICATOR }.map { it.id }.toSet()
         require(result.entries.all { it.linkedAuthenticatorId.isBlank() ||
@@ -284,7 +289,7 @@ class VaultBackupManager(
         createdAt = getLong("createdAt"),
         updatedAt = getLong("updatedAt")
     )
-    private fun VaultGroup.toJson() = JSONObject().put("id", id).put("name", name).put("notes", notes)
+    private fun VaultGroup.toJson() = JSONObject().put("id", id).put("name", name).put("notes", notes).put("folderType", folderType?.name ?: "")
     private fun VaultPhoto.toJson() = JSONObject().put("id", id).put("entryId", entryId).put("isCover", isCover).put("addedAt", addedAt)
 }
 

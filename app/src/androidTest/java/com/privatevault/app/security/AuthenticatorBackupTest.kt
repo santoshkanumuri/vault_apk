@@ -37,6 +37,8 @@ class AuthenticatorBackupTest {
             val targetPhotos = EncryptedPhotoStore(targetContext)
             val group = VaultGroup(name = "Example bank", notes = "Group notes")
             source.dao().insertGroup(group)
+            val folder = VaultGroup(name = "Private notes", folderType = EntryType.NOTE)
+            source.dao().insertGroup(folder)
             val authenticator = VaultEntry(type = EntryType.AUTHENTICATOR, title = "Example", primaryValue = "account", secondaryValue = "JBSWY3DPEHPK3PXP", totpAlgorithm = "SHA256", totpDigits = 8, totpPeriod = 60, favorite = true, notes = "Keep recovery separately", tags = "finance", sortOrder = 4, lastOpenedAt = 123)
             val records = listOf(authenticator.copy(linkedApps = "com.example.bank\ncom.example.other")) + listOf(EntryType.CARD, EntryType.PASSWORD, EntryType.QUESTION, EntryType.NOTE).map {
                 VaultEntry(type = it, title = it.name, primaryValue = "sample", secondaryValue = "private", tertiaryValue = "12/30", fourthValue = "123", network = "RuPay", color = 0xFF202020, notes = "Notes",
@@ -44,6 +46,8 @@ class AuthenticatorBackupTest {
                     autofillSignatures = if (it == EntryType.PASSWORD) "com.example.bank=dummy-certificate" else "")
             }
             records.forEach { source.dao().saveEntry(it, setOf(group.id)) }
+            source.dao().saveEntry(records.last(), setOf(group.id, folder.id))
+            assertTrue(runCatching { source.dao().saveEntry(records.first(), setOf(folder.id)) }.isFailure)
             assertEquals(listOf(authenticator.id), source.dao().authenticatorEntries().map { it.id })
             source.dao().saveSettings(VaultSettings(lightMode = true, nfcEnabled = true))
             val bitmap = Bitmap.createBitmap(12, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
@@ -56,7 +60,7 @@ class AuthenticatorBackupTest {
             source.dao().saveEntry(records.first().copy(notes = "Updated notes"), setOf(group.id))
             assertEquals(1, source.dao().entry(authenticator.id)!!.photos.size)
             source.dao().insertGroup(group.copy(name = "Renamed bank"))
-            assertEquals(records.size, source.dao().allLinks().size)
+            assertEquals(records.size + 1, source.dao().allLinks().size)
             val expected = source.dao().backupSnapshot()
             val bytes = ByteArrayOutputStream().use { output -> VaultBackupManager(sourceContext, source.dao(), sourcePhotos).export(output, password, sourceKey); output.toByteArray() }
             val old = VaultEntry(type = EntryType.NOTE, title = "Do not overwrite", notes = "Old contents")
@@ -102,6 +106,7 @@ class AuthenticatorBackupTest {
             assertEquals(expected.entries.toSet(), restored.entries.toSet())
             assertEquals(expected.groups, restored.groups)
             assertEquals(expected.links.toSet(), restored.links.toSet())
+            assertEquals(EntryType.NOTE, restored.groups.single { it.id == folder.id }.folderType)
             assertEquals(expected.lightMode, restored.lightMode)
             assertEquals(expected.nfcEnabled, restored.nfcEnabled)
             val restoredPhoto = restored.photos.single()

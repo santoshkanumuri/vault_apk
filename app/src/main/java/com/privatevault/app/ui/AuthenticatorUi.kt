@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -155,13 +157,14 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
         }
     }
     val valid = issuer.isNotBlank() && runCatching { Totp.validate(secret, algorithm, digits.toInt(), period.toInt()) }.isSuccess
-    AlertDialog(
-        properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn),
-        modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(12.dp),
-        onDismissRequest = onDismiss,
-        title = { Text(if (existing == null) "Add authenticator" else "Edit authenticator") },
-        text = {
-            LazyColumn(Modifier.imePadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false,
+        decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
+            Column(Modifier.widthIn(max = 600.dp).fillMaxWidth().fillMaxHeight().padding(horizontal = 16.dp)) {
+                Text(if (existing == null) "Add authenticator" else "Edit authenticator",
+                    Modifier.fillMaxWidth().padding(vertical = 12.dp), style = MaterialTheme.typography.titleLarge)
+                LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item { Text("Scan the setup QR, then enter a generated code on the website to finish enrollment. Your phone's automatic date and time should be enabled.") }
                 item { OutlinedButton(onClick = {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scanner = true
@@ -189,14 +192,17 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                     }
                 }
                 error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+                }
+                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Cancel") }
+                    Button(enabled = valid, onClick = {
+                        onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes, linkedApps = linkedApps), selectedGroups)
+                        secret = ""
+                    }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Save") }
+                }
             }
-        },
-        confirmButton = { Button(enabled = valid, onClick = {
-            onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes, linkedApps = linkedApps), selectedGroups)
-            secret = ""
-        }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
+        }
+    }
     if (scanner) QrScanner(onResult = ::acceptQr, close = { scanner = false })
     if (linkApps) CodeAppLinksPicker(linkedApps, dismiss = { linkApps = false }) { linkedApps = it; linkApps = false }
 }

@@ -27,12 +27,14 @@ internal object PasskeyCrypto {
         return Base64.getUrlDecoder().decode(value).also { require(encode(it) == value) }
     }
     fun request(json: String, origin: String, create: Boolean): JSONObject {
-        require(json.length <= 65536 && httpsOrigin(origin) == origin)
+        require(json.length <= 65536 && (httpsOrigin(origin) == origin ||
+            origin.matches(Regex("android:apk-key-hash:[A-Za-z0-9_-]{43}"))))
         val input = JSONObject(json)
         require(decode(input.getString("challenge")).size in 16..1024)
         val rp = if (create) input.getJSONObject("rp").getString("id") else input.getString("rpId")
         // Offline first release: exact host only. Related-origin and parent-domain requests are unsupported.
-        require(rp == URI(origin).host && rp.contains('.') && !rp.endsWith('.')) { "Unsupported passkey website" }
+        require(httpsOrigin("https://$rp") == "https://$rp" &&
+            (origin.startsWith("android:apk-key-hash:") || rp == URI(origin).host)) { "Unsupported passkey website" }
         if (create) {
             val algorithms = input.getJSONArray("pubKeyCredParams")
             require((0 until algorithms.length()).any { algorithms.getJSONObject(it).let { p -> p.optString("type") == "public-key" && p.optInt("alg") == -7 } })

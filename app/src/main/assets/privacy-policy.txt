@@ -1,11 +1,11 @@
 Private Vault privacy policy
-Effective date: September 18, 2026
+Effective date: September 19, 2026
 
 Developer: Santosh Kanumuri
 Contact: santosh.kanumuri@hotmail.com
 
 What stays on your device
-Private Vault stores the cards, passwords, authenticator setup keys, security questions, notes, groups, app links, and photos you choose to save. Vault records and photos are encrypted in the app's private storage. The master password protects the vault key; the app does not store your master password. Appearance and optional-feature preferences are stored locally.
+Private Vault stores the cards, passwords, authenticator setup keys, security questions, notes, groups, folders, app links, and photos you choose to save. Vault records and photos are encrypted in the app's private storage. The master password protects the vault key; the app does not store your master password. Appearance and optional-feature preferences are stored locally.
 
 The app has no Internet permission, server account, advertising, analytics, or developer-operated cloud sync. It does not send your vault contents or app usage history to the developer. Processing inside the app takes place on your device.
 
@@ -23,7 +23,7 @@ Optional password autofill uses Android's Autofill service, which you must selec
 
 Supported signup and password-change forms can receive a locally generated password after authentication and confirmation. The app saves it as a separate encrypted login before filling, so it remains recoverable if the browser does not offer a save prompt. Your current login stays unchanged. Submit the website form yourself and check that it accepted the new password before removing an older login.
 
-On Android 14 or newer, you can enable Private Vault as a passkey provider. Supported website requests require a verified browser, exact website host, vault authentication, and your confirmation. Passkey private keys stay in the encrypted vault and are included in authenticated encrypted backups. A website receives the public credential or a signature, never the private key. Passkey account labels appear after unlocking. Native-app passkey requests and related or parent-domain requests are not supported. Deleting a passkey from the vault does not delete its website registration or remove it from older backup files.
+On Android 14 or newer, you can enable Private Vault as a passkey provider. Supported website requests require a verified browser and exact website host. Native app requests use Android's calling-app signing identity as their origin; the app name and requested site are shown before you confirm. Your vault must be unlocked to create or use a passkey. Passkey private keys stay in the encrypted vault and are included in authenticated encrypted backups. The requesting app or website receives a public credential or a signature, never the private key. Passkey account labels appear after unlocking. Some apps may require their own provider or passkey features that Private Vault does not support. Related or parent-domain browser requests are not supported. Deleting a passkey from the vault does not delete its registration or remove it from older backup files.
 
 For supported browser login forms, Android can offer to save the login. After you accept that prompt, Private Vault temporarily holds the submitted username and password in process memory for up to two minutes while you unlock and review it. It saves or updates the encrypted record only after your confirmation. Cancellation or expiry clears the pending password. No plaintext form file is created. Username-first filling checks each page separately and does not carry passwords to a different website.
 

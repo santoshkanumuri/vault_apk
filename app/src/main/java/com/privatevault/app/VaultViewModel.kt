@@ -363,6 +363,18 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
+    fun addFolder(name: String, type: com.privatevault.app.data.EntryType) = securedLaunch {
+        require(name.isNotBlank()) { "Enter a folder name." }
+        dao().insertGroup(VaultGroup(name = name.trim(), folderType = type))
+        refresh()
+    }
+
+    fun renameFolder(folder: VaultGroup, name: String) = securedLaunch {
+        require(folder.folderType != null && name.isNotBlank()) { "Enter a folder name." }
+        dao().insertGroup(folder.copy(name = name.trim()))
+        refresh()
+    }
+
     fun deleteGroup(group: VaultGroup) = securedLaunch {
         dao().deleteGroup(group)
         refresh()

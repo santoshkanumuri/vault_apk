@@ -47,4 +47,22 @@ class PasskeyCryptoTest {
         assertTrue(runCatching { PasskeyCrypto.sign(key, JSONObject(GET).put("rpId", "evil.example"), "https://evil.example", hash) }.isFailure)
         assertFalse(PasskeyCrypto.matches(key, JSONObject(GET).put("allowCredentials", org.json.JSONArray().put(JSONObject().put("type", "public-key").put("id", "different")))))
     }
+
+    @Test fun nativeAppPasskeyUsesSignedAndroidOrigin() {
+        val origin = "android:apk-key-hash:" + "A".repeat(43)
+        val input = PasskeyCrypto.request(CREATE, origin, true)
+        val (key, created) = PasskeyCrypto.create(input, origin, null)
+        assertEquals(origin, JSONObject(String(PasskeyCrypto.decode(JSONObject(created).getJSONObject("response").getString("clientDataJSON")))).getString("origin"))
+        val signed = JSONObject(PasskeyCrypto.sign(key, PasskeyCrypto.request(GET, origin, false), origin, null)).getJSONObject("response")
+        val clientData = PasskeyCrypto.decode(signed.getString("clientDataJSON"))
+        assertEquals(origin, JSONObject(String(clientData)).getString("origin"))
+        val public = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(PasskeyCrypto.decode(key.publicKey)))
+        assertTrue(Signature.getInstance("SHA256withECDSA").run {
+            initVerify(public)
+            update(PasskeyCrypto.decode(signed.getString("authenticatorData")))
+            update(MessageDigest.getInstance("SHA-256").digest(clientData))
+            verify(PasskeyCrypto.decode(signed.getString("signature")))
+        })
+        assertTrue(runCatching { PasskeyCrypto.request(CREATE, "android:apk-key-hash:bad", true) }.isFailure)
+    }
 }

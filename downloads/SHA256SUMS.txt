@@ -1,1 +1,1 @@
-2427ab0e2d7f91c05590a0484fd6681b6d4f37f8cef97ef4898dc4032a09a9d0  private-vault-v1.8.0.apk
+2dbbe6e64cab0e15df22a28bbd5250b41b38123c39278675cf5a31fffc24d626  private-vault-v1.9.0.apk

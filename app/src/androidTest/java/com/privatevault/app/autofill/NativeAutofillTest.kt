@@ -97,13 +97,13 @@ class NativeAutofillTest {
                     }
                 }
                 click("Private Vault")
-                waitNode("Fill with Private Vault") { it.text?.toString() == "Fill with Private Vault" }
+                waitNode("Autofill") { it.text?.toString() == "Autofill" }
                 if (!otp) {
                     val wrongPasswordField = waitNode("Master password") { it.isEditable && it.packageName?.toString() == context.packageName }
                     check(wrongPasswordField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "Wrong dummy master password")
                     }))
-                    click("Use master password")
+                    click("Unlock")
                     waitNode("Wrong password rejected") { it.text?.toString()?.startsWith("Could not unlock.") == true }
                     assertNull(find { it.text?.toString() == "Authorized test login" })
                 }
@@ -111,7 +111,7 @@ class NativeAutofillTest {
                 check(passwordField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
                     putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
                 }))
-                click("Use master password")
+                click("Unlock")
                 waitNode("Authorized test login") { it.text?.toString() == "Authorized test login" }
                 assertNull(find { it.text?.toString() == "Unauthorized login" })
                 if (generatedFlow != null) {
@@ -179,7 +179,7 @@ class NativeAutofillTest {
                     check(unlock.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
                     }))
-                    click("Use master password")
+                    click("Unlock")
                     click("Fill login")
                     waitNode("Second page filled") { it.viewIdResourceName == "password" && it.text?.length == "test-password-123".length }
                 }
@@ -199,12 +199,12 @@ class NativeAutofillTest {
                         it.packageName?.toString() == "android" && it.text?.toString()?.lowercase() in setOf("save", "update")
                     }
                     click(saveAction.text.toString())
-                    waitNode("Save review") { it.text?.toString() == "Save to Private Vault" }
+                    waitNode("Save review") { it.text?.toString() == "Save login" }
                     val unlock = waitNode("Save master password") { it.isEditable && it.packageName?.toString() == context.packageName }
                     check(unlock.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
                     }))
-                    click("Use master password")
+                    click("Unlock")
                     val saveAsNew = InstrumentationRegistry.getArguments().getString("saveAsNew") == "true"
                     if (saveAsNew) click("Save as new login") else {
                         click("Update Authorized test login")

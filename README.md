@@ -8,9 +8,9 @@ No account, server, ads, or cloud sync. Your vault stays on your phone.
 
 ## Download
 
-**[Download Private Vault v1.9.0](downloads/private-vault-v1.9.0.apk?raw=true)**
+**[Download Private Vault v1.9.1](downloads/private-vault-v1.9.1.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.0.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.1.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 
@@ -23,7 +23,7 @@ For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Pa
 - **Cards:** credit/debit cards, number, cardholder, expiry, CVV, notes, and photos. Choose from 34 colors and browse a stacked or expanded view. Copy individual fields; revealing or copying a CVV requires biometric authentication.
 - **Passwords and security questions:** save login details and answers, with notes and photos.
 - **Linked logins:** generate a 24-character password locally and link an existing authenticator to a login. View its code alongside the login without duplicating the setup key. Removing the login keeps the authenticator.
-- **Optional autofill:** authorize native apps in a login's editor or save its exact HTTPS website URL, then choose Private Vault as your Autofill provider. Unlock and select an account to fill a username/password or a linked code on a separate code screen. Native apps require the saved package and signing identity. Website filling is restricted to verified Chrome and Brave release certificates and an exact HTTPS origin match. Browser support depends on Android autofill being enabled in the browser. The unlock suggestion shows the app icon and name, including inside compatible keyboards. Browser Save/Update prompts require a separate unlock and confirmation. Choosing this provider replaces your current password autofill provider; the code tile remains available if you prefer to keep Bitwarden.
+- **Optional autofill:** authorize native apps in a login's editor or save its exact HTTPS website URL, then choose Private Vault as your Autofill provider. Unlock and select an account to fill a username/password or a linked code on a separate code screen. Native apps require the saved package and signing identity. Website filling is restricted to verified Chrome and Brave release certificates and an exact HTTPS origin match. Browser support depends on Android autofill being enabled in the browser. The unlock suggestion shows the app icon and name, including inside compatible keyboards; short screens use a regular Android suggestion. Browser Save/Update prompts require a separate unlock and confirmation. Choosing this provider replaces your current password autofill provider; the code tile remains available if you prefer to keep Bitwarden.
 - **Browser password import:** import a Chrome or Brave password CSV under Settings > Backup and import. Review account names before saving. Exact duplicates are skipped and conflicting passwords remain separate. The original CSV contains readable passwords; delete it after verifying the import.
 - **Authenticator:** generate TOTP codes offline. Scan a setup QR, import a QR image, or enter a setup key. Supports SHA1/SHA256/SHA512, 6–8 digits, and configurable intervals. The phone's clock must be correct. SMS, push approvals, HOTP, and Google Authenticator transfer QR codes are not supported.
 - **Groups:** keep a bank's cards, logins, questions, notes, and codes together. An entry can belong to several groups. Deleting a group keeps its entries.
@@ -35,7 +35,7 @@ For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Pa
 - **Appearance:** light mode or a pure black dark mode, with layouts for phones and larger screens.
 - **Optional NFC:** off by default. Start a scan from the card form to fill readable details, then review before saving. Not every card exposes its details. NFC does not provide the printed CVV or make payments.
 
-The bottom tabs are **Home, Cards, Passwords, Codes, and More**. Groups, Security questions, Notes, and Settings are under More.
+The bottom tabs are **Home, Cards, Logins, Codes, and More**. Logins contains passwords. Groups, Security questions, Notes, and Settings are under More.
 
 Settings has separate Security, Autofill and codes, Passkeys, Backup and import, Appearance, Cards and NFC, and About pages.
 

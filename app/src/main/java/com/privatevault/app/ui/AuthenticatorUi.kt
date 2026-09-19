@@ -2,6 +2,7 @@ package com.privatevault.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.QuestionAnswer
 import androidx.compose.material.icons.outlined.Notes
@@ -24,10 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -157,12 +157,19 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
         }
     }
     val valid = issuer.isNotBlank() && runCatching { Totp.validate(secret, algorithm, digits.toInt(), period.toInt()) }.isSuccess
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false,
-        decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
+    BackHandler(onBack = onDismiss)
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 600.dp).fillMaxWidth().fillMaxHeight().padding(horizontal = 16.dp)) {
-                Text(if (existing == null) "Add authenticator" else "Edit authenticator",
-                    Modifier.fillMaxWidth().padding(vertical = 12.dp), style = MaterialTheme.typography.titleLarge)
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                    BackIcon(onDismiss)
+                    Text(if (existing == null) "Add authenticator" else "Edit authenticator",
+                        Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    IconButton(enabled = valid, onClick = {
+                        onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes, linkedApps = linkedApps), selectedGroups)
+                        secret = ""
+                    }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Check, contentDescription = "Save authenticator") }
+                }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item { Text("Scan the setup QR, then enter a generated code on the website to finish enrollment. Your phone's automatic date and time should be enabled.") }
@@ -193,15 +200,7 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                 }
                 error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
                 }
-                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Cancel") }
-                    Button(enabled = valid, onClick = {
-                        onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes, linkedApps = linkedApps), selectedGroups)
-                        secret = ""
-                    }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Save") }
-                }
             }
-        }
     }
     if (scanner) QrScanner(onResult = ::acceptQr, close = { scanner = false })
     if (linkApps) CodeAppLinksPicker(linkedApps, dismiss = { linkApps = false }) { linkedApps = it; linkApps = false }

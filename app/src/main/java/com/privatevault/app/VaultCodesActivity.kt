@@ -25,7 +25,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
@@ -397,10 +399,18 @@ class VaultCodesActivity : FragmentActivity() {
         var password by remember { mutableStateOf("") }
         var search by remember { mutableStateOf("") }
         var showAll by remember { mutableStateOf(false) }
+        val keyboard = LocalSoftwareKeyboardController.current
         Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(8.dp), contentAlignment = Alignment.Center) {
             Surface(Modifier.widthIn(max = 560.dp).fillMaxWidth().fillMaxHeight(), shape = RoundedCornerShape(24.dp)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(if (passkeyOperation != null) "Private Vault passkeys" else if (saveMode) "Save to Private Vault" else if (autofillMode) "Fill with Private Vault" else "Vault codes", style = MaterialTheme.typography.headlineSmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (passkeyOperation != null) "Passkeys" else if (saveMode) "Save login" else if (autofillMode) "Autofill" else "Codes",
+                            Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (!unlocked && keyManager.isInitialized) Button(
+                            onClick = { keyboard?.hide(); val value = password.toCharArray(); password = ""; authenticate(value) },
+                            enabled = !busy && password.isNotEmpty()
+                        ) { Text("Unlock") }
+                    }
                     if (unlocked && passkeyOperation != null && Build.VERSION.SDK_INT >= 34) {
                         val operation = requireNotNull(passkeyOperation)
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -434,24 +444,30 @@ class VaultCodesActivity : FragmentActivity() {
                         }
                     } else if (unlocked && autofillMode) {
                         val request = loginFill
-                        Text("Destination: ${request?.origin ?: request?.packageName.orEmpty()}", style = MaterialTheme.typography.bodySmall)
-                        Text(if (request?.newPasswords?.isNotEmpty() == true) "Generate a 24-character password and save a separate login before filling. Your current login stays available until you confirm the website accepted the change." else if (request?.otp != null) "Choose a login to fill its linked authenticator code." else if (request?.password == null) "Choose an account to fill its username. The next screen requires a separate selection." else "Choose a login to fill its username and password.")
                         val matches = entries.filter { entry -> request != null && loginAuthorizedForDestination(entry, request.packageName, request.identity, request.origin) &&
                             if (request.otp != null) entries.any { it.id == entry.linkedAuthenticatorId && it.type == EntryType.AUTHENTICATOR } else entry.secondaryValue.isNotEmpty() }
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            item { Text("Destination: ${request?.origin ?: request?.packageName.orEmpty()}", style = MaterialTheme.typography.bodySmall) }
                             if (request?.newPasswords?.isNotEmpty() == true && request.password == null) item {
                                 Button(onClick = { prepareGeneration(null) }, modifier = Modifier.fillMaxWidth()) { Text("Generate for a new account") }
                             }
                             if (matches.isEmpty()) item { Text(if (request?.origin != null) "No logins for this exact HTTPS website. Add its URL to the login in Private Vault. Subdomains must match exactly." else "No authorized logins. Open Passwords in Private Vault and link this app to a login. App identity changes require linking again.") }
                             items(matches, key = { it.id }) { entry ->
                                 Card(Modifier.fillMaxWidth()) {
-                                    Column(Modifier.padding(16.dp)) {
+                                    if (request?.newPasswords?.isNotEmpty() == true) Column(Modifier.padding(16.dp)) {
                                         Text(entry.title, style = MaterialTheme.typography.titleMedium)
                                         Text(entry.primaryValue)
-                                        Button(onClick = { if (request?.newPasswords?.isNotEmpty() == true) prepareGeneration(entry) else fillLogin(entry) }) { Text(if (request?.newPasswords?.isNotEmpty() == true) "Generate new password for this account" else if (request?.otp != null) "Fill code" else "Fill login") }
+                                        Button(onClick = { prepareGeneration(entry) }) { Text("Generate new password for this account") }
+                                    } else Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(entry.title, style = MaterialTheme.typography.titleMedium)
+                                            Text(entry.primaryValue, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                        TextButton(onClick = { fillLogin(entry) }) { Text(if (request?.otp != null) "Fill code" else "Fill login") }
                                     }
                                 }
                             }
+                            item { Text(if (request?.newPasswords?.isNotEmpty() == true) "Generate a 24-character password and save a separate login before filling. Your current login stays available until you confirm the website accepted the change." else if (request?.otp != null) "Choose a login to fill its linked authenticator code." else if (request?.password == null) "Choose an account to fill its username. The next screen requires a separate selection." else "Choose a login to fill its username and password.") }
                         }
                     } else if (unlocked) {
                         val suggested = matchingCodeEntries(entries, suggestedApp)
@@ -466,14 +482,13 @@ class VaultCodesActivity : FragmentActivity() {
                         }
                     } else {
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            item { Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation." else if (saveMode) "Unlock to review a login from ${loginSave?.origin.orEmpty()}. Nothing is saved until you confirm." else if (autofillMode) "Unlock to choose a login for ${loginFill?.origin ?: loginFill?.packageName.orEmpty()}. Nothing is filled until you select an account." else "Unlock to choose an account and copy its current code. Your password autofill app stays unchanged.") }
                             if (!keyManager.isInitialized) item { Text("Open Private Vault to create your vault first.") }
                             else {
                                 if (gate.hasValidDailySession && biometricAvailable()) item {
                                     Button(onClick = { password = ""; authenticate(null) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Use fingerprint") }
                                 }
                                 item { OutlinedTextField(password, { password = it }, label = { Text("Master password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth()) }
-                                item { Button(onClick = { val value = password.toCharArray(); password = ""; authenticate(value) }, enabled = !busy && password.isNotEmpty(), modifier = Modifier.fillMaxWidth()) { Text("Use master password") } }
+                                item { Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation." else if (saveMode) "Unlock to review a login from ${loginSave?.origin.orEmpty()}. Nothing is saved until you confirm." else if (autofillMode) "Unlock to choose a login for ${loginFill?.origin ?: loginFill?.packageName.orEmpty()}. Nothing is filled until you select an account." else "Unlock to choose an account and copy its current code. Your password autofill app stays unchanged.") }
                                 item { Text("A master password starts a new 24-hour fingerprint session. Fingerprint use does not extend it.", style = MaterialTheme.typography.bodySmall) }
                             }
                             if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }

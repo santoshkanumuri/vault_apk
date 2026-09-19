@@ -114,7 +114,7 @@ class VaultAutofillService : AutofillService() {
             val sender = pendingIntent.intentSender
             val presentation = RemoteViews(packageName, com.privatevault.app.R.layout.autofill_suggestion)
             val dataset = Dataset.Builder(presentation).setAuthentication(sender)
-            val inline = if (android.os.Build.VERSION.SDK_INT >= 30) runCatching {
+            val inline = if (android.os.Build.VERSION.SDK_INT >= 30 && resources.configuration.screenHeightDp >= 600) runCatching {
                 request.inlineSuggestionsRequest?.takeIf { it.maxSuggestionCount > 0 }?.inlinePresentationSpecs?.firstOrNull {
                     androidx.autofill.inline.UiVersions.getVersions(it.style).contains(androidx.autofill.inline.UiVersions.INLINE_UI_VERSION_1)
                 }?.let { spec ->

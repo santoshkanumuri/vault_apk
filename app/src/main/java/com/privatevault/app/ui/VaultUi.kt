@@ -105,6 +105,8 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.Switch
@@ -340,18 +342,19 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
     }
     val shown = entries
         .filter { item -> tab.type == null || item.entry.type == tab.type }
-        .filter { item -> search.isBlank() || searchableText(item).contains(search, true) }
-        .let { list -> when (sortBy) {
+        .filter { item -> tab == VaultTab.CARDS || search.isBlank() || searchableText(item).contains(search, true) }
+        .let { list -> if (tab == VaultTab.CARDS) list.sortedBy { it.entry.sortOrder } else when (sortBy) {
             "Name" -> list.sortedBy { it.entry.title.lowercase(Locale.ROOT) }
             "Oldest" -> list.sortedBy { it.entry.createdAt }
-            else -> if (tab == VaultTab.CARDS) list.sortedBy { it.entry.sortOrder } else list.sortedByDescending { it.entry.updatedAt }
+            else -> list.sortedByDescending { it.entry.updatedAt }
         } }
     val selected = entries.firstOrNull { it.entry.id == selectedId }
     val selectEntry: (String) -> Unit = { id -> selectedId = id; viewModel.markOpened(id) }
+    val editorOpen = addType != null || editing != null
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 840.dp
-        Scaffold(
+        if (!editorOpen) Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = { if (!wide) VaultNavigation(tabIndex) { tabIndex = it; selectedId = null; selectedFolderId = null; search = "" } }
         ) { padding ->
@@ -360,7 +363,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     VaultToolbar(
                         screenTitle, search, { search = it },
-                        showSearch = tab != VaultTab.MORE,
+                        showSearch = tab != VaultTab.MORE && tab != VaultTab.CARDS,
                         onAdd = { if (tab.type == null) showQuickAdd = true else addType = tab.type!! }
                     )
                     if (tab == VaultTab.MORE) {
@@ -373,7 +376,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                             selectEntry, Modifier.fillMaxSize())
                     } else if (wide) {
                         Row(Modifier.fillMaxSize()) {
-                            CategoryCollection(tab, shown, categoryFolders, selectedFolder, search, sortBy,
+                            CategoryCollection(tab, shown, categoryFolders, selectedFolder, if (tab == VaultTab.CARDS) "" else search, sortBy,
                                 { sortBy = it }, { selectedFolderId = it },
                                 { folderToEdit = it; folderName = it?.name.orEmpty(); showFolderEditor = true },
                                 { folderToDelete = it }, selectedId, selectEntry, onCopySecret, onBiometricAction, Modifier.weight(.9f))
@@ -382,7 +385,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                             else EmptyDetail(Modifier.weight(1.1f))
                         }
                     } else {
-                        CategoryCollection(tab, shown, categoryFolders, selectedFolder, search, sortBy,
+                        CategoryCollection(tab, shown, categoryFolders, selectedFolder, if (tab == VaultTab.CARDS) "" else search, sortBy,
                             { sortBy = it }, { selectedFolderId = it },
                             { folderToEdit = it; folderName = it?.name.orEmpty(); showFolderEditor = true },
                             { folderToDelete = it }, selectedId, selectEntry, onCopySecret, onBiometricAction, Modifier.fillMaxSize())
@@ -390,24 +393,24 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                 }
             }
         }
-        if ((!wide || tab == VaultTab.HOME) && selected != null) {
+        if ((!wide || tab == VaultTab.HOME) && selected != null && !editorOpen) {
             Dialog(onDismissRequest = { selectedId = null }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     EntryDetail(selected, viewModel, onCopySecret, onBiometricAction, { editing = selected.entry }, { selectedId = null }, Modifier.fillMaxSize().safeDrawingPadding().imePadding())
                 }
             }
         }
-    }
-    if (addType != null || editing != null) {
-        val editorType = addType ?: editing!!.type
-        val editorGroups = entries.firstOrNull { it.entry.id == editing?.id }?.groups?.map { it.id }?.toSet()
-            ?: setOfNotNull(selectedFolder?.id)
-        if (editorType == EntryType.AUTHENTICATOR) AuthenticatorEditor(editing, groups.filter { it.folderType == null }, editorGroups, viewModel,
-            onDismiss = { editing = null; addType = null },
-            onSave = { entry, ids -> viewModel.saveEntry(entry, ids); editing = null; addType = null })
-        else EntryEditor(editing, editorType, groups, editorGroups, viewModel,
-            onDismiss = { editing = null; addType = null },
-            onSave = { entry, ids -> viewModel.saveEntry(entry, ids); editing = null; addType = null })
+        if (editorOpen) {
+            val editorType = addType ?: editing!!.type
+            val editorGroups = entries.firstOrNull { it.entry.id == editing?.id }?.groups?.map { it.id }?.toSet()
+                ?: setOfNotNull(selectedFolder?.id)
+            if (editorType == EntryType.AUTHENTICATOR) AuthenticatorEditor(editing, groups.filter { it.folderType == null }, editorGroups, viewModel,
+                onDismiss = { editing = null; addType = null },
+                onSave = { entry, ids -> viewModel.saveEntry(entry, ids); editing = null; addType = null })
+            else EntryEditor(editing, editorType, groups, editorGroups, viewModel,
+                onDismiss = { editing = null; addType = null },
+                onSave = { entry, ids -> viewModel.saveEntry(entry, ids); editing = null; addType = null })
+        }
     }
     if (showGroups) GroupManager(
         groups = groups.filter { it.folderType == null },
@@ -457,11 +460,11 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
         onDismissRequest = { showQuickAdd = false },
         title = { Text("Quick add") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                EntryType.entries.forEach { type ->
+            LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(EntryType.entries) { type ->
                     FilledTonalButton(
                         onClick = { addType = type; showQuickAdd = false },
-                        modifier = Modifier.fillMaxWidth().height(52.dp)
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     ) { Text("Add ${type.label()}") }
                 }
             }
@@ -474,10 +477,8 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
 private fun VaultToolbar(title: String, search: String, onSearch: (String) -> Unit, showSearch: Boolean, onAdd: () -> Unit) {
     Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("VAULT STATUS · SECURE", color = MaterialTheme.colorScheme.primary, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
-                Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, modifier = Modifier.semantics { heading() })
-            }
+            Text(title, Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
             IconButton(onClick = onAdd, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Add, "Add") }
         }
         if (showSearch) OutlinedTextField(
@@ -573,7 +574,8 @@ private fun VaultNavigation(selected: Int, onSelect: (Int) -> Unit) {
     NavigationBar(containerColor = MaterialTheme.colorScheme.background) {
         navigationTabs.forEach { tab ->
             val index = if (tab == VaultTab.MORE && VaultTab.entries[selected] in listOf(VaultTab.QUESTIONS, VaultTab.NOTES)) selected else tab.ordinal
-            NavigationBarItem(selected == index, { onSelect(tab.ordinal) }, icon = { VaultTabIcon(tab) }, label = { Text(tab.label) })
+            NavigationBarItem(selected == index, { onSelect(tab.ordinal) }, icon = { VaultTabIcon(tab) },
+                label = { Text(if (tab == VaultTab.PASSWORDS) "Logins" else tab.label, maxLines = 1) })
         }
     }
 }
@@ -600,7 +602,7 @@ private fun VaultTabIcon(tab: VaultTab) {
         VaultTab.AUTHENTICATOR -> Icons.Outlined.Timer
         VaultTab.MORE -> Icons.Outlined.MoreHoriz
     }
-    Icon(icon, contentDescription = tab.label)
+    Icon(icon, contentDescription = null)
 }
 
 @Composable
@@ -750,7 +752,7 @@ private fun CardCopyAction(description: String, action: () -> Unit) {
 }
 
 @Composable
-private fun BackIcon(onClick: () -> Unit) {
+internal fun BackIcon(onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
     }
@@ -817,7 +819,7 @@ private fun CategoryCollection(
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (tab != VaultTab.CARDS) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("Default", "Name", "Oldest").forEach { option -> FilterChip(sortBy == option, { onSort(option) }, { Text(option) }) }
         }
         if (visible.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
@@ -889,12 +891,15 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
     val cameraContext = androidx.compose.ui.platform.LocalContext.current
     Column(modifier.background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            BackIcon(close)
             Column(Modifier.weight(1f)) {
                 Text(item.entry.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
                 Text(item.entry.type.label().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
-            TextButton(onClick = { viewModel.toggleFavorite(item.entry) }, modifier = Modifier.height(48.dp)) { Text(if (item.entry.favorite) "★ Favorite" else "☆ Favorite") }
-            BackIcon(close)
+            IconButton(onClick = { viewModel.toggleFavorite(item.entry) }, modifier = Modifier.size(48.dp)) {
+                Icon(if (item.entry.favorite) Icons.Outlined.Star else Icons.Outlined.StarBorder,
+                    contentDescription = if (item.entry.favorite) "Remove from favorites" else "Add to favorites")
+            }
         }
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),
@@ -1052,8 +1057,8 @@ private fun PhotoViewer(photo: VaultPhoto, viewModel: VaultViewModel, close: () 
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (cropping) "Crop photo" else "Photo", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     IconButton(onClick = back, enabled = !busy, modifier = Modifier.size(48.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                    Text(if (cropping) "Crop photo" else "Photo", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 }
                 if (cropping) Text("Drag the edges or corners. Drag inside to move. Save replaces this vault photo.", Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
                 Box(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
@@ -1158,12 +1163,20 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
     var color by remember { mutableStateOf(existing?.color ?: colors.first().value) }
     val valid = title.isNotBlank() && when (type) { EntryType.CARD -> primary.isNotBlank(); EntryType.QUESTION -> primary.isNotBlank() && secondary.isNotBlank(); EntryType.PASSWORD -> secondary.isNotBlank(); EntryType.NOTE -> notes.isNotBlank(); EntryType.AUTHENTICATOR -> false }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false,
-        decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
+    BackHandler(onBack = onDismiss)
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().fillMaxHeight().padding(horizontal = 16.dp)) {
-                Text(if (existing == null) "Add ${type.label()}" else "Edit ${type.label()}",
-                    Modifier.fillMaxWidth().padding(vertical = 12.dp), style = MaterialTheme.typography.titleLarge)
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                    BackIcon(onDismiss)
+                    Text(if (existing == null) "Add ${type.label()}" else "Edit ${type.label()}",
+                        Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    IconButton(onClick = {
+                        onSave((existing ?: VaultEntry(type = type, title = title)).copy(title = title.trim(), primaryValue = primary.trim(), secondaryValue = if (type == EntryType.CARD) secondary.trim() else secondary, tertiaryValue = tertiary.trim(), fourthValue = fourth.trim(), cardKind = cardKind, network = network.trim(), notes = notes.trim(), tags = tags.trim(), color = color, linkedApps = loginApps, autofillSignatures = loginSignatures, linkedAuthenticatorId = linkedCode), selectedGroups)
+                    }, enabled = valid, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Outlined.Check, contentDescription = "Save entry")
+                    }
+                }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { OutlinedTextField(title, { title = it }, label = { Text(when (type) { EntryType.CARD -> "Card label"; EntryType.NOTE -> "Note title"; else -> "Service" }) }, modifier = Modifier.fillMaxWidth()) }
@@ -1253,14 +1266,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                 } }
             }
                 }
-                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Cancel") }
-                    Button(onClick = {
-                        onSave((existing ?: VaultEntry(type = type, title = title)).copy(title = title.trim(), primaryValue = primary.trim(), secondaryValue = if (type == EntryType.CARD) secondary.trim() else secondary, tertiaryValue = tertiary.trim(), fourthValue = fourth.trim(), cardKind = cardKind, network = network.trim(), notes = notes.trim(), tags = tags.trim(), color = color, linkedApps = loginApps, autofillSignatures = loginSignatures, linkedAuthenticatorId = linkedCode), selectedGroups)
-                    }, enabled = valid, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Save") }
-                }
             }
-        }
     }
     if (scanning) AlertDialog(
         properties = wideDialogProperties,

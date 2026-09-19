@@ -46,8 +46,21 @@ class NativeAutofillTest {
             if (node?.isEnabled == true && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
             SystemClock.sleep(100)
         }
-        if (text == "Private Vault") shell("screencap -p /sdcard/autofill-test.png")
+        shell("screencap -p /sdcard/autofill-test.png")
         error("Could not click: $text")
+    }
+    private fun scrollAndClick(text: String) {
+        val deadline = SystemClock.elapsedRealtime() + 10_000
+        while (SystemClock.elapsedRealtime() < deadline) {
+            var node = find { it.text?.toString() == text }
+            while (node != null && !node.isClickable && node.parent != null) node = node.parent
+            if (node?.isEnabled == true && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
+            find { it.isScrollable && it.packageName?.toString() == context.packageName }
+                ?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            SystemClock.sleep(100)
+        }
+        shell("screencap -p /sdcard/autofill-test.png")
+        error("Could not scroll to: $text")
     }
 
     @Test fun frameworkAuthenticatesAndFillsOnlyAuthorizedLoginAndLinkedCode() = runBlocking {
@@ -165,6 +178,39 @@ class NativeAutofillTest {
                     assertEquals("test-account", filled.text.toString())
                     if (browser == null) waitNode("Password verified") { it.contentDescription?.toString() == "Verified test password" }
                     else if (!usernameFirst) waitNode("Browser password filled") { it.viewIdResourceName == "password" && it.text?.length == "test-password-123".length }
+                }
+                if (browser == null && !otp) {
+                    val nativeUsername = waitNode("Native username") { it.contentDescription?.toString() == "Test username" }
+                    val nativePassword = waitNode("Native password") { it.contentDescription?.toString() == "Verified test password" }
+                    check(nativeUsername.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "new-native-user")
+                    }))
+                    check(nativePassword.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "native-manual-password")
+                    }))
+                    click("Login")
+                    val saveAction = waitNode("Android native-app save prompt") {
+                        it.packageName?.toString() == "android" && it.text?.toString()?.lowercase() in setOf("save", "update")
+                    }
+                    click(saveAction.text.toString())
+                    waitNode("Native save review") { it.text?.toString() == "Save login" }
+                    val unlock = waitNode("Native save master password") { it.isEditable && it.packageName?.toString() == context.packageName }
+                    check(unlock.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
+                    }))
+                    click("Unlock")
+                    scrollAndClick("Save as new login")
+                    val deadline = SystemClock.elapsedRealtime() + 10_000
+                    var saved = false
+                    while (!saved && SystemClock.elapsedRealtime() < deadline) {
+                        val db = VaultDatabase.open(context, key)
+                        try {
+                            saved = db.dao().loginAndCodeEntries().any { it.primaryValue == "new-native-user" &&
+                                it.secondaryValue == "native-manual-password" && loginAuthorized(it, testPackage, requireNotNull(appSigningIdentity(context, testPackage))) }
+                        } finally { db.close() }
+                        if (!saved) SystemClock.sleep(100)
+                    }
+                    assertTrue("Confirmed native-app save must be persisted and authorized only for that app identity", saved)
                 }
                 if (browser != null && usernameFirst) {
                     val next = waitNode("Next login step") { it.text?.toString() == "Next" && it.className?.toString() == "android.widget.Button" }

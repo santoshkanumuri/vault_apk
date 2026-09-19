@@ -146,26 +146,42 @@ class AuthenticatorBackupTest {
             target.dao().deleteEntryAndLinks(restoredCode)
             assertEquals("", target.dao().entry(login.id)!!.entry.linkedAuthenticatorId)
             val imported = login.copy(id = UUID.randomUUID().toString(), title = "Imported", linkedAuthenticatorId = "", tertiaryValue = "https://example.com/login")
-            assertEquals(1, target.dao().importLogins(listOf(imported, imported.copy(id = UUID.randomUUID().toString()))))
-            assertEquals(0, target.dao().importLogins(listOf(imported.copy(id = UUID.randomUUID().toString()))))
-            assertEquals(1, target.dao().importLogins(listOf(imported.copy(id = UUID.randomUUID().toString(), secondaryValue = "Different password"))))
+            assertEquals(1, target.dao().importLogins(listOf(imported, imported.copy(id = UUID.randomUUID().toString()))).added)
+            val savedImported = target.dao().loginAndCodeEntries().single { sameImportedAccount(it, imported) }
+            assertEquals(1, target.dao().importLogins(listOf(imported.copy(id = UUID.randomUUID().toString()))).skippedExact)
+            val conflict = imported.copy(id = UUID.randomUUID().toString(), secondaryValue = "Different password")
+            assertEquals(1, target.dao().importLogins(listOf(conflict)).skippedConflicts)
+            assertEquals(imported.secondaryValue, target.dao().entry(savedImported.id)!!.entry.secondaryValue)
+            assertEquals(1, target.dao().importLogins(listOf(conflict), overwritePasswords = true).updated)
+            assertEquals("Different password", target.dao().entry(savedImported.id)!!.entry.secondaryValue)
+            assertEquals(imported.notes, target.dao().entry(savedImported.id)!!.entry.notes)
             val beforeImportFailure = target.dao().backupSnapshot()
             assertTrue(runCatching { target.dao().importLogins(listOf(imported.copy(id = UUID.randomUUID().toString(), title = "Rollback"), imported.copy(type = EntryType.CARD))) }.isFailure)
             assertEquals(beforeImportFailure, target.dao().backupSnapshot())
-            val browserLogin = target.dao().entry(imported.id)!!.entry
+            val browserLogin = target.dao().entry(savedImported.id)!!.entry
             target.dao().saveBrowserLogin("https://example.com", browserLogin.primaryValue, "Updated from browser", browserLogin)
-            val updated = target.dao().entry(imported.id)!!.entry
+            val updated = target.dao().entry(savedImported.id)!!.entry
             assertEquals("Updated from browser", updated.secondaryValue)
             assertEquals(browserLogin.notes, updated.notes)
             assertEquals(browserLogin.autofillSignatures, updated.autofillSignatures)
             assertTrue(runCatching { target.dao().saveBrowserLogin("https://evil.example", updated.primaryValue, "Bad", updated) }.isFailure)
             assertTrue(runCatching { target.dao().saveBrowserLogin("https://example.com", updated.primaryValue, "Stale", browserLogin) }.isFailure)
-            assertEquals(updated, target.dao().entry(imported.id)!!.entry)
+            assertEquals(updated, target.dao().entry(savedImported.id)!!.entry)
             val beforeDuplicate = target.dao().backupSnapshot()
             target.dao().saveBrowserLogin("https://example.com", updated.primaryValue, updated.secondaryValue, null)
             assertEquals(beforeDuplicate, target.dao().backupSnapshot())
             target.dao().saveBrowserLogin("https://new.example", "new-user", "New password", null)
             assertTrue(target.dao().loginAndCodeEntries().any { it.primaryValue == "new-user" && it.tertiaryValue == "https://new.example" })
+            target.dao().saveNativeLogin("com.example.native", "certificate", "Example app", "native-user", "Native password", null)
+            val native = target.dao().loginAndCodeEntries().single { it.primaryValue == "native-user" }
+            assertTrue(loginAuthorized(native, "com.example.native", "certificate"))
+            val beforeNativeUpdate = target.dao().entry(native.id)!!
+            target.dao().saveNativeLogin("com.example.native", "certificate", "Example app", "native-user", "Updated native password", native)
+            val nativeUpdated = target.dao().entry(native.id)!!
+            assertEquals("Updated native password", nativeUpdated.entry.secondaryValue)
+            assertEquals(beforeNativeUpdate.groups, nativeUpdated.groups)
+            assertEquals(beforeNativeUpdate.photos, nativeUpdated.photos)
+            assertTrue(runCatching { target.dao().saveNativeLogin("com.example.native", "wrong-certificate", "Example app", "native-user", "Bad", nativeUpdated.entry) }.isFailure)
         } finally { source.close(); target.close(); password.fill('\u0000'); sourceKey.fill(0); targetKey.fill(0); root.deleteRecursively() }
     }
 }

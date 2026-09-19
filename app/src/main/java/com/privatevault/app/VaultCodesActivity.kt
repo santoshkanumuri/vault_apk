@@ -232,11 +232,16 @@ class VaultCodesActivity : FragmentActivity() {
         if (autofillMode) finish() else finishAndRemoveTask()
     }
 
+    private fun saveDestination(request: LoginSaveRequest): String = request.origin ?: runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(request.packageName, 0)).toString()
+    }.getOrDefault(request.packageName)
+
     private fun saveLogin(expected: VaultEntry?) {
         val request = loginSave ?: return
         if (busy || !pickerVisible || !unlocked || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return
         if (request.expiresAt <= android.os.SystemClock.elapsedRealtime() ||
-            appSigningIdentity(this, request.packageName) != request.identity || !trustedBrowser(request.packageName, request.identity)) {
+            appSigningIdentity(this, request.packageName) != request.identity ||
+            (request.origin != null && !trustedBrowser(request.packageName, request.identity))) {
             dismissPicker(); return
         }
         val key = saveKey?.copyOf() ?: return
@@ -246,7 +251,10 @@ class VaultCodesActivity : FragmentActivity() {
             try {
                 withContext(Dispatchers.IO) {
                     val database = VaultDatabase.open(applicationContext, key)
-                    try { database.dao().saveBrowserLogin(request.origin, request.username, secret.concatToString(), expected) }
+                    try {
+                        if (request.origin != null) database.dao().saveBrowserLogin(request.origin, request.username, secret.concatToString(), expected)
+                        else database.dao().saveNativeLogin(request.packageName, request.identity, saveDestination(request), request.username, secret.concatToString(), expected)
+                    }
                     finally { database.close() }
                 }
                 dismissPicker()
@@ -429,11 +437,14 @@ class VaultCodesActivity : FragmentActivity() {
                         }
                     } else if (unlocked && saveMode) {
                         val request = loginSave
-                        val matches = entries.filter { it.type == EntryType.PASSWORD && it.primaryValue == request?.username && httpsOrigin(it.tertiaryValue) == request.origin }
+                        val destination = request?.let(::saveDestination).orEmpty()
+                        val matches = entries.filter { entry -> request != null && entry.type == EntryType.PASSWORD && entry.primaryValue == request.username &&
+                            (if (request.origin != null) httpsOrigin(entry.tertiaryValue) == request.origin
+                             else com.privatevault.app.security.loginAuthorized(entry, request.packageName, request.identity)) }
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            item { Text("Website: ${request?.origin.orEmpty()}") }
+                            item { Text(if (request?.origin != null) "Website: $destination" else "App: $destination") }
                             item { Text("Username: ${request?.username.orEmpty()}") }
-                            item { Text("Password: hidden. Save the password submitted from this website? This does not change it on the website.") }
+                            item { Text("Password: hidden. Save the submitted password? This only saves a copy in Private Vault.") }
                             if (request != null && matches.any { entry -> entry.secondaryValue.length == request.password.size &&
                                     request.password.indices.all { entry.secondaryValue[it] == request.password[it] } }) item { Text("This password is already saved for this account.") }
                             item { Button(enabled = !busy, onClick = { saveLogin(null) }, modifier = Modifier.fillMaxWidth()) { Text("Save as new login") } }
@@ -488,7 +499,7 @@ class VaultCodesActivity : FragmentActivity() {
                                     Button(onClick = { password = ""; authenticate(null) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Use fingerprint") }
                                 }
                                 item { OutlinedTextField(password, { password = it }, label = { Text("Master password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth()) }
-                                item { Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation." else if (saveMode) "Unlock to review a login from ${loginSave?.origin.orEmpty()}. Nothing is saved until you confirm." else if (autofillMode) "Unlock to choose a login for ${loginFill?.origin ?: loginFill?.packageName.orEmpty()}. Nothing is filled until you select an account." else "Unlock to choose an account and copy its current code. Your password autofill app stays unchanged.") }
+                                item { Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation." else if (saveMode) "Unlock to review a login from ${loginSave?.let(::saveDestination).orEmpty()}. Nothing is saved until you confirm." else if (autofillMode) "Unlock to choose a login for ${loginFill?.origin ?: loginFill?.packageName.orEmpty()}. Nothing is filled until you select an account." else "Unlock to choose an account and copy its current code. Your password autofill app stays unchanged.") }
                                 item { Text("A master password starts a new 24-hour fingerprint session. Fingerprint use does not extend it.", style = MaterialTheme.typography.bodySmall) }
                             }
                             if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
@@ -511,7 +522,7 @@ class VaultCodesActivity : FragmentActivity() {
             dismissButton = { TextButton(enabled = !busy, onClick = { generating = false }) { Text("Cancel") } })
         selectedUpdate?.let { entry ->
             AlertDialog(onDismissRequest = { selectedUpdate = null }, title = { Text("Replace saved password?") },
-                text = { Text("Replace the password for ${entry.primaryValue} at ${loginSave?.origin.orEmpty()}? Groups, photos and the linked authenticator stay unchanged. Password history is not available; the previous password will be replaced.") },
+                text = { Text("Replace the password for ${entry.primaryValue} at ${loginSave?.let(::saveDestination).orEmpty()}? Groups, photos and the linked authenticator stay unchanged. Password history is not available; the previous password will be replaced.") },
                 confirmButton = { Button(enabled = !busy, onClick = { selectedUpdate = null; saveLogin(entry) }) { Text("Replace password") } },
                 dismissButton = { TextButton(onClick = { selectedUpdate = null }) { Text("Cancel") } })
         }

@@ -64,6 +64,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -82,12 +84,16 @@ import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberBottomSheetScaffoldState
+import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material.icons.Icons
@@ -438,15 +444,48 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
         text = { Text("The entries in this folder will remain in your vault.") },
         confirmButton = { DeleteButton(onClick = { viewModel.deleteGroup(folder); selectedFolderId = null; folderToDelete = null }, label = "Delete folder") },
         dismissButton = { TextButton(onClick = { folderToDelete = null }) { Text("Cancel") } }) }
-    if (importPreview.isNotEmpty()) AlertDialog(properties = wideDialogProperties,
-        onDismissRequest = viewModel::cancelPasswordImport,
-        title = { Text("Import ${importPreview.size} logins?") },
-        text = { LazyColumn(Modifier.heightIn(max = 400.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { Text("Exact duplicates are skipped. Different passwords are kept as separate logins. Existing entries are not replaced. The original CSV contains readable passwords; delete it after checking the import.") }
-            items(importPreview.size) { Text(importPreview[it]) }
-        } },
-        confirmButton = { Button(onClick = viewModel::confirmPasswordImport) { Text("Import logins") } },
-        dismissButton = { TextButton(onClick = viewModel::cancelPasswordImport) { Text("Cancel") } })
+    importPreview?.let { preview ->
+        var overwritePasswords by remember(preview) { mutableStateOf<Boolean?>(if (preview.conflictCount == 0) false else null) }
+        AlertDialog(properties = wideDialogProperties,
+            onDismissRequest = viewModel::cancelPasswordImport,
+            title = { Text("Review ${preview.incomingRows} imported logins") },
+            text = { LazyColumn(Modifier.heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item {
+                    Text("${preview.newCount} new · ${preview.alreadySavedCount} already saved · ${preview.conflictCount} password changes" +
+                        if (preview.duplicateRows > 0) " · ${preview.duplicateRows} repeated CSV rows consolidated" else "")
+                }
+                if (preview.conflictCount > 0) {
+                    item { Text("Saved accounts with a different incoming password need your choice.", fontWeight = FontWeight.SemiBold) }
+                    item {
+                        Row(Modifier.fillMaxWidth().clickable { overwritePasswords = false }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = overwritePasswords == false, onClick = { overwritePasswords = false })
+                            Column { Text("Keep saved passwords"); Text("Discard the incoming password changes.", style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
+                    item {
+                        Row(Modifier.fillMaxWidth().clickable { overwritePasswords = true }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = overwritePasswords == true, onClick = { overwritePasswords = true })
+                            Column { Text("Use imported passwords"); Text("Replace only the saved passwords. Keep names, notes, folders, photos and linked codes.", style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
+                }
+                item { HorizontalDivider() }
+                items(preview.items) { item ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(item.label, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(when (item.status) {
+                            PasswordImportStatus.NEW -> "New"
+                            PasswordImportStatus.ALREADY_SAVED -> "Already saved"
+                            PasswordImportStatus.PASSWORD_DIFFERS -> "Password differs"
+                        }, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                item { Text("The CSV contains readable passwords. Delete it after checking the import.", style = MaterialTheme.typography.bodySmall) }
+            } },
+            confirmButton = { Button(enabled = overwritePasswords != null,
+                onClick = { viewModel.confirmPasswordImport(overwritePasswords == true) }) { Text("Continue") } },
+            dismissButton = { TextButton(onClick = viewModel::cancelPasswordImport) { Text("Cancel") } })
+    }
     restoreSummary?.let { summary ->
         AlertDialog(properties = wideDialogProperties, onDismissRequest = viewModel::cancelRestore,
             title = { Text("Backup ready to restore") },
@@ -889,7 +928,54 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
     }
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) launchCamera() }
     val cameraContext = androidx.compose.ui.platform.LocalContext.current
-    Column(modifier.background(MaterialTheme.colorScheme.background)) {
+    val actionSheet = rememberStandardBottomSheetState(initialValue = SheetValue.PartiallyExpanded, skipHiddenState = true)
+    val actionScaffold = rememberBottomSheetScaffoldState(actionSheet)
+    val actionScope = rememberCoroutineScope()
+    val actionSheetExpanded = actionSheet.currentValue == SheetValue.Expanded
+    val toggleActions: () -> Unit = {
+        actionScope.launch { if (actionSheetExpanded) actionSheet.partialExpand() else actionSheet.expand() }
+    }
+    BottomSheetScaffold(
+        modifier = modifier.background(MaterialTheme.colorScheme.background),
+        scaffoldState = actionScaffold,
+        sheetPeekHeight = 56.dp,
+        sheetContainerColor = MaterialTheme.colorScheme.surface,
+        sheetDragHandle = {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = Role.Button, onClick = toggleActions),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                BottomSheetDefaults.DragHandle()
+                Spacer(Modifier.width(8.dp))
+                AnimatedContent(actionSheetExpanded, label = "entry action dock") { expanded ->
+                    Text(if (expanded) "Pull down to close" else "Pull up to edit", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        },
+        sheetContent = {
+            Box(Modifier.fillMaxWidth().navigationBarsPadding(), contentAlignment = Alignment.TopCenter) {
+                Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = { viewModel.externalFlowActive = true; pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Add photo") }
+                        OutlinedButton(onClick = {
+                            if (androidx.core.content.ContextCompat.checkSelfPermission(cameraContext, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) launchCamera()
+                            else cameraPermission.launch(android.Manifest.permission.CAMERA)
+                        }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Camera") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = edit, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Edit") }
+                        if (item.entry.type != EntryType.AUTHENTICATOR) OutlinedButton(onClick = { viewModel.duplicateEntry(item); close() },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Duplicate") }
+                        DeleteButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
+                    }
+                }
+            }
+        }
+    ) { contentPadding ->
+    Column(Modifier.fillMaxSize().padding(contentPadding).background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             BackIcon(close)
             Column(Modifier.weight(1f)) {
@@ -985,22 +1071,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 item { Text(item.entry.tags, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .8f)) }
             }
         }
-        Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 8.dp) {
-            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = { viewModel.externalFlowActive = true; pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("＋ Add photo") }
-                    OutlinedButton(onClick = {
-                        if (androidx.core.content.ContextCompat.checkSelfPermission(cameraContext, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) launchCamera()
-                        else cameraPermission.launch(android.Manifest.permission.CAMERA)
-                    }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Camera") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = edit, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Edit") }
-                    if (item.entry.type != EntryType.AUTHENTICATOR) OutlinedButton(onClick = { viewModel.duplicateEntry(item); close() }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Duplicate") }
-                    DeleteButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
-                }
-            }
-        }
+    }
     }
     if (confirmDelete) AlertDialog(
         modifier = wideDialogModifier,

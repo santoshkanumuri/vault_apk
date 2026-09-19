@@ -59,6 +59,37 @@ internal fun readBrowserPasswords(input: Reader): List<VaultEntry> {
 }
 
 internal fun sameImportedLogin(a: VaultEntry, b: VaultEntry): Boolean =
-    a.type == EntryType.PASSWORD && b.type == EntryType.PASSWORD && a.title == b.title &&
-        a.primaryValue == b.primaryValue && a.secondaryValue == b.secondaryValue &&
-        a.tertiaryValue == b.tertiaryValue && a.notes == b.notes
+    sameImportedAccount(a, b) && a.secondaryValue == b.secondaryValue
+
+internal data class ImportedLoginKey(val site: String, val username: String)
+
+internal fun importedLoginKey(entry: VaultEntry): ImportedLoginKey? {
+    if (entry.type != EntryType.PASSWORD) return null
+    val rawSite = entry.tertiaryValue.trim()
+    val site = httpsOrigin(rawSite) ?: rawSite.lowercase(Locale.ROOT)
+    if (site.isBlank()) return null
+    return ImportedLoginKey(site, entry.primaryValue)
+}
+
+internal fun sameImportedAccount(a: VaultEntry, b: VaultEntry): Boolean {
+    val first = importedLoginKey(a)
+    val second = importedLoginKey(b)
+    return if (first != null && second != null) first == second
+    else a.type == EntryType.PASSWORD && b.type == EntryType.PASSWORD &&
+        a.title == b.title && a.primaryValue == b.primaryValue && a.tertiaryValue == b.tertiaryValue
+}
+
+/** One incoming record per site and username. A later CSV row is the explicit import candidate. */
+internal fun deduplicateImportedLogins(incoming: List<VaultEntry>): List<VaultEntry> {
+    val keyed = linkedMapOf<ImportedLoginKey, VaultEntry>()
+    val unkeyed = mutableListOf<VaultEntry>()
+    incoming.forEach { entry ->
+        require(entry.type == EntryType.PASSWORD)
+        val key = importedLoginKey(entry)
+        if (key == null) {
+            if (unkeyed.none { it.title == entry.title && it.primaryValue == entry.primaryValue &&
+                    it.secondaryValue == entry.secondaryValue && it.tertiaryValue == entry.tertiaryValue && it.notes == entry.notes }) unkeyed += entry
+        } else keyed[key] = entry
+    }
+    return keyed.values + unkeyed
+}

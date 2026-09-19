@@ -108,6 +108,13 @@ data class GroupWithEntries(
     ) val entries: List<VaultEntry>
 )
 
+data class LoginImportResult(
+    val added: Int,
+    val updated: Int,
+    val skippedExact: Int,
+    val skippedConflicts: Int
+)
+
 @Dao
 interface VaultDao {
     @Query("SELECT * FROM vault_settings WHERE id = 1") suspend fun settings(): VaultSettings?
@@ -157,6 +164,24 @@ interface VaultDao {
             check(current == expected) { "This login changed. Cancel and try saving again." }
             require(expected.type == EntryType.PASSWORD && expected.primaryValue == username &&
                 com.privatevault.app.security.httpsOrigin(expected.tertiaryValue) == origin)
+            updateEntry(expected.copy(secondaryValue = password, updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    @Transaction
+    suspend fun saveNativeLogin(packageName: String, identity: String, appName: String, username: String, password: String, expected: VaultEntry?) {
+        require(packageName.isNotBlank() && '\n' !in packageName && '=' !in packageName && identity.isNotBlank() && '\n' !in identity)
+        require(username.isNotBlank() && password.isNotEmpty())
+        if (expected == null) {
+            val duplicate = loginAndCodeEntries().any { it.type == EntryType.PASSWORD && it.primaryValue == username &&
+                it.secondaryValue == password && com.privatevault.app.security.loginAuthorized(it, packageName, identity) }
+            if (!duplicate) insertEntry(VaultEntry(type = EntryType.PASSWORD, title = appName.ifBlank { packageName },
+                primaryValue = username, secondaryValue = password, autofillSignatures = "$packageName=$identity"))
+        } else {
+            val current = entry(expected.id)?.entry
+            check(current == expected) { "This login changed. Cancel and try saving again." }
+            require(expected.type == EntryType.PASSWORD && expected.primaryValue == username &&
+                com.privatevault.app.security.loginAuthorized(expected, packageName, identity))
             updateEntry(expected.copy(secondaryValue = password, updatedAt = System.currentTimeMillis()))
         }
     }
@@ -264,18 +289,32 @@ interface VaultDao {
     }
 
     @Transaction
-    suspend fun importLogins(incoming: List<VaultEntry>): Int {
-        val known = loginAndCodeEntries().toMutableList()
+    suspend fun importLogins(incoming: List<VaultEntry>, overwritePasswords: Boolean = false): LoginImportResult {
+        require(incoming.all { it.type == EntryType.PASSWORD })
+        val unique = com.privatevault.app.security.deduplicateImportedLogins(incoming)
+        val known = loginAndCodeEntries().filter { it.type == EntryType.PASSWORD }.toMutableList()
         var added = 0
-        for (entry in incoming) {
-            require(entry.type == EntryType.PASSWORD)
-            if (known.none { com.privatevault.app.security.sameImportedLogin(it, entry) }) {
+        var updated = 0
+        var skippedExact = 0
+        var skippedConflicts = 0
+        for (entry in unique) {
+            val index = known.indexOfFirst { com.privatevault.app.security.sameImportedAccount(it, entry) }
+            if (index < 0) {
                 insertEntry(entry)
                 known.add(entry)
                 added++
+            } else if (com.privatevault.app.security.sameImportedLogin(known[index], entry)) {
+                skippedExact++
+            } else if (overwritePasswords) {
+                val replacement = known[index].copy(secondaryValue = entry.secondaryValue, updatedAt = System.currentTimeMillis())
+                updateEntry(replacement)
+                known[index] = replacement
+                updated++
+            } else {
+                skippedConflicts++
             }
         }
-        return added
+        return LoginImportResult(added, updated, skippedExact, skippedConflicts)
     }
 
     @Transaction

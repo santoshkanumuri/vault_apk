@@ -55,6 +55,12 @@ public class NativeLoginTestActivity extends Activity {
             focus.postDelayed(() -> getSystemService(AutofillManager.class).requestAutofill(focus), 300);
         });
         layout.addView(request);
+        if (!otp) {
+            Button login = new Button(this);
+            login.setText("Login");
+            login.setOnClickListener(v -> layout.setVisibility(View.GONE));
+            layout.addView(login);
+        }
         setContentView(layout);
     }
 }

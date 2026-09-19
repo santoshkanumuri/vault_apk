@@ -131,7 +131,9 @@ class VaultAutofillService : AutofillService() {
             }
             val response = FillResponse.Builder().addDataset(dataset.build())
             val savedPassword = fields.newPasswords.firstOrNull() ?: fields.password
-            if (browser && savedPassword != null && fields.otp == null && (fields.username != null || fields.newPasswords.isNotEmpty())) {
+            val canSave = if (browser) fields.username != null || fields.newPasswords.isNotEmpty()
+                else fields.username != null && fields.password != null
+            if (savedPassword != null && fields.otp == null && canSave) {
                 response.setSaveInfo(SaveInfo.Builder(SaveInfo.SAVE_DATA_TYPE_USERNAME or SaveInfo.SAVE_DATA_TYPE_PASSWORD,
                     (listOfNotNull(fields.username, savedPassword) + fields.newPasswords.drop(1)).toTypedArray()).setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE).build())
             }
@@ -145,13 +147,17 @@ class VaultAutofillService : AutofillService() {
         var token: String? = null
         try {
             val structure = request.fillContexts.lastOrNull()?.structure ?: error("Missing form")
-            val destination = structure.activityComponent?.packageName ?: error("Missing browser")
+            val destination = structure.activityComponent?.packageName ?: error("Missing app")
             val identity = appSigningIdentity(this, destination) ?: error("Missing identity")
-            check(trustedBrowser(destination, identity))
-            val fields = nativeLoginFields(structure, browser = true) ?: error("Unsupported form")
+            val browser = trustedBrowser(destination, identity)
+            val browserIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://example.invalid"))
+            if (!browser && packageManager.queryIntentActivities(browserIntent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+                    .any { it.activityInfo.packageName == destination }) error("Unsupported browser")
+            val fields = nativeLoginFields(structure, browser) ?: error("Unsupported form")
             val savedPassword = fields.newPasswords.firstOrNull() ?: fields.password
             check(savedPassword != null && fields.otp == null)
-            val origin = requireNotNull(fields.origin)
+            val origin = fields.origin
+            if (browser) requireNotNull(origin)
             val values = mutableMapOf<AutofillId, CharSequence>()
             fun visit(node: AssistStructure.ViewNode) {
                 if (node.autofillId == fields.username || node.autofillId == savedPassword || node.autofillId in fields.newPasswords) {
@@ -161,7 +167,7 @@ class VaultAutofillService : AutofillService() {
             }
             for (i in 0 until structure.windowNodeCount) visit(structure.getWindowNodeAt(i).rootViewNode)
             val username = values[fields.username]?.toString() ?: request.clientState?.takeIf {
-                it.getString("selected_origin") == origin && it.getString("selected_browser") == destination
+                browser && it.getString("selected_origin") == origin && it.getString("selected_browser") == destination
             }?.getString("selected_username") ?: error("Select an account before changing its password")
             val password = requireNotNull(values[savedPassword])
             check(fields.newPasswords.all { values[it]?.toString() == password.toString() })

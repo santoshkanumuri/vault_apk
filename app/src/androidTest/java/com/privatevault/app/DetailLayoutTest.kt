@@ -36,13 +36,14 @@ class DetailLayoutTest {
                 }
             }
         }
+        compose.onNodeWithText("Pull up to edit").performClick()
         for (entryType in listOf(EntryType.NOTE, EntryType.PASSWORD, EntryType.AUTHENTICATOR)) {
             compose.runOnIdle { type.value = entryType }
             val viewport = compose.onNodeWithTag("viewport").fetchSemanticsNode().boundsInRoot
             for (label in listOf("Edit", "Delete", "Camera")) {
                 compose.onNodeWithText(label).assertIsDisplayed()
                 val bounds = compose.onNodeWithText(label).fetchSemanticsNode().boundsInRoot
-                assertTrue("$entryType $label must be fully inside the detail viewport", bounds.top >= viewport.top && bounds.bottom <= viewport.bottom && bounds.left >= viewport.left && bounds.right <= viewport.right)
+                assertTrue("$entryType $label must be reachable inside the detail viewport", bounds.top >= viewport.top && bounds.bottom <= viewport.bottom && bounds.left >= viewport.left && bounds.right <= viewport.right)
             }
         }
     }

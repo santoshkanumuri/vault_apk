@@ -5,7 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import java.util.UUID
 
-internal class LoginSaveRequest(val packageName: String, val identity: String, val origin: String,
+internal class LoginSaveRequest(val packageName: String, val identity: String, val origin: String?,
     val username: String, val password: CharArray, val expiresAt: Long) {
     fun clear() = password.fill('\u0000')
 }

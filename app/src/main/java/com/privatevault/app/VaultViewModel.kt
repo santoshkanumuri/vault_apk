@@ -29,6 +29,19 @@ sealed interface VaultStatus {
     data object Unlocked : VaultStatus
 }
 
+enum class PasswordImportStatus { NEW, ALREADY_SAVED, PASSWORD_DIFFERS }
+
+data class PasswordImportItem(val label: String, val status: PasswordImportStatus)
+
+data class PasswordImportPreview(
+    val items: List<PasswordImportItem>,
+    val incomingRows: Int,
+    val duplicateRows: Int,
+    val newCount: Int,
+    val alreadySavedCount: Int,
+    val conflictCount: Int
+)
+
 class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val keyManager = VaultKeyManager(application)
     private val biometricGate = BiometricGate(application)
@@ -37,10 +50,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val _restoreSummary = MutableStateFlow<String?>(null)
     val restoreSummary = _restoreSummary.asStateFlow()
     private var pendingLogins = emptyList<VaultEntry>()
-    private val _importPreview = MutableStateFlow<List<String>>(emptyList())
+    private val _importPreview = MutableStateFlow<PasswordImportPreview?>(null)
     val importPreview = _importPreview.asStateFlow()
 
-    fun cancelPasswordImport() { pendingLogins = emptyList(); _importPreview.value = emptyList() }
+    fun cancelPasswordImport() { pendingLogins = emptyList(); _importPreview.value = null }
 
     fun previewPasswordImport(uri: Uri) = securedLaunch {
         cancelPasswordImport()
@@ -52,22 +65,40 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 com.privatevault.app.security.readBrowserPasswords(it)
             }
         }
+        val unique = com.privatevault.app.security.deduplicateImportedLogins(parsed)
+        if (sessionKey !== activeKey || _status.value !is VaultStatus.Unlocked) return@securedLaunch
+        val existing = dao().loginAndCodeEntries().filter { it.type == com.privatevault.app.data.EntryType.PASSWORD }
         if (sessionKey === activeKey && _status.value is VaultStatus.Unlocked) {
-            pendingLogins = parsed
-            _importPreview.value = parsed.map { "${it.title} · ${it.primaryValue}" }
+            val items = unique.map { entry ->
+                val saved = existing.firstOrNull { com.privatevault.app.security.sameImportedAccount(it, entry) }
+                val status = when {
+                    saved == null -> PasswordImportStatus.NEW
+                    com.privatevault.app.security.sameImportedLogin(saved, entry) -> PasswordImportStatus.ALREADY_SAVED
+                    else -> PasswordImportStatus.PASSWORD_DIFFERS
+                }
+                PasswordImportItem("${entry.title} · ${entry.primaryValue}", status)
+            }
+            pendingLogins = unique
+            _importPreview.value = PasswordImportPreview(items, parsed.size, parsed.size - unique.size,
+                items.count { it.status == PasswordImportStatus.NEW },
+                items.count { it.status == PasswordImportStatus.ALREADY_SAVED },
+                items.count { it.status == PasswordImportStatus.PASSWORD_DIFFERS })
         }
     }
 
-    fun confirmPasswordImport() = securedLaunch {
+    fun confirmPasswordImport(overwritePasswords: Boolean) = securedLaunch {
         val incoming = pendingLogins
+        val preview = _importPreview.value
         cancelPasswordImport()
         if (incoming.isNotEmpty()) {
-            val added = dao().importLogins(incoming)
+            val result = dao().importLogins(incoming, overwritePasswords)
             refresh()
-            _message.value = "Imported $added logins. Skipped ${incoming.size - added} exact duplicates. Delete the readable CSV export after checking your logins."
+            val duplicateRows = preview?.duplicateRows ?: 0
+            _message.value = "Added ${result.added} logins and updated ${result.updated}. " +
+                "Skipped ${result.skippedExact + duplicateRows} duplicates and ${result.skippedConflicts} incoming password changes. " +
+                "Delete the readable CSV export after checking your logins."
         }
     }
-
     fun cancelRestore() {
         preparedRestore?.close()
         preparedRestore = null

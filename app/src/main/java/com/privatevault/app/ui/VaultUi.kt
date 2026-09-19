@@ -42,6 +42,8 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -51,6 +53,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -64,7 +67,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -101,6 +103,8 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Home
@@ -196,7 +200,7 @@ private fun DeleteButton(onClick: () -> Unit, modifier: Modifier = Modifier, ena
     }
 }
 
-private enum class VaultTab(val label: String, val glyph: String, val type: EntryType?) {
+internal enum class VaultTab(val label: String, val glyph: String, val type: EntryType?) {
     HOME("Home", "H", null),
     CARDS("Cards", "▣", EntryType.CARD),
     QUESTIONS("Questions", "?", EntryType.QUESTION),
@@ -335,7 +339,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
     var folderToDelete by remember { mutableStateOf<VaultGroup?>(null) }
     var sortBy by rememberSaveable { mutableStateOf("Default") }
     val tab = VaultTab.entries[tabIndex]
-    val categoryFolders = groups.filter { it.folderType == tab.type }
+    val categoryFolders = if (tab == VaultTab.CARDS) emptyList() else groups.filter { it.folderType == tab.type }
     val selectedFolder = categoryFolders.firstOrNull { it.id == selectedFolderId }
     val screenTitle = when (tab) {
         VaultTab.HOME -> "Private Vault"
@@ -400,9 +404,10 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
             }
         }
         if ((!wide || tab == VaultTab.HOME) && selected != null && !editorOpen) {
-            Dialog(onDismissRequest = { selectedId = null }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
-                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    EntryDetail(selected, viewModel, onCopySecret, onBiometricAction, { editing = selected.entry }, { selectedId = null }, Modifier.fillMaxSize().safeDrawingPadding().imePadding())
+            BackHandler { selectedId = null }
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+                    EntryDetail(selected, viewModel, onCopySecret, onBiometricAction, { editing = selected.entry }, { selectedId = null }, Modifier.fillMaxSize())
                 }
             }
         }
@@ -428,7 +433,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
         close = { showGroups = false }
     )
     if (showSettings) SettingsDialog(viewModel, { showSettings = false })
-    if (showFolderEditor && tab.type != null) AlertDialog(properties = wideDialogProperties,
+    if (showFolderEditor && tab.type != null && tab.type != EntryType.CARD) AlertDialog(properties = wideDialogProperties,
         onDismissRequest = { showFolderEditor = false },
         title = { Text(if (folderToEdit == null) "New folder" else "Rename folder") },
         text = { OutlinedTextField(folderName, { folderName = it }, label = { Text("Folder name") }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
@@ -711,8 +716,7 @@ private fun CardStack(cards: List<EntryWithDetails>, select: (String) -> Unit, c
                                 .width(cardWidth)
                                 .aspectRatio(CARD_ASPECT_RATIO),
                             copy,
-                            authenticate,
-                            cards[index].groups.firstOrNull { it.folderType != null }?.name
+                            authenticate
                         ) { select(cards[index].entry.id) }
                     }
                 }
@@ -727,7 +731,6 @@ private fun CardFace(
     modifier: Modifier,
     copy: ((String, String) -> Unit)? = null,
     authenticate: ((() -> Unit) -> Unit)? = null,
-    folder: String? = null,
     onClick: () -> Unit
 ) {
     val base = Color(entry.color)
@@ -741,10 +744,7 @@ private fun CardFace(
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(entry.title, modifier = Modifier.weight(1f).padding(end = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Column(Modifier.widthIn(max = 120.dp), horizontalAlignment = Alignment.End) {
-                    Text(entry.cardKind.label().uppercase(), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                    if (folder != null) Text(folder, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+                Text(entry.cardKind.label().uppercase(), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
             }
             Column {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -818,7 +818,7 @@ private fun GlobalSearchResults(entries: List<EntryWithDetails>, folders: List<V
 }
 
 @Composable
-private fun CategoryCollection(
+internal fun CategoryCollection(
     tab: VaultTab, entries: List<EntryWithDetails>, folders: List<VaultGroup>, selectedFolder: VaultGroup?,
     search: String, sortBy: String, onSort: (String) -> Unit, onFolder: (String?) -> Unit,
     onEditFolder: (VaultGroup?) -> Unit, onDeleteFolder: (VaultGroup) -> Unit,
@@ -826,6 +826,7 @@ private fun CategoryCollection(
     authenticate: (() -> Unit) -> Unit, modifier: Modifier
 ) {
     val visible = when {
+        tab == VaultTab.CARDS -> entries
         selectedFolder != null -> entries.filter { item -> item.groups.any { it.id == selectedFolder.id } }
         search.isNotBlank() -> entries
         else -> entries.filter { item -> item.groups.none { it.folderType != null } }
@@ -839,7 +840,7 @@ private fun CategoryCollection(
             IconButton(onClick = { onEditFolder(selectedFolder) }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Settings, "Rename folder") }
             TextButton(onClick = { onDeleteFolder(selectedFolder) }) { Text("Delete") }
         }
-        else if (matchingFolders.isNotEmpty() || (search.isBlank() && tab.type != EntryType.AUTHENTICATOR)) {
+        else if (tab != VaultTab.CARDS && (matchingFolders.isNotEmpty() || (search.isBlank() && tab.type != EntryType.AUTHENTICATOR))) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Folders", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
                 if (search.isBlank() && tab.type != EntryType.AUTHENTICATOR) IconButton(onClick = { onEditFolder(null) }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Add, "Add folder") }
@@ -938,23 +939,43 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
     BottomSheetScaffold(
         modifier = modifier.background(MaterialTheme.colorScheme.background),
         scaffoldState = actionScaffold,
-        sheetPeekHeight = 56.dp,
+        sheetPeekHeight = 88.dp,
         sheetContainerColor = MaterialTheme.colorScheme.surface,
+        sheetShape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+        sheetTonalElevation = 8.dp,
+        sheetShadowElevation = 12.dp,
         sheetDragHandle = {
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = Role.Button, onClick = toggleActions),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+            Surface(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)
+                    .clickable(role = Role.Button, onClick = toggleActions),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
-                BottomSheetDefaults.DragHandle()
-                Spacer(Modifier.width(8.dp))
-                AnimatedContent(actionSheetExpanded, label = "entry action dock") { expanded ->
-                    Text(if (expanded) "Pull down to close" else "Pull up to edit", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier.size(42.dp).clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = .18f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AnimatedContent(actionSheetExpanded, label = "entry action direction") { expanded ->
+                            Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
+                                contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    AnimatedContent(actionSheetExpanded, modifier = Modifier.weight(1f), label = "entry action instruction") { expanded ->
+                        Text(if (expanded) "Pull down to close" else "Pull up to edit",
+                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
         },
         sheetContent = {
-            Box(Modifier.fillMaxWidth().navigationBarsPadding(), contentAlignment = Alignment.TopCenter) {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                 Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -982,6 +1003,11 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 Text(item.entry.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
                 Text(item.entry.type.label().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
+            IconButton(onClick = toggleActions, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Outlined.MoreHoriz,
+                    contentDescription = if (actionSheetExpanded) "Close entry actions" else "Open entry actions",
+                    tint = MaterialTheme.colorScheme.primary)
+            }
             IconButton(onClick = { viewModel.toggleFavorite(item.entry) }, modifier = Modifier.size(48.dp)) {
                 Icon(if (item.entry.favorite) Icons.Outlined.Star else Icons.Outlined.StarBorder,
                     contentDescription = if (item.entry.favorite) "Remove from favorites" else "Add to favorites")
@@ -995,8 +1021,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
             if (item.entry.type == EntryType.CARD) {
                 item {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CardFace(item.entry, Modifier.widthIn(max = 560.dp).fillMaxWidth().aspectRatio(CARD_ASPECT_RATIO), copy, authenticate,
-                            item.groups.firstOrNull { it.folderType != null }?.name) {}
+                        CardFace(item.entry, Modifier.widthIn(max = 560.dp).fillMaxWidth().aspectRatio(CARD_ASPECT_RATIO), copy, authenticate) {}
                     }
                 }
                 val expiry = expiryState(item.entry.tertiaryValue)
@@ -1049,7 +1074,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 item { PlainRow("Contents", item.entry.notes) }
             }
             if (item.groups.isNotEmpty()) {
-                item { SectionTitle("Folders and groups") }
+                item { SectionTitle(if (item.entry.type == EntryType.CARD) "Groups" else "Folders and groups") }
                 item { FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { item.groups.forEach { FilterChip(true, {}, { Text(it.name) }) } } }
             }
             if (item.photos.isNotEmpty()) {
@@ -1101,7 +1126,7 @@ private fun EncryptedPhoto(photo: VaultPhoto, viewModel: VaultViewModel, open: (
 }
 
 @Composable
-private fun PhotoViewer(photo: VaultPhoto, viewModel: VaultViewModel, close: () -> Unit) {
+internal fun PhotoViewer(photo: VaultPhoto, viewModel: VaultViewModel, close: () -> Unit) {
     var revision by remember { mutableIntStateOf(0) }
     var cropping by remember { mutableStateOf(false) }
     var crop by remember { mutableStateOf(com.privatevault.app.security.PhotoCrop()) }
@@ -1123,10 +1148,11 @@ private fun PhotoViewer(photo: VaultPhoto, viewModel: VaultViewModel, close: () 
         scope.launch { job.join(); revision++; scale = 1f; offset = androidx.compose.ui.geometry.Offset.Zero; cropping = false; busy = false }
     }
     val back: () -> Unit = { if (!busy) { if (cropping) cropping = false else close() } }
+    val safeInsets = WindowInsets.safeDrawing.asPaddingValues()
     Dialog(onDismissRequest = back, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
         BackHandler { back() }
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            Column(Modifier.fillMaxSize().padding(safeInsets)) {
                 Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = back, enabled = !busy, modifier = Modifier.size(48.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
                     Text(if (cropping) "Crop photo" else "Photo", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
@@ -1316,7 +1342,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
             }
             item { OutlinedTextField(notes, { notes = it }, label = { Text(if (type == EntryType.NOTE) "Note" else "Notes") }, minLines = if (type == EntryType.NOTE) 7 else 2, modifier = Modifier.fillMaxWidth()) }
             item { OutlinedTextField(tags, { tags = it }, label = { Text("Tags") }, placeholder = { Text("Travel, business, banking") }, modifier = Modifier.fillMaxWidth()) }
-            if (groups.any { it.folderType == type }) item {
+            if (type != EntryType.CARD && groups.any { it.folderType == type }) item {
                 Column { Text("Folder", style = MaterialTheme.typography.labelMedium)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         item { FilterChip(selectedGroups.none { id -> groups.any { it.id == id && it.folderType != null } },
@@ -1349,7 +1375,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
 }
 
 @Composable
-private fun GroupManager(
+internal fun GroupManager(
     groups: List<VaultGroup>, entries: List<EntryWithDetails>, viewModel: VaultViewModel,
     copy: (String, String) -> Unit, authenticate: (() -> Unit) -> Unit,
     openEntry: (String) -> Unit, close: () -> Unit
@@ -1365,10 +1391,9 @@ private fun GroupManager(
     val selected = groups.firstOrNull { it.id == selectedId }
     val linked = entries.filter { item -> item.groups.any { it.id == selectedId } }
     val back: () -> Unit = { if (selectedId != null) selectedId = null else close() }
-    Dialog(onDismissRequest = back, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
-        BackHandler { back() }
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+    BackHandler { back() }
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     BackIcon(back)
                     Text(selected?.name ?: "Groups", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 2)
@@ -1426,9 +1451,12 @@ private fun GroupManager(
                                 items(matching, key = { it.entry.id }) { item -> GroupEntryDetails(item, copy, authenticate) { openEntry(item.entry.id) } }
                             }
                         }
-                        item { DeleteButton(onClick = { confirmDelete = true }, label = "Delete group", modifier = Modifier.fillMaxWidth()) }
                     }
-                }
+                    HorizontalDivider()
+                    Surface(tonalElevation = 8.dp) {
+                        DeleteButton(onClick = { confirmDelete = true }, label = "Delete group",
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).heightIn(min = 48.dp))
+                    }
             }
         }
     }
@@ -1477,8 +1505,7 @@ private fun GroupEntryDetails(
                     entry,
                     Modifier.widthIn(max = 560.dp).fillMaxWidth().aspectRatio(CARD_ASPECT_RATIO),
                     copy,
-                    authenticate,
-                    item.groups.firstOrNull { it.folderType != null }?.name
+                    authenticate
                 ) { open() }
             }
             if (entry.notes.isNotBlank()) PlainRow("Notes", entry.notes)
@@ -1516,7 +1543,7 @@ private fun GroupEntryDetails(
 }
 
 @Composable
-private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
+internal fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
     val passkeys by viewModel.passkeys.collectAsStateWithLifecycle()
     var deletePasskey by remember { mutableStateOf<com.privatevault.app.data.PasskeySummary?>(null) }
     var page by remember { mutableStateOf<String?>(null) }
@@ -1550,8 +1577,7 @@ private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
         if (uri != null) viewModel.previewPasswordImport(uri) else viewModel.touch()
     }
 
-    Dialog(onDismissRequest = { if (page != null) page = null else close() },
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
+    BackHandler { if (page != null) page = null else close() }
       Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = 16.dp)) {
           Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1625,7 +1651,6 @@ private fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
           }
         }
       }
-    }
 
     if (showPrivacy) PrivacyPolicyDialog { showPrivacy = false }
     deletePasskey?.let { key ->

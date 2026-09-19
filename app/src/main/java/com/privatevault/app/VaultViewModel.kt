@@ -250,6 +250,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         database?.close()
         sessionKey = key
         database = VaultDatabase.open(getApplication(), key)
+        dao().convertCardFoldersToGroups()
         val options = dao().settings()
         if (options != null) {
             _lightMode.value = options.lightMode
@@ -396,6 +397,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addFolder(name: String, type: com.privatevault.app.data.EntryType) = securedLaunch {
         require(name.isNotBlank()) { "Enter a folder name." }
+        require(type != com.privatevault.app.data.EntryType.CARD) { "Cards do not use folders." }
         dao().insertGroup(VaultGroup(name = name.trim(), folderType = type))
         refresh()
     }

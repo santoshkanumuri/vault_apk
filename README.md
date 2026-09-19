@@ -8,9 +8,9 @@ No account, server, ads, or cloud sync. Your vault stays on your phone.
 
 ## Download
 
-**[Download Private Vault v1.9.2](downloads/private-vault-v1.9.2.apk?raw=true)**
+**[Download Private Vault v1.9.3](downloads/private-vault-v1.9.3.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.2.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.3.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 
@@ -20,14 +20,14 @@ For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Pa
 
 ## Features
 
-- **Cards:** credit/debit cards, number, cardholder, expiry, CVV, notes, and photos. Choose from 34 colors and browse a stacked or expanded view. Copy individual fields; revealing or copying a CVV requires biometric authentication.
+- **Cards:** credit/debit cards, number, cardholder, expiry, CVV, notes, and photos. Choose from 34 colors and browse all cards in a stacked or expanded view. Copy individual fields; revealing or copying a CVV requires biometric authentication.
 - **Passwords and security questions:** save login details and answers, with notes and photos.
 - **Linked logins:** generate a 24-character password locally and link an existing authenticator to a login. View its code alongside the login without duplicating the setup key. Removing the login keeps the authenticator.
 - **Optional autofill:** authorize native apps in a login's editor or save its exact HTTPS website URL, then choose Private Vault as your Autofill provider. Unlock and select an account to fill a username/password or a linked code on a separate code screen. Native apps require the saved package and signing identity. Website filling is restricted to verified Chrome and Brave release certificates and an exact HTTPS origin match. Browser support depends on Android autofill being enabled in the browser. The unlock suggestion shows the app icon and name, including inside compatible keyboards; short screens use a regular Android suggestion. Native-app and browser Save/Update prompts require a separate vault unlock and confirmation. Choosing this provider replaces your current password autofill provider; the code tile remains available if you prefer to keep Bitwarden.
 - **Browser password import:** import a Chrome or Brave password CSV under Settings > Backup and import. Repeated rows are consolidated, exact matches are skipped, and changed passwords are shown for review. Choose whether to keep saved passwords or replace only their password fields; names, notes, folders, photos, and linked codes remain intact. The original CSV contains readable passwords; delete it after verifying the import.
 - **Authenticator:** generate TOTP codes offline. Scan a setup QR, import a QR image, or enter a setup key. Supports SHA1/SHA256/SHA512, 6–8 digits, and configurable intervals. The phone's clock must be correct. SMS, push approvals, HOTP, and Google Authenticator transfer QR codes are not supported.
 - **Groups:** keep a bank's cards, logins, questions, notes, and codes together. An entry can belong to several groups. Deleting a group keeps its entries.
-- **Folders:** organize cards, passwords, questions, and notes inside their own categories. Folders appear before unfiled items, and entry cards show their folder. Deleting a folder keeps its entries. Folders and links are included in encrypted backups.
+- **Folders:** organize passwords, questions, and notes inside their own categories. Folders appear before unfiled items, and entry cards show their folder. Cards use the full stack and can still belong to Groups. Deleting a folder keeps its entries. Folders and links are included in encrypted backups.
 - **Quick access to codes:** add the Vault codes tile from More > Settings. Unlock, choose an authenticator account, and copy its current code without changing your password autofill app. The picker closes on backgrounding and follows the same 24-hour fingerprint rule.
 - **App-linked codes:** choose Linked apps when editing an authenticator account. Optional Usage access lets the tile suggest accounts for the previous app. Codes start masked, with Copy, Show/Hide, and Show all controls. App links are included in encrypted backups. Browser websites cannot be identified this way.
 - **Photos:** full-resolution capture and original-file import, encrypted thumbnails, crop, rotate, cover selection, and zoom. Imported originals remain outside the vault.

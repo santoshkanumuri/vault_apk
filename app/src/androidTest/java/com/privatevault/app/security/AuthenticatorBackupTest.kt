@@ -20,6 +20,32 @@ class AuthenticatorBackupTest {
         override fun getDatabasePath(name: String) = File(root, name)
     }
 
+    @Test fun cardFolderBecomesGroupWithoutLosingItsCard() = runBlocking {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        val root = File(base.cacheDir, "test-card-folder-${UUID.randomUUID()}").apply { mkdirs() }
+        val database = VaultDatabase.open(VaultContext(base, root), ByteArray(32) { 3 })
+        try {
+            val folder = VaultGroup(name = "Travel cards", notes = "Keep together", folderType = EntryType.CARD)
+            val card = VaultEntry(type = EntryType.CARD, title = "Travel card")
+            database.dao().insertGroup(folder)
+            database.dao().saveEntry(card, setOf(folder.id))
+
+            database.dao().convertCardFoldersToGroups()
+
+            val converted = database.dao().allGroupsWithEntries().single().group
+            assertEquals(folder.id, converted.id)
+            assertEquals(folder.name, converted.name)
+            assertEquals(folder.notes, converted.notes)
+            assertNull(converted.folderType)
+            assertEquals(folder.id, database.dao().entry(card.id)!!.groups.single().id)
+            database.dao().saveEntry(card.copy(title = "Updated card"), setOf(folder.id))
+            assertEquals(folder.id, database.dao().entry(card.id)!!.groups.single().id)
+        } finally {
+            database.close()
+            root.deleteRecursively()
+        }
+    }
+
     @Test fun completeTransferRejectsBadBackupsAndPreservesPhotosWhenEditing() = runBlocking {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
         val root = File(base.cacheDir, "test-backup-${UUID.randomUUID()}").apply { mkdirs() }

@@ -8,6 +8,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -28,11 +29,13 @@ internal fun NetworkLogo(network: String, modifier: Modifier = Modifier) {
         else -> null
     }
     val isAmex = resource == R.drawable.network_amex
-    val logoModifier = modifier.width(if (isAmex) 74.dp else 64.dp).height(if (isAmex) 34.dp else 32.dp)
+    // Fit drew the old 74 x 34 dp box at about 56 dp wide; 66 dp adds roughly 5 dp on each side.
+    val logoModifier = modifier.width(if (isAmex) 66.dp else 64.dp).height(if (isAmex) 34.dp else 32.dp)
     if (resource != null) {
         // Single-color wordmarks follow card ink for contrast on every card color.
         val tint = if (resource == R.drawable.network_visa || resource == R.drawable.network_amex) ColorFilter.tint(LocalContentColor.current) else null
-        Image(painterResource(resource), network, logoModifier, colorFilter = tint)
+        Image(painterResource(resource), network, logoModifier,
+            contentScale = if (isAmex) ContentScale.FillBounds else ContentScale.Fit, colorFilter = tint)
     } else if (network.isNotBlank()) {
         Text(network, logoModifier, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }

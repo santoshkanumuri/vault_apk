@@ -220,6 +220,9 @@ interface VaultDao {
     @androidx.room.Upsert
     suspend fun insertGroup(group: VaultGroup)
 
+    @Query("UPDATE vault_groups SET folderType = NULL WHERE folderType = 'CARD'")
+    suspend fun convertCardFoldersToGroups()
+
     @Delete suspend fun deleteGroup(group: VaultGroup)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)

@@ -37,7 +37,7 @@ class NfcCardReader(private val activity: Activity) {
                 if (result != null) success(result) else failure(error)
             }
         }
-        timeout = Runnable { if (generation == token) { stop(); failure("No card read. Tap Scan card to try again.") } }.also { main.postDelayed(it, 30_000) }
+        timeout = Runnable { if (generation == token) { stop(); failure("No card read. Tap the NFC icon to try again.") } }.also { main.postDelayed(it, 30_000) }
         try {
             nfc.enableReaderMode(activity, { tag ->
                 if (generation == token && permitted() && reading.compareAndSet(false, true)) {

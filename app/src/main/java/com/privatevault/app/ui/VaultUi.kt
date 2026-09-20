@@ -7,6 +7,7 @@
 package com.privatevault.app
 
 import com.privatevault.app.security.decodePhoto
+import com.privatevault.app.security.PasswordColumnMapping
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
@@ -71,6 +72,8 @@ import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -100,6 +103,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Contactless
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Add
@@ -338,6 +342,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
     onFirstRunChoiceHandled: () -> Unit) {
     val restoreSummary by viewModel.restoreSummary.collectAsStateWithLifecycle()
     val importPreview by viewModel.importPreview.collectAsStateWithLifecycle()
+    val importMapping by viewModel.importMapping.collectAsStateWithLifecycle()
     val entries by viewModel.entries.collectAsStateWithLifecycle()
     val groups by viewModel.groups.collectAsStateWithLifecycle()
     var tabIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -392,12 +397,17 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                     VaultToolbar(
                         screenTitle, search, { search = it },
                         showSearch = tab != VaultTab.MORE && tab != VaultTab.CARDS,
+                        addDescription = if (tab == VaultTab.HOME) "Quick add" else "Add ${tab.type?.label() ?: "entry"}",
                         onAdd = { if (tab.type == null) showQuickAdd = true else addType = tab.type!! }
                     )
                     if (tab == VaultTab.MORE) {
                         MoreScreen(groups.count { it.folderType == null }, entries, { showGroups = true }, { tabIndex = VaultTab.QUESTIONS.ordinal }, { tabIndex = VaultTab.NOTES.ordinal }, { showSettings = true })
                     } else if (tab == VaultTab.HOME) {
-                        if (search.isBlank()) Dashboard(shown, selectEntry, { showQuickAdd = true }, Modifier.fillMaxSize())
+                        if (search.isBlank()) Dashboard(shown, selectEntry, { type ->
+                            tabIndex = VaultTab.entries.first { it.type == type }.ordinal
+                            selectedId = null
+                            selectedFolderId = null
+                        }, Modifier.fillMaxSize())
                         else GlobalSearchResults(shown, groups.filter { it.folderType != null &&
                             (it.name.contains(search, true) || it.notes.contains(search, true)) },
                             { folder -> tabIndex = VaultTab.entries.first { it.type == folder.folderType }.ordinal; selectedFolderId = folder.id; search = "" },
@@ -468,46 +478,100 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
         confirmButton = { DeleteButton(onClick = { viewModel.deleteGroup(folder); selectedFolderId = null; folderToDelete = null }, label = "Delete folder") },
         dismissButton = { TextButton(onClick = { folderToDelete = null }) { Text("Cancel") } }) }
     importPreview?.let { preview ->
-        var overwritePasswords by remember(preview) { mutableStateOf<Boolean?>(if (preview.conflictCount == 0) false else null) }
         AlertDialog(properties = wideDialogProperties,
             onDismissRequest = viewModel::cancelPasswordImport,
             title = { Text("Review ${preview.incomingRows} imported logins") },
             text = { LazyColumn(Modifier.heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
-                    Text("${preview.newCount} new · ${preview.alreadySavedCount} already saved · ${preview.conflictCount} password changes" +
-                        if (preview.duplicateRows > 0) " · ${preview.duplicateRows} repeated export rows consolidated" else "")
+                    Text(buildList {
+                        add("${preview.newCount} new")
+                        add("${preview.alreadySavedCount} already saved")
+                        add("${preview.conflictCount} password changes")
+                        if (preview.ambiguousCount > 0) add("${preview.ambiguousCount} ambiguous")
+                        if (preview.duplicateRows > 0) add("${preview.duplicateRows} repeated export rows consolidated")
+                    }.joinToString(" · "))
                 }
                 if (preview.conflictCount > 0) {
-                    item { Text("Saved accounts with a different incoming password need your choice.", fontWeight = FontWeight.SemiBold) }
                     item {
-                        Row(Modifier.fillMaxWidth().clickable { overwritePasswords = false }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = overwritePasswords == false, onClick = { overwritePasswords = false })
-                            Column { Text("Keep saved passwords"); Text("Discard the incoming password changes.", style = MaterialTheme.typography.bodySmall) }
-                        }
-                    }
-                    item {
-                        Row(Modifier.fillMaxWidth().clickable { overwritePasswords = true }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = overwritePasswords == true, onClick = { overwritePasswords = true })
-                            Column { Text("Use imported passwords"); Text("Replace only the saved passwords. Keep names, notes, folders, photos and linked codes.", style = MaterialTheme.typography.bodySmall) }
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Changed passwords default to keeping the saved value. Apply a bulk choice, then adjust individual accounts below.", fontWeight = FontWeight.SemiBold)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { viewModel.setAllPasswordImportDecisions(PasswordImportDecision.KEEP_SAVED) }) { Text("Keep all saved") }
+                                OutlinedButton(onClick = { viewModel.setAllPasswordImportDecisions(PasswordImportDecision.USE_IMPORTED) }) { Text("Use all imported") }
+                            }
                         }
                     }
                 }
+                if (preview.ambiguousCount > 0) item {
+                    Text("Ambiguous accounts match more than one saved login. They will not be changed.", style = MaterialTheme.typography.bodySmall)
+                }
                 item { HorizontalDivider() }
-                items(preview.items) { item ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(item.label, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(when (item.status) {
-                            PasswordImportStatus.NEW -> "New"
-                            PasswordImportStatus.ALREADY_SAVED -> "Already saved"
-                            PasswordImportStatus.PASSWORD_DIFFERS -> "Password differs"
-                        }, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                items(preview.items, key = { it.id }) { item ->
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(item.label, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(when (item.status) {
+                                PasswordImportStatus.NEW -> "New"
+                                PasswordImportStatus.ALREADY_SAVED -> "Already saved"
+                                PasswordImportStatus.PASSWORD_DIFFERS -> "Password differs"
+                                PasswordImportStatus.AMBIGUOUS -> "Multiple matches"
+                            }, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        }
+                        if (item.status == PasswordImportStatus.PASSWORD_DIFFERS) {
+                            Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                listOf(
+                                    PasswordImportDecision.KEEP_SAVED to "Keep saved",
+                                    PasswordImportDecision.USE_IMPORTED to "Use imported"
+                                ).forEach { (decision, label) ->
+                                    Row(Modifier.weight(1f).heightIn(min = 48.dp)
+                                        .selectable(selected = item.decision == decision, role = Role.RadioButton,
+                                            onClick = { viewModel.setPasswordImportDecision(item.id, decision) })
+                                        .padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        RadioButton(selected = item.decision == decision, onClick = null)
+                                        Text(label, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 item { Text("The export file contains readable passwords. Delete it after checking the import.", style = MaterialTheme.typography.bodySmall) }
             } },
-            confirmButton = { Button(enabled = overwritePasswords != null,
-                onClick = { viewModel.confirmPasswordImport(overwritePasswords == true) }) { Text("Continue") } },
+            confirmButton = { Button(
+                enabled = preview.items.filter { it.status == PasswordImportStatus.PASSWORD_DIFFERS }.all { it.decision != null },
+                onClick = viewModel::confirmPasswordImport) { Text("Continue") } },
             dismissButton = { TextButton(onClick = viewModel::cancelPasswordImport) { Text("Cancel") } })
+    }
+    importMapping?.let { request ->
+        var title by remember(request) { mutableStateOf(request.suggested.title) }
+        var website by remember(request) { mutableStateOf(request.suggested.website) }
+        var username by remember(request) { mutableStateOf(request.suggested.username) }
+        var password by remember(request) { mutableStateOf(request.suggested.password) }
+        var notes by remember(request) { mutableStateOf(request.suggested.notes) }
+        val selected = listOfNotNull(title, website, username, password, notes)
+        val valid = website != null && username != null && password != null && selected.distinct().size == selected.size
+        AlertDialog(
+            properties = wideDialogProperties,
+            onDismissRequest = viewModel::cancelPasswordImport,
+            title = { Text("Match password columns") },
+            text = {
+                Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("This export uses unfamiliar headings. Match headings only; Private Vault will not inspect row values to guess.")
+                    PasswordColumnPicker("Website", website, request.headers, required = true) { website = it }
+                    PasswordColumnPicker("Username", username, request.headers, required = true) { username = it }
+                    PasswordColumnPicker("Password", password, request.headers, required = true) { password = it }
+                    PasswordColumnPicker("Title", title, request.headers, required = false) { title = it }
+                    PasswordColumnPicker("Notes", notes, request.headers, required = false) { notes = it }
+                    if (!valid) Text("Choose three different required columns. Optional columns must also be different.", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            confirmButton = {
+                Button(enabled = valid, onClick = {
+                    viewModel.retryPasswordImport(PasswordColumnMapping(title, website, username, password, notes))
+                }) { Text("Review import") }
+            },
+            dismissButton = { TextButton(onClick = viewModel::cancelPasswordImport) { Text("Cancel") } }
+        )
     }
     restoreSummary?.let { summary ->
         AlertDialog(properties = wideDialogProperties, onDismissRequest = viewModel::cancelRestore,
@@ -536,12 +600,13 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
 }
 
 @Composable
-private fun VaultToolbar(title: String, search: String, onSearch: (String) -> Unit, showSearch: Boolean, onAdd: () -> Unit) {
+private fun VaultToolbar(title: String, search: String, onSearch: (String) -> Unit, showSearch: Boolean,
+    addDescription: String, onAdd: () -> Unit) {
     Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(title, Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            IconButton(onClick = onAdd, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Add, "Add") }
+            IconButton(onClick = onAdd, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Add, addDescription) }
         }
         if (showSearch) OutlinedTextField(
             search,
@@ -555,7 +620,8 @@ private fun VaultToolbar(title: String, search: String, onSearch: (String) -> Un
 }
 
 @Composable
-private fun Dashboard(entries: List<EntryWithDetails>, select: (String) -> Unit, quickAdd: () -> Unit, modifier: Modifier) {
+internal fun Dashboard(entries: List<EntryWithDetails>, select: (String) -> Unit,
+    openCategory: (EntryType) -> Unit, modifier: Modifier) {
     val cards = entries.filter { it.entry.type == EntryType.CARD }
     val passwords = entries.count { it.entry.type == EntryType.PASSWORD }
     val questions = entries.count { it.entry.type == EntryType.QUESTION }
@@ -563,20 +629,13 @@ private fun Dashboard(entries: List<EntryWithDetails>, select: (String) -> Unit,
     val favorites = entries.filter { it.entry.favorite }.sortedByDescending { it.entry.updatedAt }.take(5)
     val expiring = cards.filter { expiryState(it.entry.tertiaryValue) != ExpiryState.OK }.sortedBy { expirySortKey(it.entry.tertiaryValue) }
     val recent = entries.filter { it.entry.lastOpenedAt > 0 }.sortedByDescending { it.entry.lastOpenedAt }.take(5)
-    LazyColumn(modifier, contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StatCard("Cards", cards.size, Color(0xFF43E6A8), Modifier.weight(1f))
-                    StatCard("Passwords", passwords, Color(0xFF7DB7FF), Modifier.weight(1f))
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StatCard("Questions", questions, Color(0xFFF2C778), Modifier.weight(1f))
-                    StatCard("Notes", notes, Color(0xFFC8B2F2), Modifier.weight(1f))
-                }
-            }
-        }
-        item { Button(onClick = quickAdd, modifier = Modifier.fillMaxWidth().height(54.dp)) { Text("＋  Quick add") } }
+    LazyColumn(modifier, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item { VaultSummary(listOf(
+            SummaryItem("Cards", cards.size, EntryType.CARD, Color(0xFF43E6A8)),
+            SummaryItem("Passwords", passwords, EntryType.PASSWORD, Color(0xFF7DB7FF)),
+            SummaryItem("Questions", questions, EntryType.QUESTION, Color(0xFFF2C778)),
+            SummaryItem("Notes", notes, EntryType.NOTE, Color(0xFFC8B2F2))
+        ), openCategory) }
         if (favorites.isNotEmpty()) item { DashboardSection("Favorites", favorites, select) }
         if (expiring.isNotEmpty()) item { DashboardSection("Needs attention", expiring, select, showExpiry = true) }
         if (recent.isNotEmpty()) item { DashboardSection("Recently opened", recent, select) }
@@ -591,12 +650,70 @@ private fun Dashboard(entries: List<EntryWithDetails>, select: (String) -> Unit,
     }
 }
 
+private data class SummaryItem(val label: String, val count: Int, val type: EntryType, val accent: Color)
+
 @Composable
-private fun StatCard(label: String, count: Int, accent: Color, modifier: Modifier) {
-    Card(modifier, colors = CardDefaults.cardColors(containerColor = accent.copy(alpha = .13f))) {
-        Column(Modifier.padding(14.dp)) {
-            Text(count.toString(), style = MaterialTheme.typography.headlineSmall, color = if (MaterialTheme.colorScheme.background.luminance() > .5f) MaterialTheme.colorScheme.onSurface else accent, fontWeight = FontWeight.Bold)
-            Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+private fun VaultSummary(items: List<SummaryItem>, openCategory: (EntryType) -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth >= 420.dp) {
+                Row(Modifier.fillMaxWidth()) {
+                    items.forEach { item -> SummaryCell(item, openCategory, Modifier.weight(1f)) }
+                }
+            } else {
+                Column {
+                    items.chunked(2).forEach { row ->
+                        Row(Modifier.fillMaxWidth()) {
+                            row.forEach { item -> SummaryCell(item, openCategory, Modifier.weight(1f)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PasswordColumnPicker(
+    label: String,
+    selected: String?,
+    headers: List<String>,
+    required: Boolean,
+    onSelected: (String?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+            Text("$label: ${selected ?: "Do not import"}", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Icon(Icons.Outlined.ExpandMore, contentDescription = null)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (!required) DropdownMenuItem(text = { Text("Do not import") }, onClick = { onSelected(null); expanded = false })
+            headers.forEach { header ->
+                DropdownMenuItem(text = { Text(header, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = {
+                    onSelected(header)
+                    expanded = false
+                })
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryCell(item: SummaryItem, openCategory: (EntryType) -> Unit, modifier: Modifier) {
+    Row(
+        modifier
+            .heightIn(min = 58.dp)
+            .clickable { openCategory(item.type) }
+            .semantics { contentDescription = "${item.label}, ${item.count}" }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(Modifier.size(8.dp).background(item.accent, CircleShape))
+        Column {
+            Text(item.count.toString(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(item.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -605,26 +722,13 @@ private fun StatCard(label: String, count: Int, accent: Color, modifier: Modifie
 private fun DashboardSection(title: String, entries: List<EntryWithDetails>, select: (String) -> Unit, showExpiry: Boolean = false) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        entries.forEach { item ->
-            Card(
-                Modifier.fillMaxWidth().clickable { select(item.entry.id) },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(when (item.entry.type) {
-                        EntryType.CARD -> Icons.Outlined.CreditCard
-                        EntryType.PASSWORD -> Icons.Outlined.Key
-                        EntryType.QUESTION -> Icons.Outlined.QuestionAnswer
-                        EntryType.NOTE -> Icons.AutoMirrored.Outlined.Notes
-                        EntryType.AUTHENTICATOR -> Icons.Outlined.Timer
-                    }, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(item.entry.title, fontWeight = FontWeight.SemiBold)
-                        Text(item.entry.type.label().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .62f))
-                        item.groups.firstOrNull { it.folderType != null }?.let { folder -> Text(folder.name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, maxLines = 1) }
-                    }
-                    if (showExpiry) Text(expiryState(item.entry.tertiaryValue).label, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column {
+                entries.forEachIndexed { index, item ->
+                    if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = .18f))
+                    CompactEntryRow(item, includeType = true, showPreview = false,
+                        trailing = if (showExpiry) expiryState(item.entry.tertiaryValue).label else null,
+                        containerColor = Color.Transparent) { select(item.entry.id) }
                 }
             }
         }
@@ -830,7 +934,7 @@ private fun GlobalSearchResults(entries: List<EntryWithDetails>, folders: List<V
             }
         }
         if (entries.isNotEmpty()) item { SectionTitle("Entries") }
-        items(entries, key = { it.entry.id }) { entry -> EntryRow(entry, false) { openEntry(entry.entry.id) } }
+        items(entries, key = { it.entry.id }) { entry -> EntryRow(entry, false, includeType = true) { openEntry(entry.entry.id) } }
         if (folders.isEmpty() && entries.isEmpty()) item { Text("No matches") }
     }
 }
@@ -850,32 +954,32 @@ internal fun CategoryCollection(
         else -> entries.filter { item -> item.groups.none { it.folderType != null } }
     }
     val matchingFolders = if (search.isBlank()) folders else folders.filter { it.name.contains(search, true) || it.notes.contains(search, true) }
+    var folderMenuExpanded by remember(selectedFolder?.id) { mutableStateOf(false) }
     Column(modifier) {
         if (selectedFolder != null) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             BackIcon { onFolder(null) }
             Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary)
             Text(selectedFolder.name, Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            IconButton(onClick = { onEditFolder(selectedFolder) }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Settings, "Rename folder") }
-            TextButton(onClick = { onDeleteFolder(selectedFolder) }) { Text("Delete") }
+            Box {
+                IconButton(onClick = { folderMenuExpanded = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.MoreHoriz, "Folder actions") }
+                DropdownMenu(expanded = folderMenuExpanded, onDismissRequest = { folderMenuExpanded = false }) {
+                    DropdownMenuItem(text = { Text("Rename") }, onClick = {
+                        folderMenuExpanded = false
+                        onEditFolder(selectedFolder)
+                    })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = {
+                        folderMenuExpanded = false
+                        onDeleteFolder(selectedFolder)
+                    })
+                }
+            }
         }
         else if (tab != VaultTab.CARDS && (matchingFolders.isNotEmpty() || (search.isBlank() && tab.type != EntryType.AUTHENTICATOR))) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Folders", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
                 if (search.isBlank() && tab.type != EntryType.AUTHENTICATOR) IconButton(onClick = { onEditFolder(null) }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Add, "Add folder") }
             }
-            if (matchingFolders.isNotEmpty()) LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(matchingFolders.sortedBy { it.name.lowercase(Locale.ROOT) }, key = { it.id }) { folder ->
-                    val count = entries.count { item -> item.groups.any { it.id == folder.id } }
-                    Card(Modifier.width(156.dp).heightIn(min = 92.dp).clickable { onFolder(folder.id) },
-                        shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary)
-                            Text(folder.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-                            Text("$count ${if (count == 1) "item" else "items"}", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-            }
+            if (matchingFolders.isNotEmpty()) CompactFolders(matchingFolders, entries, onFolder)
         }
         if (tab != VaultTab.CARDS) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("Default", "Name", "Oldest").forEach { option -> FilterChip(sortBy == option, { onSort(option) }, { Text(option) }) }
@@ -892,6 +996,43 @@ internal fun CategoryCollection(
 }
 
 @Composable
+private fun CompactFolders(folders: List<VaultGroup>, entries: List<EntryWithDetails>, onFolder: (String?) -> Unit) {
+    val sorted = folders.sortedBy { it.name.lowercase(Locale.ROOT) }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth >= 600.dp) {
+            val itemWidth = (maxWidth - 42.dp) / 2
+            FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp), maxItemsInEachRow = 2) {
+                sorted.forEach { folder -> FolderRow(folder, entries, onFolder, Modifier.width(itemWidth)) }
+            }
+        } else {
+            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(sorted, key = { it.id }) { folder -> FolderRow(folder, entries, onFolder, Modifier.width(220.dp)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderRow(folder: VaultGroup, entries: List<EntryWithDetails>, onFolder: (String?) -> Unit, modifier: Modifier) {
+    val count = entries.count { item -> item.groups.any { it.id == folder.id } }
+    Surface(modifier.heightIn(min = 56.dp).clickable { onFolder(folder.id) }
+        .semantics { contentDescription = "Open folder ${folder.name}, $count ${if (count == 1) "item" else "items"}" },
+        shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = .13f), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
+            }
+            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                Text(folder.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text("$count ${if (count == 1) "item" else "items"}", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .62f))
+            }
+        }
+    }
+}
+
+@Composable
 private fun CompactCardAction(label: String, action: () -> Unit) {
     TextButton(onClick = action, colors = ButtonDefaults.textButtonColors(contentColor = LocalContentColor.current), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), modifier = Modifier.height(36.dp)) {
         Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -899,30 +1040,56 @@ private fun CompactCardAction(label: String, action: () -> Unit) {
 }
 
 @Composable
-private fun EntryRow(item: EntryWithDetails, selected: Boolean, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick).semantics { contentDescription = "Open ${item.entry.type.label()}: ${item.entry.title}" }, colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .16f) else MaterialTheme.colorScheme.surfaceVariant)) {
-        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = .13f)), contentAlignment = Alignment.Center) {
+private fun EntryRow(item: EntryWithDetails, selected: Boolean, includeType: Boolean = false, onClick: () -> Unit) =
+    CompactEntryRow(item, includeType = includeType, showPreview = true,
+        containerColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .16f) else MaterialTheme.colorScheme.surfaceVariant,
+        onClick = onClick)
+
+@Composable
+private fun CompactEntryRow(
+    item: EntryWithDetails,
+    includeType: Boolean,
+    showPreview: Boolean,
+    trailing: String? = null,
+    containerColor: Color,
+    onClick: () -> Unit
+) {
+    val folder = item.groups.firstOrNull { it.folderType != null }?.name
+    val metadata = buildList {
+        if (includeType) add(item.entry.type.label().replaceFirstChar { it.uppercase() })
+        if (showPreview) add(when (item.entry.type) {
+            EntryType.PASSWORD, EntryType.AUTHENTICATOR -> item.entry.primaryValue
+            EntryType.QUESTION -> item.entry.primaryValue
+            EntryType.NOTE -> item.entry.notes
+            EntryType.CARD -> maskCard(item.entry.primaryValue)
+        })
+        if (!folder.isNullOrBlank()) add(folder)
+    }.filter { it.isNotBlank() }.joinToString(" · ")
+    Surface(
+        Modifier.fillMaxWidth()
+            .heightIn(min = 64.dp)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "Open ${item.entry.type.label()}: ${item.entry.title}" },
+        color = containerColor
+    ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = .13f)), contentAlignment = Alignment.Center) {
                 Icon(when (item.entry.type) {
                     EntryType.CARD -> Icons.Outlined.CreditCard
                     EntryType.PASSWORD -> Icons.Outlined.Key
                     EntryType.QUESTION -> Icons.Outlined.QuestionAnswer
                     EntryType.NOTE -> Icons.AutoMirrored.Outlined.Notes
                     EntryType.AUTHENTICATOR -> Icons.Outlined.Timer
-                }, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                }, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
             }
-            Spacer(Modifier.width(14.dp))
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(item.entry.title, fontWeight = FontWeight.SemiBold)
-                Text(item.entry.type.label().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                Text(when (item.entry.type) { EntryType.PASSWORD, EntryType.AUTHENTICATOR -> item.entry.primaryValue; EntryType.QUESTION -> item.entry.primaryValue; EntryType.NOTE -> item.entry.notes; EntryType.CARD -> maskCard(item.entry.primaryValue) }, maxLines = 1, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .65f))
-                item.groups.firstOrNull { it.folderType != null }?.let { folder ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Folder, null, modifier = Modifier.size(15.dp))
-                        Text(folder.name, Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                    }
-                }
+                Text(item.entry.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (metadata.isNotBlank()) Text(metadata, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .65f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            if (trailing != null) Text(trailing, color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelMedium, maxLines = 1)
         }
     }
 }
@@ -1294,17 +1461,21 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                 }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item { OutlinedTextField(title, { title = it }, label = { Text(when (type) { EntryType.CARD -> "Card label"; EntryType.NOTE -> "Note title"; else -> "Service" }) }, modifier = Modifier.fillMaxWidth()) }
+            item {
+                OutlinedTextField(
+                    title,
+                    { title = it },
+                    label = { Text(when (type) { EntryType.CARD -> "Card label"; EntryType.NOTE -> "Note title"; else -> "Service" }) },
+                    trailingIcon = if (type == EntryType.CARD && nfcEnabled) {{
+                        IconButton(onClick = viewModel::requestNfcScan, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Outlined.Contactless, contentDescription = "Scan card with NFC", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }} else null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             when (type) {
                 EntryType.CARD -> {
-                    item {
-                        if (nfcEnabled) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                OutlinedButton(onClick = viewModel::requestNfcScan, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Scan card with NFC") }
-                                Text("Scanning replaces card fields. Review them before saving. CVV must be entered manually.", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("Card type", style = MaterialTheme.typography.labelLarge)
@@ -1791,7 +1962,7 @@ private fun NfcPreference(enabled: Boolean, supported: Boolean, change: (Boolean
             Switch(checked = enabled, onCheckedChange = change, enabled = supported,
                 modifier = Modifier.semantics { contentDescription = "Enable NFC card import" })
         }
-        Text(if (supported) "Optional. Off means no card scanning. When on, tap Scan card in the card form. No CVV or payments."
+        Text(if (supported) "Optional. Off means no card scanning. When on, tap the NFC icon in the Card label field. No CVV or payments."
             else "This phone has no NFC reader. You can still enter cards manually.",
             style = MaterialTheme.typography.bodySmall)
     }

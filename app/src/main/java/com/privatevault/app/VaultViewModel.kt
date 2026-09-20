@@ -6,6 +6,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.privatevault.app.backup.VaultBackupManager
 import com.privatevault.app.data.EntryWithDetails
+import com.privatevault.app.data.LoginImportAction
+import com.privatevault.app.data.LoginImportMatch
+import com.privatevault.app.data.LoginImportRequest
 import com.privatevault.app.data.VaultDatabase
 import com.privatevault.app.data.VaultEntry
 import com.privatevault.app.data.VaultGroup
@@ -13,6 +16,8 @@ import com.privatevault.app.data.VaultPhoto
 import com.privatevault.app.security.EncryptedPhotoStore
 import com.privatevault.app.security.BiometricGate
 import com.privatevault.app.security.VaultKeyManager
+import com.privatevault.app.security.PasswordColumnMapping
+import com.privatevault.app.security.PasswordColumnMappingRequired
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,9 +34,16 @@ sealed interface VaultStatus {
     data object Unlocked : VaultStatus
 }
 
-enum class PasswordImportStatus { NEW, ALREADY_SAVED, PASSWORD_DIFFERS }
+enum class PasswordImportStatus { NEW, ALREADY_SAVED, PASSWORD_DIFFERS, AMBIGUOUS }
 
-data class PasswordImportItem(val label: String, val status: PasswordImportStatus)
+enum class PasswordImportDecision { KEEP_SAVED, USE_IMPORTED }
+
+data class PasswordImportItem(
+    val id: String,
+    val label: String,
+    val status: PasswordImportStatus,
+    val decision: PasswordImportDecision? = null
+)
 
 data class PasswordImportPreview(
     val items: List<PasswordImportItem>,
@@ -39,7 +51,13 @@ data class PasswordImportPreview(
     val duplicateRows: Int,
     val newCount: Int,
     val alreadySavedCount: Int,
-    val conflictCount: Int
+    val conflictCount: Int,
+    val ambiguousCount: Int
+)
+
+internal data class PasswordImportMappingRequest(
+    val headers: List<String>,
+    val suggested: PasswordColumnMapping
 )
 
 class VaultViewModel(application: Application) : AndroidViewModel(application) {
@@ -49,49 +67,101 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private var preparedRestore: com.privatevault.app.backup.PreparedRestore? = null
     private val _restoreSummary = MutableStateFlow<String?>(null)
     val restoreSummary = _restoreSummary.asStateFlow()
-    private var pendingLogins = emptyList<VaultEntry>()
+    private var pendingLoginRequests = emptyList<LoginImportRequest>()
+    private var pendingPasswordImportUri: Uri? = null
     private val _importPreview = MutableStateFlow<PasswordImportPreview?>(null)
     val importPreview = _importPreview.asStateFlow()
+    private val _importMapping = MutableStateFlow<PasswordImportMappingRequest?>(null)
+    internal val importMapping = _importMapping.asStateFlow()
 
-    fun cancelPasswordImport() { pendingLogins = emptyList(); _importPreview.value = null }
+    fun cancelPasswordImport() {
+        pendingLoginRequests = emptyList()
+        pendingPasswordImportUri = null
+        _importPreview.value = null
+        _importMapping.value = null
+    }
 
-    fun previewPasswordImport(uri: Uri) = securedLaunch {
+    internal fun previewPasswordImport(uri: Uri, mapping: PasswordColumnMapping? = null) = securedLaunch {
         cancelPasswordImport()
         val activeKey = requireNotNull(sessionKey)
-        val parsed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-            java.io.InputStreamReader(requireNotNull(getApplication<Application>().contentResolver.openInputStream(uri)), decoder).buffered().use {
-                com.privatevault.app.security.readBrowserPasswords(it)
+        val parsed = try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                java.io.InputStreamReader(requireNotNull(getApplication<Application>().contentResolver.openInputStream(uri)), decoder).buffered().use {
+                    com.privatevault.app.security.readBrowserPasswords(it, mapping)
+                }
             }
+        } catch (required: PasswordColumnMappingRequired) {
+            if (sessionKey === activeKey && _status.value is VaultStatus.Unlocked) {
+                pendingPasswordImportUri = uri
+                _importMapping.value = PasswordImportMappingRequest(required.headers, required.suggested)
+            }
+            return@securedLaunch
         }
         val unique = com.privatevault.app.security.deduplicateImportedLogins(parsed)
         if (sessionKey !== activeKey || _status.value !is VaultStatus.Unlocked) return@securedLaunch
         val existing = dao().loginAndCodeEntries().filter { it.type == com.privatevault.app.data.EntryType.PASSWORD }
         if (sessionKey === activeKey && _status.value is VaultStatus.Unlocked) {
-            val items = unique.map { entry ->
-                val saved = existing.firstOrNull { com.privatevault.app.security.sameImportedAccount(it, entry) }
-                val status = when {
-                    saved == null -> PasswordImportStatus.NEW
-                    com.privatevault.app.security.sameImportedLogin(saved, entry) -> PasswordImportStatus.ALREADY_SAVED
-                    else -> PasswordImportStatus.PASSWORD_DIFFERS
+            val requests = unique.map { entry ->
+                val matches = existing.filter { com.privatevault.app.security.sameImportedAccount(it, entry) }
+                val action = when {
+                    matches.isEmpty() -> LoginImportAction.ADD
+                    matches.size > 1 -> LoginImportAction.SKIP_AMBIGUOUS
+                    com.privatevault.app.security.sameImportedLogin(matches.single(), entry) -> LoginImportAction.SKIP_EXACT
+                    else -> LoginImportAction.KEEP_SAVED
                 }
-                PasswordImportItem("${entry.title} · ${entry.primaryValue}", status)
+                LoginImportRequest(entry, action, matches.map(LoginImportMatch::from))
             }
-            pendingLogins = unique
+            val items = requests.map { request ->
+                val status = when (request.action) {
+                    LoginImportAction.ADD -> PasswordImportStatus.NEW
+                    LoginImportAction.SKIP_EXACT -> PasswordImportStatus.ALREADY_SAVED
+                    LoginImportAction.KEEP_SAVED, LoginImportAction.USE_IMPORTED -> PasswordImportStatus.PASSWORD_DIFFERS
+                    LoginImportAction.SKIP_AMBIGUOUS -> PasswordImportStatus.AMBIGUOUS
+                }
+                PasswordImportItem(request.incoming.id, "${request.incoming.title} · ${request.incoming.primaryValue}", status,
+                    if (status == PasswordImportStatus.PASSWORD_DIFFERS) PasswordImportDecision.KEEP_SAVED else null)
+            }
+            pendingLoginRequests = requests
             _importPreview.value = PasswordImportPreview(items, parsed.size, parsed.size - unique.size,
                 items.count { it.status == PasswordImportStatus.NEW },
                 items.count { it.status == PasswordImportStatus.ALREADY_SAVED },
-                items.count { it.status == PasswordImportStatus.PASSWORD_DIFFERS })
+                items.count { it.status == PasswordImportStatus.PASSWORD_DIFFERS },
+                items.count { it.status == PasswordImportStatus.AMBIGUOUS })
         }
     }
 
-    fun confirmPasswordImport(overwritePasswords: Boolean) = securedLaunch {
-        val incoming = pendingLogins
+    internal fun retryPasswordImport(mapping: PasswordColumnMapping) {
+        val uri = pendingPasswordImportUri ?: return
+        previewPasswordImport(uri, mapping)
+    }
+
+    fun setPasswordImportDecision(id: String, decision: PasswordImportDecision) {
+        val preview = _importPreview.value ?: return
+        if (preview.items.none { it.id == id && it.status == PasswordImportStatus.PASSWORD_DIFFERS }) return
+        _importPreview.value = preview.copy(items = preview.items.map { if (it.id == id) it.copy(decision = decision) else it })
+        pendingLoginRequests = pendingLoginRequests.map { request ->
+            if (request.incoming.id != id) request else request.copy(action = when (decision) {
+                PasswordImportDecision.KEEP_SAVED -> LoginImportAction.KEEP_SAVED
+                PasswordImportDecision.USE_IMPORTED -> LoginImportAction.USE_IMPORTED
+            })
+        }
+    }
+
+    fun setAllPasswordImportDecisions(decision: PasswordImportDecision) {
+        _importPreview.value?.items?.filter { it.status == PasswordImportStatus.PASSWORD_DIFFERS }
+            ?.forEach { setPasswordImportDecision(it.id, decision) }
+    }
+
+    fun confirmPasswordImport() = securedLaunch {
+        val requests = pendingLoginRequests
         val preview = _importPreview.value
-        cancelPasswordImport()
-        if (incoming.isNotEmpty()) {
-            val result = dao().importLogins(incoming, overwritePasswords)
+        if (requests.isNotEmpty()) {
+            require(preview?.items?.filter { it.status == PasswordImportStatus.PASSWORD_DIFFERS }
+                ?.all { it.decision != null } == true) { "Choose how to handle every changed password." }
+            val result = dao().importLogins(requests)
+            cancelPasswordImport()
             refresh()
             val duplicateRows = preview?.duplicateRows ?: 0
             _message.value = "Added ${result.added} logins and updated ${result.updated}. " +

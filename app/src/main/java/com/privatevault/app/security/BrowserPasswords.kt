@@ -12,6 +12,19 @@ import java.net.IDN
 import java.net.URI
 import java.util.Locale
 
+internal data class PasswordColumnMapping(
+    val title: String? = null,
+    val website: String? = null,
+    val username: String? = null,
+    val password: String? = null,
+    val notes: String? = null
+)
+
+internal class PasswordColumnMappingRequired(
+    val headers: List<String>,
+    val suggested: PasswordColumnMapping
+) : IllegalArgumentException("Choose the website, username, and password columns.")
+
 /** Exact HTTPS origin only. No suffix, subdomain, title, or public-suffix guessing. */
 internal fun httpsOrigin(value: String): String? = runCatching {
     if (value.any { it.isWhitespace() || it.isISOControl() } || '\\' in value) return null
@@ -24,7 +37,7 @@ internal fun httpsOrigin(value: String): String? = runCatching {
     "https://$ascii" + if (uri.port == -1 || uri.port == 443) "" else ":${uri.port}"
 }.getOrNull()
 
-internal fun readBrowserPasswords(input: Reader): List<VaultEntry> {
+internal fun readBrowserPasswords(input: Reader, mapping: PasswordColumnMapping? = null): List<VaultEntry> {
     val limited = object : FilterReader(input) {
         var count = 0
         override fun read(buffer: CharArray, off: Int, len: Int): Int = super.read(buffer, off, len).also {
@@ -40,27 +53,44 @@ internal fun readBrowserPasswords(input: Reader): List<VaultEntry> {
         while (first != -1 && first.toChar().isWhitespace()) first = reader.read()
         require(first != -1)
         reader.unread(first)
-        return if (first.toChar() == '{') readBitwardenJson(reader) else readPasswordCsv(reader)
+        return if (first.toChar() == '{') readBitwardenJson(reader) else readPasswordCsv(reader, mapping)
+    } catch (error: PasswordColumnMappingRequired) {
+        throw error
     } catch (_: Exception) {
         // Parser exceptions can contain a fragment of a secret-bearing export.
         throw IllegalArgumentException("Could not read password export. Use a supported UTF-8 CSV or an unencrypted Bitwarden JSON export with up to 5,000 logins and 4 million characters.")
     }
 }
 
-private fun readPasswordCsv(reader: Reader): List<VaultEntry> {
+private fun readPasswordCsv(reader: Reader, mapping: PasswordColumnMapping?): List<VaultEntry> {
     val format = CSVFormat.RFC4180.builder().setHeader().setSkipHeaderRecord(true)
         .setDuplicateHeaderMode(DuplicateHeaderMode.DISALLOW).setIgnoreEmptyLines(true).get()
     return format.parse(reader).use { csv ->
-        val normalizedHeaders = csv.headerNames.map { it.trim().lowercase(Locale.ROOT) }
+        val normalizedHeaders = csv.headerNames.map(::normalizePasswordHeader)
         require(normalizedHeaders.distinct().size == normalizedHeaders.size)
-        val headers = csv.headerNames.associateBy { it.trim().lowercase(Locale.ROOT) }
-        fun header(vararg names: String): String? = names.firstNotNullOfOrNull(headers::get)
+        val headers = csv.headerNames.associateBy(::normalizePasswordHeader)
+        fun header(vararg names: String): String? = names.firstNotNullOfOrNull { headers[normalizePasswordHeader(it)] }
+        fun selected(value: String?): String? = value?.takeIf(csv.headerNames::contains)
         val bitwarden = header("login_password") != null && header("login_username") != null
-        val passwordHeader = requireNotNull(header("password", "login_password"))
-        val usernameHeader = requireNotNull(header("username", "user name", "login_username", "login name", "login", "email"))
-        val urlHeader = requireNotNull(header("url", "website", "web site", "login_uri", "login_url", "hostname"))
-        val titleHeader = header("name", "title", "account")
-        val notesHeader = header("note", "notes", "extra", "comments")
+        val suggested = PasswordColumnMapping(
+            title = header("name", "title", "account", "account name"),
+            website = header("url", "website", "web site", "login_uri", "login_url", "hostname"),
+            username = header("username", "user name", "login_username", "login name", "login", "email"),
+            password = header("password", "login_password"),
+            notes = header("note", "notes", "extra", "extra notes", "comments")
+        )
+        val chosen = mapping?.let { PasswordColumnMapping(selected(it.title), selected(it.website), selected(it.username), selected(it.password), selected(it.notes)) }
+            ?: suggested
+        val selectedHeaders = listOfNotNull(chosen.title, chosen.website, chosen.username, chosen.password, chosen.notes)
+        if (chosen.website == null || chosen.username == null || chosen.password == null ||
+            selectedHeaders.distinct().size != selectedHeaders.size) {
+            throw PasswordColumnMappingRequired(csv.headerNames.toList(), if (mapping == null) suggested else chosen)
+        }
+        val passwordHeader = chosen.password
+        val usernameHeader = chosen.username
+        val urlHeader = chosen.website
+        val titleHeader = chosen.title
+        val notesHeader = chosen.notes
         val typeHeader = if (bitwarden) header("type") else null
         val entries = mutableListOf<VaultEntry>()
         for (row in csv) {
@@ -79,6 +109,11 @@ private fun readPasswordCsv(reader: Reader): List<VaultEntry> {
         entries
     }
 }
+
+internal fun normalizePasswordHeader(value: String): String = value
+    .trim()
+    .lowercase(Locale.ROOT)
+    .filterNot { it.isWhitespace() || it == '_' || it == '-' }
 
 private fun readBitwardenJson(reader: Reader): List<VaultEntry> {
     val root = JsonParser.parseReader(reader).asJsonObject

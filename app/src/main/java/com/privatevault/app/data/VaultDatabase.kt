@@ -115,6 +115,26 @@ data class LoginImportResult(
     val skippedConflicts: Int
 )
 
+enum class LoginImportAction { ADD, SKIP_EXACT, KEEP_SAVED, USE_IMPORTED, SKIP_AMBIGUOUS }
+
+data class LoginImportMatch(val id: String, val updatedAt: Long, val passwordFingerprint: String) {
+    companion object {
+        fun from(entry: VaultEntry): LoginImportMatch {
+            require(entry.type == EntryType.PASSWORD)
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(entry.secondaryValue.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+            return LoginImportMatch(entry.id, entry.updatedAt, digest)
+        }
+    }
+}
+
+data class LoginImportRequest(
+    val incoming: VaultEntry,
+    val action: LoginImportAction,
+    val expectedMatches: List<LoginImportMatch>
+)
+
 @Dao
 interface VaultDao {
     @Query("SELECT * FROM vault_settings WHERE id = 1") suspend fun settings(): VaultSettings?
@@ -292,29 +312,56 @@ interface VaultDao {
     }
 
     @Transaction
-    suspend fun importLogins(incoming: List<VaultEntry>, overwritePasswords: Boolean = false): LoginImportResult {
-        require(incoming.all { it.type == EntryType.PASSWORD })
-        val unique = com.privatevault.app.security.deduplicateImportedLogins(incoming)
+    suspend fun importLogins(requests: List<LoginImportRequest>): LoginImportResult {
+        require(requests.all { it.incoming.type == EntryType.PASSWORD })
+        require(requests.map { it.incoming.id }.distinct().size == requests.size)
+        require(com.privatevault.app.security.deduplicateImportedLogins(requests.map { it.incoming }).size == requests.size)
         val known = loginAndCodeEntries().filter { it.type == EntryType.PASSWORD }.toMutableList()
         var added = 0
         var updated = 0
         var skippedExact = 0
         var skippedConflicts = 0
-        for (entry in unique) {
-            val index = known.indexOfFirst { com.privatevault.app.security.sameImportedAccount(it, entry) }
-            if (index < 0) {
-                insertEntry(entry)
-                known.add(entry)
-                added++
-            } else if (com.privatevault.app.security.sameImportedLogin(known[index], entry)) {
-                skippedExact++
-            } else if (overwritePasswords) {
-                val replacement = known[index].copy(secondaryValue = entry.secondaryValue, updatedAt = System.currentTimeMillis())
-                updateEntry(replacement)
-                known[index] = replacement
-                updated++
-            } else {
-                skippedConflicts++
+        for (request in requests) {
+            val entry = request.incoming
+            val matches = known.filter { com.privatevault.app.security.sameImportedAccount(it, entry) }
+            val currentSnapshot = matches.map(LoginImportMatch::from).sortedBy { it.id }
+            require(currentSnapshot == request.expectedMatches.sortedBy { it.id }) {
+                "Saved passwords changed after review. Review the import again."
+            }
+            when (request.action) {
+                LoginImportAction.ADD -> {
+                    require(matches.isEmpty()) { "Saved passwords changed after review. Review the import again." }
+                    require(this.entry(entry.id) == null) { "Saved passwords changed after review. Review the import again." }
+                    insertEntry(entry)
+                    known.add(entry)
+                    added++
+                }
+                LoginImportAction.SKIP_EXACT -> {
+                    require(matches.any { com.privatevault.app.security.sameImportedLogin(it, entry) }) {
+                        "Saved passwords changed after review. Review the import again."
+                    }
+                    skippedExact++
+                }
+                LoginImportAction.KEEP_SAVED -> {
+                    require(matches.size == 1 && !com.privatevault.app.security.sameImportedLogin(matches.single(), entry)) {
+                        "Saved passwords changed after review. Review the import again."
+                    }
+                    skippedConflicts++
+                }
+                LoginImportAction.USE_IMPORTED -> {
+                    require(matches.size == 1 && !com.privatevault.app.security.sameImportedLogin(matches.single(), entry)) {
+                        "Saved passwords changed after review. Review the import again."
+                    }
+                    val index = known.indexOfFirst { it.id == matches.single().id }
+                    val replacement = known[index].copy(secondaryValue = entry.secondaryValue, updatedAt = System.currentTimeMillis())
+                    updateEntry(replacement)
+                    known[index] = replacement
+                    updated++
+                }
+                LoginImportAction.SKIP_AMBIGUOUS -> {
+                    require(matches.size > 1) { "Saved passwords changed after review. Review the import again." }
+                    skippedConflicts++
+                }
             }
         }
         return LoginImportResult(added, updated, skippedExact, skippedConflicts)

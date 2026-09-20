@@ -172,18 +172,8 @@ class AuthenticatorBackupTest {
             target.dao().deleteEntryAndLinks(restoredCode)
             assertEquals("", target.dao().entry(login.id)!!.entry.linkedAuthenticatorId)
             val imported = login.copy(id = UUID.randomUUID().toString(), title = "Imported", linkedAuthenticatorId = "", tertiaryValue = "https://example.com/login")
-            assertEquals(1, target.dao().importLogins(listOf(imported, imported.copy(id = UUID.randomUUID().toString()))).added)
+            target.dao().insertEntry(imported)
             val savedImported = target.dao().loginAndCodeEntries().single { sameImportedAccount(it, imported) }
-            assertEquals(1, target.dao().importLogins(listOf(imported.copy(id = UUID.randomUUID().toString()))).skippedExact)
-            val conflict = imported.copy(id = UUID.randomUUID().toString(), secondaryValue = "Different password")
-            assertEquals(1, target.dao().importLogins(listOf(conflict)).skippedConflicts)
-            assertEquals(imported.secondaryValue, target.dao().entry(savedImported.id)!!.entry.secondaryValue)
-            assertEquals(1, target.dao().importLogins(listOf(conflict), overwritePasswords = true).updated)
-            assertEquals("Different password", target.dao().entry(savedImported.id)!!.entry.secondaryValue)
-            assertEquals(imported.notes, target.dao().entry(savedImported.id)!!.entry.notes)
-            val beforeImportFailure = target.dao().backupSnapshot()
-            assertTrue(runCatching { target.dao().importLogins(listOf(imported.copy(id = UUID.randomUUID().toString(), title = "Rollback"), imported.copy(type = EntryType.CARD))) }.isFailure)
-            assertEquals(beforeImportFailure, target.dao().backupSnapshot())
             val browserLogin = target.dao().entry(savedImported.id)!!.entry
             target.dao().saveBrowserLogin("https://example.com", browserLogin.primaryValue, "Updated from browser", browserLogin)
             val updated = target.dao().entry(savedImported.id)!!.entry

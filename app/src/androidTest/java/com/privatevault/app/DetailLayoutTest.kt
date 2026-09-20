@@ -17,10 +17,56 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.privatevault.app.data.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 
 class DetailLayoutTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun dashboardSummaryUsesCompactTargetsAndOpensCategories() {
+        val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
+        val opened = mutableStateOf<EntryType?>(null)
+        val entries = listOf(
+            EntryWithDetails(VaultEntry(type = EntryType.CARD, title = "Card"), emptyList(), emptyList()),
+            EntryWithDetails(VaultEntry(type = EntryType.PASSWORD, title = "Login"), emptyList(), emptyList())
+        )
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.requiredSize(320.dp, 420.dp)) {
+                    Dashboard(entries, {}, { opened.value = it }, Modifier.fillMaxSize())
+                }
+            }
+        }
+        val cards = compose.onNodeWithContentDescription("Cards, 1").assertIsDisplayed()
+        val bounds = cards.fetchSemanticsNode().boundsInRoot
+        assertTrue("Summary target must remain compact and touchable: $bounds", bounds.height in (48f * density)..(80f * density))
+        cards.performClick()
+        compose.runOnIdle { assertEquals(EntryType.CARD, opened.value) }
+        compose.onNodeWithText("Quick add").assertDoesNotExist()
+    }
+
+    @Test fun folderAndEntryRowsAreCompactAndNeverShowPasswords() {
+        val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
+        val folder = VaultGroup(name = "Work", folderType = EntryType.PASSWORD)
+        val login = EntryWithDetails(VaultEntry(type = EntryType.PASSWORD, title = "Mail", primaryValue = "user@example.com",
+            secondaryValue = "supersecret"), emptyList(), emptyList())
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.requiredSize(320.dp, 500.dp)) {
+                    CategoryCollection(VaultTab.PASSWORDS, listOf(login), listOf(folder), null, "", "Default",
+                        {}, {}, {}, {}, null, {}, { _, _ -> }, { it() }, Modifier.fillMaxSize())
+                }
+            }
+        }
+        val folderBounds = compose.onNodeWithContentDescription("Open folder Work, 0 items").assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("Folder row must remain compact and touchable: $folderBounds", folderBounds.height in (48f * density)..(72f * density))
+        val entryBounds = compose.onNodeWithContentDescription("Open password: Mail").assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("Entry row must remain compact and touchable: $entryBounds", entryBounds.height in (48f * density)..(80f * density))
+        compose.onNodeWithText("supersecret").assertDoesNotExist()
+        compose.onNodeWithText("user@example.com").assertIsDisplayed()
+    }
 
     @Test fun cardsShowAllEntriesWithoutFolderControls() {
         val folder = VaultGroup(name = "Travel cards", folderType = EntryType.CARD)

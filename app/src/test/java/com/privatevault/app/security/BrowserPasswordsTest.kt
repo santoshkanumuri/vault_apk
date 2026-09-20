@@ -39,6 +39,54 @@ class BrowserPasswordsTest {
         assertEquals("https://mail.example.com", entry.tertiaryValue)
         assertEquals("user@example.com", entry.primaryValue)
     }
+    @Test fun normalizesHeaderSeparatorsWithoutGuessingRowContents() {
+        val csv = "Account Name,Login-URL,User_Name,Pass Word,Extra Notes\n" +
+            "Mail,https://mail.example.com,user@example.com,secret,personal"
+        val entry = readBrowserPasswords(csv.reader()).single()
+        assertEquals("Mail", entry.title)
+        assertEquals("https://mail.example.com", entry.tertiaryValue)
+        assertEquals("user@example.com", entry.primaryValue)
+        assertEquals("secret", entry.secondaryValue)
+        assertEquals("personal", entry.notes)
+    }
+
+    @Test fun rejectsHeadersThatCollideAfterNormalization() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            readBrowserPasswords("url,user_name,user-name,password\nhttps://example.com,first,second,secret".reader())
+        }
+        assertFalse(error.message!!.contains("secret"))
+    }
+    @Test fun requestsHeaderOnlyMappingForUnknownColumnsAndUsesExplicitSelection() {
+        val csv = "label,site address,identity,credential,memo\nMail,https://mail.example.com,user@example.com,secret,personal"
+        val required = assertThrows(PasswordColumnMappingRequired::class.java) {
+            readBrowserPasswords(csv.reader())
+        }
+        assertEquals(listOf("label", "site address", "identity", "credential", "memo"), required.headers)
+        assertFalse(required.message!!.contains("secret"))
+
+        val entry = readBrowserPasswords(csv.reader(), PasswordColumnMapping(
+            title = "label", website = "site address", username = "identity",
+            password = "credential", notes = "memo"
+        )).single()
+        assertEquals("Mail", entry.title)
+        assertEquals("https://mail.example.com", entry.tertiaryValue)
+        assertEquals("user@example.com", entry.primaryValue)
+        assertEquals("secret", entry.secondaryValue)
+        assertEquals("personal", entry.notes)
+    }
+
+    @Test fun rejectsDuplicateOrMissingExplicitColumnSelectionsWithoutReadingSecrets() {
+        val csv = "site,identity,credential\nhttps://example.com,user,secret"
+        listOf(
+            PasswordColumnMapping(website = "site", username = "identity", password = "identity"),
+            PasswordColumnMapping(website = "site", username = "identity", password = "missing")
+        ).forEach { mapping ->
+            val error = assertThrows(PasswordColumnMappingRequired::class.java) {
+                readBrowserPasswords(csv.reader(), mapping)
+            }
+            assertFalse(error.message!!.contains("secret"))
+        }
+    }
     @Test fun skipsPasswordlessBrowserRowsInsteadOfRejectingTheFile() {
         val csv = "name,url,username,password,note\n" +
             "Passkey only,https://passkey.example,user,,\n" +

@@ -11,6 +11,7 @@ signing.properties
 *.log
 *.apk
 !downloads/private-vault-*.apk
+!downloads/nuvori-*.apk
 *.aab
 *.pvault
 *.vaultphoto

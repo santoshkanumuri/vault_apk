@@ -36,6 +36,20 @@ sealed interface VaultStatus {
 
 enum class PasswordImportStatus { NEW, ALREADY_SAVED, PASSWORD_DIFFERS, AMBIGUOUS }
 
+enum class PasswordImportFilter(val label: String) {
+    ALL("All"),
+    NEW("New"),
+    ALREADY_SAVED("Already saved"),
+    NEEDS_DECISION("Needs decision")
+}
+
+internal fun PasswordImportFilter.matches(status: PasswordImportStatus): Boolean = when (this) {
+    PasswordImportFilter.ALL -> true
+    PasswordImportFilter.NEW -> status == PasswordImportStatus.NEW
+    PasswordImportFilter.ALREADY_SAVED -> status == PasswordImportStatus.ALREADY_SAVED
+    PasswordImportFilter.NEEDS_DECISION -> status == PasswordImportStatus.PASSWORD_DIFFERS || status == PasswordImportStatus.AMBIGUOUS
+}
+
 enum class PasswordImportDecision { KEEP_SAVED, USE_IMPORTED }
 
 data class PasswordImportItem(

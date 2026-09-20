@@ -54,7 +54,7 @@ class VaultCredentialService : CredentialProviderService() {
             val rpId = JSONObject(request.requestJson).getJSONObject("rp").getString("id")
             val origin = passkeyOrigin(this, requireNotNull(request.callingAppInfo), rpId)
             PasskeyCrypto.request(request.requestJson, origin, true)
-            callback.onResult(BeginCreateCredentialResponse(listOf(CreateEntry("Private Vault", action(true)))))
+            callback.onResult(BeginCreateCredentialResponse(listOf(CreateEntry("Nuvori", action(true)))))
         } catch (_: Exception) { callback.onError(CreateCredentialUnknownException("This passkey request is not supported.")) }
     }
     override fun onBeginGetCredentialRequest(request: BeginGetCredentialRequest, cancellationSignal: CancellationSignal,
@@ -68,7 +68,7 @@ class VaultCredentialService : CredentialProviderService() {
                     val origin = passkeyOrigin(this, requireNotNull(request.callingAppInfo), rpId)
                     PasskeyCrypto.request(option.requestJson, origin, false)
                     // No account names or credential IDs leave the encrypted vault before authentication.
-                    PublicKeyCredentialEntry(this, "Unlock Private Vault", action(false), option)
+                    PublicKeyCredentialEntry(this, "Unlock Nuvori", action(false), option)
                 }.getOrNull()
             }
             callback.onResult(BeginGetCredentialResponse(entries))

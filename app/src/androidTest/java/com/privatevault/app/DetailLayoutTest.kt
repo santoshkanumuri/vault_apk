@@ -61,6 +61,7 @@ class DetailLayoutTest {
         val folderBounds = compose.onNodeWithContentDescription("Open folder Work, 0 items").assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         assertTrue("Folder row must remain compact and touchable: $folderBounds", folderBounds.height in (48f * density)..(72f * density))
+        assertTrue("Folder row must leave room for another folder: $folderBounds", folderBounds.width <= 184f * density)
         val entryBounds = compose.onNodeWithContentDescription("Open password: Mail").assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         assertTrue("Entry row must remain compact and touchable: $entryBounds", entryBounds.height in (48f * density)..(80f * density))

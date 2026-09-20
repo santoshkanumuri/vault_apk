@@ -85,7 +85,7 @@ internal fun MoreScreen(groupCount: Int, entries: List<EntryWithDetails>, groups
         item { MoreItem("Security questions", "${entries.count { it.entry.type == EntryType.QUESTION }} saved questions", Icons.Outlined.QuestionAnswer, questions) }
         item { MoreItem("Notes", "${entries.count { it.entry.type == EntryType.NOTE }} private notes", Icons.Outlined.Notes, notes) }
         item { HorizontalDivider() }
-        item { Text("Manage Private Vault", style = MaterialTheme.typography.titleMedium) }
+        item { Text("Manage Nuvori", style = MaterialTheme.typography.titleMedium) }
         item { MoreItem("Settings", "Security, autofill, backup, browser import and appearance", Icons.Outlined.Settings, settings) }
     }
 }

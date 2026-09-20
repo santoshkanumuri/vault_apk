@@ -1,16 +1,39 @@
-# Private Vault
+# Nuvori
+
+**Yours, by design.**
 
 An offline Android app for cards, passwords, authenticator codes, passkeys, security questions, notes, and photos.
 
 No account, server, ads, or cloud sync. Your vault stays on your phone.
 
-<img src="logo.jpg" alt="Private Vault logo" width="160">
+<p align="center">
+  <img src="docs/assets/nuvori-logo-transparent.png" alt="Nuvori logo" width="150">
+</p>
+
+## Product tour
+
+<p align="center">
+  <img src="docs/assets/screenshots/01-nuvori-onboarding-dark.png" alt="Nuvori onboarding in dark mode" width="30%">
+  <img src="docs/assets/screenshots/02-nuvori-home-dark.png" alt="Nuvori compact home dashboard in dark mode" width="30%">
+  <img src="docs/assets/screenshots/03-nuvori-passwords-light.png" alt="Nuvori password folders in light mode" width="30%">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/04-nuvori-cards-dark.png" alt="Nuvori card wallet in dark mode" width="23%">
+  <img src="docs/assets/screenshots/05-nuvori-authenticator-dark.png" alt="Nuvori authenticator codes in dark mode" width="23%">
+  <img src="docs/assets/screenshots/06-nuvori-notes-light.png" alt="Nuvori notes in light mode" width="23%">
+  <img src="docs/assets/screenshots/07-nuvori-more-light.png" alt="Nuvori More and settings entry points in light mode" width="23%">
+</p>
+
+The screenshots contain synthetic demonstration data only.
 
 ## Download
 
-**[Download Private Vault v1.9.6](downloads/private-vault-v1.9.6.apk?raw=true)**
+**[Download the current published build, Private Vault v1.9.7](downloads/private-vault-v1.9.7.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.6.md) · [Privacy policy](docs/privacy-policy.html)
+The published APK predates the Nuvori rebrand.
+
+Requires **Android 10 or newer**. [SHA-256 checksum](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.7.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 
@@ -24,7 +47,7 @@ For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Pa
 - **Cards:** credit/debit cards, number, cardholder, expiry, CVV, notes, and photos. Choose from 34 colors and browse all cards in a stacked or expanded view. Copy individual fields; revealing or copying a CVV requires biometric authentication.
 - **Passwords and security questions:** save login details and answers, with notes and photos.
 - **Linked logins:** generate a 24-character password locally and link an existing authenticator to a login. View its code alongside the login without duplicating the setup key. Removing the login keeps the authenticator.
-- **Optional autofill:** authorize native apps in a login's editor or save its exact HTTPS website URL, then choose Private Vault as your Autofill provider. Unlock and select an account to fill a username/password or a linked code on a separate code screen. Native apps require the saved package and signing identity. Website filling is restricted to verified Chrome and Brave release certificates and an exact HTTPS origin match. Browser support depends on Android autofill being enabled in the browser. The unlock suggestion shows the app icon and name, including inside compatible keyboards; short screens use a regular Android suggestion. Native-app and browser Save/Update prompts require a separate vault unlock and confirmation. Choosing this provider replaces your current password autofill provider; the code tile remains available if you prefer to keep Bitwarden.
+- **Optional autofill:** authorize native apps in a login's editor or save its exact HTTPS website URL, then choose Nuvori as your Autofill provider. Unlock and select an account to fill a username/password or a linked code on a separate code screen. Native apps require the saved package and signing identity. Website filling is restricted to verified Chrome and Brave release certificates and an exact HTTPS origin match. Browser support depends on Android autofill being enabled in the browser. The unlock suggestion shows the app icon and name, including inside compatible keyboards; short screens use a regular Android suggestion. Native-app and browser Save/Update prompts require a separate vault unlock and confirmation. Choosing this provider replaces your current password autofill provider; the code tile remains available if you prefer to keep Bitwarden.
 - **Password import:** import common browser and password-manager CSV files, or an unencrypted Bitwarden JSON export, under Settings > Backup and import. Supported CSV columns cover Chrome, Brave, Edge, Firefox, Safari, 1Password, LastPass, Dashlane, and Bitwarden exports. Repeated rows are consolidated, exact matches are skipped, and changed passwords are shown for review. Choose whether to keep saved passwords or replace only their password fields; names, notes, folders, photos, and linked codes remain intact. The original export contains readable passwords; delete it after verifying the import.
 - **Authenticator:** generate TOTP codes offline. Scan a setup QR, import a QR image, or enter a setup key. Supports SHA1/SHA256/SHA512, 6–8 digits, and configurable intervals. The phone's clock must be correct. SMS, push approvals, HOTP, and Google Authenticator transfer QR codes are not supported.
 - **Groups:** keep a bank's cards, logins, questions, notes, and codes together. An entry can belong to several groups. Deleting a group keeps its entries.
@@ -42,7 +65,7 @@ Settings has separate Security, Autofill and codes, Passkeys, Backup and import,
 
 Signup and password-change forms with explicit new-password fields can generate a password locally. Confirm **Save new login and fill** to save it before filling. The generated login keeps the selected account's groups and authenticator link; the old login stays unchanged. Submit the website form yourself and confirm it accepted the new password before removing an older login.
 
-Passkeys require Android 14 or newer. Enable Private Vault under **Settings > Passkeys**. Verified Chrome and Brave requests use the exact HTTPS website host. Native Android app requests use the app's signing certificate as their origin; the confirmation screen shows the app and requested site. The app's server must accept that origin. Passkeys use ES256. Parent-domain and related-origin browser requests, importing existing passkeys, and extra passkey extensions are not supported. Some apps only offer selected passkey providers. Some browsers also require Private Vault as the Autofill provider with third-party autofill enabled.
+Passkeys require Android 14 or newer. Enable Nuvori under **Settings > Passkeys**. Verified Chrome and Brave requests use the exact HTTPS website host. Native Android app requests use the app's signing certificate as their origin; the confirmation screen shows the app and requested site. The app's server must accept that origin. Passkeys use ES256. Parent-domain and related-origin browser requests, importing existing passkeys, and extra passkey extensions are not supported. Some apps only offer selected passkey providers. Some browsers also require Nuvori as the Autofill provider with third-party autofill enabled.
 
 Password history and saving credentials spread across multiple pages remain unsupported. Username-first filling authenticates and selects an account on each page.
 

@@ -23,3 +23,4 @@ signing.properties
 .env.*
 !.env.example
 captures/
+NEXT-RELEASE-PLAN.md

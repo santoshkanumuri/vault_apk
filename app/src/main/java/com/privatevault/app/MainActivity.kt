@@ -104,7 +104,7 @@ class MainActivity : FragmentActivity() {
                 }
             })
         val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock Private Vault")
+            .setTitle("Unlock Nuvori")
             .setSubtitle("Confirm your fingerprint")
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .setNegativeButtonText("Use master password")

@@ -119,9 +119,9 @@ class VaultAutofillService : AutofillService() {
                     androidx.autofill.inline.UiVersions.getVersions(it.style).contains(androidx.autofill.inline.UiVersions.INLINE_UI_VERSION_1)
                 }?.let { spec ->
                     val content: androidx.autofill.inline.UiVersions.Content = androidx.autofill.inline.v1.InlineSuggestionUi.newContentBuilder(pendingIntent)
-                        .setTitle("Private Vault").setSubtitle("Unlock to fill")
+                        .setTitle("Nuvori").setSubtitle("Unlock to fill")
                         .setStartIcon(android.graphics.drawable.Icon.createWithResource(this, com.privatevault.app.R.mipmap.ic_launcher))
-                        .setContentDescription("Unlock Private Vault to choose a login").build()
+                        .setContentDescription("Unlock Nuvori to choose a login").build()
                     InlinePresentation(content.slice, spec, false)
                 }
             }.getOrNull() else null
@@ -180,7 +180,7 @@ class VaultAutofillService : AutofillService() {
         } catch (_: Exception) {
             token?.let(PendingLoginSaves::remove)
             pending?.clear()
-            callback.onFailure("Could not prepare this login. Save it manually in Private Vault.")
+            callback.onFailure("Could not prepare this login. Save it manually in Nuvori.")
         }
     }
 }

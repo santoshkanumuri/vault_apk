@@ -80,7 +80,7 @@ private val introPages = listOf(
         "Your vault stays on this device. It works offline and has no account or cloud sync.",
         listOf(Icons.Outlined.Password to "A master password protects your vault", Icons.Outlined.Fingerprint to "Fingerprint access after setup", Icons.Outlined.CloudOff to "No Internet permission")),
     IntroPage(Icons.Outlined.Backup, "Bring your data over",
-        "Restore an encrypted Private Vault backup, or import passwords from a Chrome or Brave CSV after setup.",
+        "Restore an encrypted Nuvori backup, or import passwords from a Chrome or Brave CSV after setup.",
         listOf(Icons.Outlined.Security to "Backups need their original password", Icons.Outlined.Key to "Browser CSV files contain readable passwords"))
 )
 
@@ -98,8 +98,12 @@ internal fun OnboardingScreen(
     Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = 20.dp, vertical = 12.dp)) {
         Column(Modifier.align(Alignment.Center).widthIn(max = 560.dp).fillMaxSize().padding(horizontal = 4.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("PRIVATE VAULT", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                NuvoriLogo(Modifier.size(38.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("NUVORI", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                    Text("Yours, by design", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Text("${page + 1} of 4", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             AnimatedContent(page, modifier = Modifier.weight(1f), transitionSpec = {

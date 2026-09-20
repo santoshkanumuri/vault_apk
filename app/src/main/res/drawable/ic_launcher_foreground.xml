@@ -3,5 +3,5 @@
     android:inset="18%">
     <bitmap
         android:gravity="fill"
-        android:src="@drawable/vault_logo" />
+        android:src="@drawable/nuvori_logo_dark" />
 </inset>

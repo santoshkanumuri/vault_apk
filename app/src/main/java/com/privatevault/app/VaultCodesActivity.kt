@@ -444,7 +444,7 @@ class VaultCodesActivity : FragmentActivity() {
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             item { Text(if (request?.origin != null) "Website: $destination" else "App: $destination") }
                             item { Text("Username: ${request?.username.orEmpty()}") }
-                            item { Text("Password: hidden. Save the submitted password? This only saves a copy in Private Vault.") }
+                            item { Text("Password: hidden. Save the submitted password? This only saves a copy in Nuvori.") }
                             if (request != null && matches.any { entry -> entry.secondaryValue.length == request.password.size &&
                                     request.password.indices.all { entry.secondaryValue[it] == request.password[it] } }) item { Text("This password is already saved for this account.") }
                             item { Button(enabled = !busy, onClick = { saveLogin(null) }, modifier = Modifier.fillMaxWidth()) { Text("Save as new login") } }
@@ -462,7 +462,7 @@ class VaultCodesActivity : FragmentActivity() {
                             if (request?.newPasswords?.isNotEmpty() == true && request.password == null) item {
                                 Button(onClick = { prepareGeneration(null) }, modifier = Modifier.fillMaxWidth()) { Text("Generate for a new account") }
                             }
-                            if (matches.isEmpty()) item { Text(if (request?.origin != null) "No logins for this exact HTTPS website. Add its URL to the login in Private Vault. Subdomains must match exactly." else "No authorized logins. Open Passwords in Private Vault and link this app to a login. App identity changes require linking again.") }
+                            if (matches.isEmpty()) item { Text(if (request?.origin != null) "No logins for this exact HTTPS website. Add its URL to the login in Nuvori. Subdomains must match exactly." else "No authorized logins. Open Passwords in Nuvori and link this app to a login. App identity changes require linking again.") }
                             items(matches, key = { it.id }) { entry ->
                                 Card(Modifier.fillMaxWidth()) {
                                     if (request?.newPasswords?.isNotEmpty() == true) Column(Modifier.padding(16.dp)) {
@@ -493,7 +493,7 @@ class VaultCodesActivity : FragmentActivity() {
                         }
                     } else {
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (!keyManager.isInitialized) item { Text("Open Private Vault to create your vault first.") }
+                            if (!keyManager.isInitialized) item { Text("Open Nuvori to create your vault first.") }
                             else {
                                 if (gate.hasValidDailySession && biometricAvailable()) item {
                                     Button(onClick = { password = ""; authenticate(null) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Use fingerprint") }

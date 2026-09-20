@@ -170,30 +170,43 @@ import java.util.Calendar
 import java.util.Locale
 
 internal val VaultColors = darkColorScheme(
-    primary = Color(0xFF43E6A8),
-    onPrimary = Color(0xFF002117),
-    secondary = Color(0xFFF2C778),
-    tertiary = Color(0xFFC8B2F2),
-    background = Color.Black,
-    surface = Color.Black,
-    surfaceVariant = Color(0xFF23262E),
-    onBackground = Color(0xFFF2F2F4),
-    onSurface = Color(0xFFF2F2F4),
+    primary = Color(0xFF78D47B),
+    onPrimary = Color(0xFF09210B),
+    primaryContainer = Color(0xFF173B1B),
+    onPrimaryContainer = Color(0xFFB9F3B9),
+    secondary = Color(0xFFB8CCB5),
+    onSecondary = Color(0xFF243424),
+    secondaryContainer = Color(0xFF334832),
+    onSecondaryContainer = Color(0xFFD4E8D0),
+    tertiary = Color(0xFFC6CBB8),
+    background = Color(0xFF050705),
+    surface = Color(0xFF050705),
+    surfaceVariant = Color(0xFF192019),
+    onBackground = Color(0xFFF0F4ED),
+    onSurface = Color(0xFFF0F4ED),
+    onSurfaceVariant = Color(0xFFBEC9BB),
+    outline = Color(0xFF879184),
     error = Color(0xFFFFB4AB)
 )
 
 internal val VaultLightColors = lightColorScheme(
-    primary = Color(0xFF006B4D),
+    primary = Color(0xFF2E7034),
     onPrimary = Color.White,
-    secondary = Color(0xFF795900),
-    tertiary = Color(0xFF65508D),
-    background = Color(0xFFF8FAF9),
-    surface = Color(0xFFF8FAF9),
-    surfaceVariant = Color(0xFFE7EDE9),
-    onBackground = Color(0xFF17221D),
-    onSurface = Color(0xFF17221D),
-    onSurfaceVariant = Color(0xFF414B45),
-    error = Color(0xFFAD4248)
+    primaryContainer = Color(0xFFB9F3B9),
+    onPrimaryContainer = Color(0xFF08210A),
+    secondary = Color(0xFF536451),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFD6E8D2),
+    onSecondaryContainer = Color(0xFF111F11),
+    tertiary = Color(0xFF5D6253),
+    background = Color(0xFFF8FAF5),
+    surface = Color(0xFFF8FAF5),
+    surfaceVariant = Color(0xFFE7EDE4),
+    onBackground = Color(0xFF181D17),
+    onSurface = Color(0xFF181D17),
+    onSurfaceVariant = Color(0xFF424940),
+    outline = Color(0xFF727970),
+    error = Color(0xFFB3261E)
 )
 
 @Composable
@@ -303,7 +316,7 @@ private fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, c
         LockReason.SCREEN_OFF -> "The vault locked when the screen turned off. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
         LockReason.BACKGROUND -> "The vault locked when you left the app. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
     }
-    CenteredAuthCard("Private Vault", reason) {
+    CenteredAuthCard("Nuvori", reason) {
         if (canUseBiometric) {
             OutlinedButton(onClick = { password = ""; biometric() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Text("Use fingerprint")
@@ -327,7 +340,14 @@ private fun CenteredAuthCard(title: String, subtitle: String, onBack: (() -> Uni
         Card(Modifier.widthIn(max = 460.dp).fillMaxWidth(), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (onBack != null) BackIcon(onBack)
-                Text("PRIVATE VAULT", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    NuvoriLogo(Modifier.size(44.dp))
+                    Column {
+                        Text("NUVORI", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Yours, by design", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = .7f))
+                    }
+                }
                 Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
                 Text(subtitle, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .7f))
                 content()
@@ -365,7 +385,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
     val categoryFolders = if (tab == VaultTab.CARDS) emptyList() else groups.filter { it.folderType == tab.type }
     val selectedFolder = categoryFolders.firstOrNull { it.id == selectedFolderId }
     val screenTitle = when (tab) {
-        VaultTab.HOME -> "Private Vault"
+        VaultTab.HOME -> "Nuvori"
         VaultTab.CARDS -> "Card Wallet"
         VaultTab.QUESTIONS -> "Security Questions"
         VaultTab.PASSWORDS -> "Passwords"
@@ -478,6 +498,8 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
         confirmButton = { DeleteButton(onClick = { viewModel.deleteGroup(folder); selectedFolderId = null; folderToDelete = null }, label = "Delete folder") },
         dismissButton = { TextButton(onClick = { folderToDelete = null }) { Text("Cancel") } }) }
     importPreview?.let { preview ->
+        var importFilter by remember { mutableStateOf(PasswordImportFilter.ALL) }
+        val visibleImportItems = preview.items.filter { importFilter.matches(it.status) }
         AlertDialog(properties = wideDialogProperties,
             onDismissRequest = viewModel::cancelPasswordImport,
             title = { Text("Review ${preview.incomingRows} imported logins") },
@@ -490,6 +512,17 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                         if (preview.ambiguousCount > 0) add("${preview.ambiguousCount} ambiguous")
                         if (preview.duplicateRows > 0) add("${preview.duplicateRows} repeated export rows consolidated")
                     }.joinToString(" · "))
+                }
+                item {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        PasswordImportFilter.entries.forEach { filter ->
+                            FilterChip(
+                                selected = importFilter == filter,
+                                onClick = { importFilter = filter },
+                                label = { Text(filter.label) }
+                            )
+                        }
+                    }
                 }
                 if (preview.conflictCount > 0) {
                     item {
@@ -506,7 +539,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                     Text("Ambiguous accounts match more than one saved login. They will not be changed.", style = MaterialTheme.typography.bodySmall)
                 }
                 item { HorizontalDivider() }
-                items(preview.items, key = { it.id }) { item ->
+                items(visibleImportItems, key = { it.id }) { item ->
                     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(item.label, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -556,7 +589,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
             title = { Text("Match password columns") },
             text = {
                 Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("This export uses unfamiliar headings. Match headings only; Private Vault will not inspect row values to guess.")
+                    Text("This export uses unfamiliar headings. Match headings only; Nuvori will not inspect row values to guess.")
                     PasswordColumnPicker("Website", website, request.headers, required = true) { website = it }
                     PasswordColumnPicker("Username", username, request.headers, required = true) { username = it }
                     PasswordColumnPicker("Password", password, request.headers, required = true) { password = it }
@@ -631,7 +664,7 @@ internal fun Dashboard(entries: List<EntryWithDetails>, select: (String) -> Unit
     val recent = entries.filter { it.entry.lastOpenedAt > 0 }.sortedByDescending { it.entry.lastOpenedAt }.take(5)
     LazyColumn(modifier, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { VaultSummary(listOf(
-            SummaryItem("Cards", cards.size, EntryType.CARD, Color(0xFF43E6A8)),
+            SummaryItem("Cards", cards.size, EntryType.CARD, Color(0xFF5BC760)),
             SummaryItem("Passwords", passwords, EntryType.PASSWORD, Color(0xFF7DB7FF)),
             SummaryItem("Questions", questions, EntryType.QUESTION, Color(0xFFF2C778)),
             SummaryItem("Notes", notes, EntryType.NOTE, Color(0xFFC8B2F2))
@@ -710,7 +743,23 @@ private fun SummaryCell(item: SummaryItem, openCategory: (EntryType) -> Unit, mo
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Box(Modifier.size(8.dp).background(item.accent, CircleShape))
+        Box(
+            Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(item.accent.copy(alpha = .15f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                when (item.type) {
+                    EntryType.CARD -> Icons.Outlined.CreditCard
+                    EntryType.PASSWORD -> Icons.Outlined.Key
+                    EntryType.QUESTION -> Icons.Outlined.QuestionAnswer
+                    EntryType.NOTE -> Icons.AutoMirrored.Outlined.Notes
+                    EntryType.AUTHENTICATOR -> Icons.Outlined.Timer
+                },
+                contentDescription = null,
+                tint = item.accent,
+                modifier = Modifier.size(18.dp)
+            )
+        }
         Column {
             Text(item.count.toString(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text(item.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1000,14 +1049,13 @@ private fun CompactFolders(folders: List<VaultGroup>, entries: List<EntryWithDet
     val sorted = folders.sortedBy { it.name.lowercase(Locale.ROOT) }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         if (maxWidth >= 600.dp) {
-            val itemWidth = (maxWidth - 42.dp) / 2
             FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp), maxItemsInEachRow = 2) {
-                sorted.forEach { folder -> FolderRow(folder, entries, onFolder, Modifier.width(itemWidth)) }
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                sorted.forEach { folder -> FolderRow(folder, entries, onFolder, Modifier.width(180.dp)) }
             }
         } else {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(sorted, key = { it.id }) { folder -> FolderRow(folder, entries, onFolder, Modifier.width(220.dp)) }
+                items(sorted, key = { it.id }) { folder -> FolderRow(folder, entries, onFolder, Modifier.width(160.dp)) }
             }
         }
     }
@@ -1016,18 +1064,17 @@ private fun CompactFolders(folders: List<VaultGroup>, entries: List<EntryWithDet
 @Composable
 private fun FolderRow(folder: VaultGroup, entries: List<EntryWithDetails>, onFolder: (String?) -> Unit, modifier: Modifier) {
     val count = entries.count { item -> item.groups.any { it.id == folder.id } }
-    Surface(modifier.heightIn(min = 56.dp).clickable { onFolder(folder.id) }
+    Surface(modifier.heightIn(min = 52.dp).clickable { onFolder(folder.id) }
         .semantics { contentDescription = "Open folder ${folder.name}, $count ${if (count == 1) "item" else "items"}" },
         shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = .13f), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(30.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = .13f), RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
             }
-            Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                Text(folder.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-                Text("$count ${if (count == 1) "item" else "items"}", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .62f))
-            }
+            Text(folder.name, Modifier.weight(1f).padding(start = 8.dp), maxLines = 1,
+                overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+            Text(count.toString(), modifier = Modifier.padding(start = 6.dp), style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = .62f))
         }
     }
 }
@@ -1124,24 +1171,24 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
     BottomSheetScaffold(
         modifier = modifier.background(MaterialTheme.colorScheme.background),
         scaffoldState = actionScaffold,
-        sheetPeekHeight = 88.dp,
+        sheetPeekHeight = 64.dp,
         sheetContainerColor = MaterialTheme.colorScheme.surface,
         sheetShape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
         sheetTonalElevation = 8.dp,
         sheetShadowElevation = 12.dp,
         sheetDragHandle = {
             Surface(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
                     .clickable(role = Role.Button, onClick = toggleActions),
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
-                        Modifier.size(42.dp).clip(CircleShape)
+                        Modifier.size(36.dp).clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = .18f)),
                         contentAlignment = Alignment.Center
                     ) {
@@ -1150,7 +1197,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                                 contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         }
                     }
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(10.dp))
                     AnimatedContent(actionSheetExpanded, modifier = Modifier.weight(1f), label = "entry action instruction") { expanded ->
                         Text(if (expanded) "Pull down to close" else "Pull up to edit",
                             style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
@@ -1801,7 +1848,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 if (android.os.Build.VERSION.SDK_INT >= 34) {
                     OutlinedButton(onClick = {
                         runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Enable Private Vault for passkeys") }
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Enable Nuvori for passkeys") }
                 } else Text("Creating and using passkeys requires Android 14 or newer. Stored passkeys remain included in backups.")
                 Text("Currently supports ES256 passkeys for the exact website host. Native apps and related or parent-domain requests are not supported yet.", style = MaterialTheme.typography.bodySmall)
                 if (passkeys.isEmpty()) Text("No passkeys saved yet.")
@@ -1843,7 +1890,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 OutlinedButton(onClick = { action = "password" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Change master password") }
             }
             if (page == "About") {
-                Text("Private Vault", style = MaterialTheme.typography.titleLarge)
+                Text("Nuvori", style = MaterialTheme.typography.titleLarge)
+                Text("Yours, by design", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                 Text("Local encrypted storage. No account or cloud sync. Keep encrypted backups and recovery codes somewhere safe. This app has not undergone an independent security audit.")
                 TextButton(onClick = { showPrivacy = true }) { Text("Privacy policy") }
             }
@@ -1870,7 +1918,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         confirmButton = { Button(onClick = {
             pendingBackupPassword = password.toCharArray(); password = ""
             viewModel.externalFlowActive = true
-            if (action == "export") export.launch("private-vault.pvault") else restore.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
+            if (action == "export") export.launch("nuvori.pvault") else restore.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
             action = null
         }, enabled = password.isNotEmpty()) { Text(if (action == "export") "Choose location" else "Choose and validate") } },
         dismissButton = { TextButton(onClick = { action = null; password = "" }) { Text("Cancel") } }

@@ -18,10 +18,10 @@ import com.privatevault.app.security.*
 internal fun AutofillPreference() {
     val context = LocalContext.current
     Text("Password autofill", style = MaterialTheme.typography.titleSmall)
-    Text("Selecting Private Vault replaces your current Autofill provider. Supports linked native apps and exact HTTPS websites in verified Chrome and Brave releases. Supported browser login forms can offer Save; unlock and confirm before creating or updating a login. The code tile still works if you keep another provider.", style = MaterialTheme.typography.bodySmall)
+    Text("Selecting Nuvori replaces your current Autofill provider. Supports linked native apps and exact HTTPS websites in verified Chrome and Brave releases. Supported browser login forms can offer Save; unlock and confirm before creating or updating a login. The code tile still works if you keep another provider.", style = MaterialTheme.typography.bodySmall)
     OutlinedButton(onClick = {
         context.startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE, Uri.parse("package:${context.packageName}")))
-    }, modifier = Modifier.fillMaxWidth()) { Text("Choose Private Vault autofill") }
+    }, modifier = Modifier.fillMaxWidth()) { Text("Choose Nuvori autofill") }
     Text("In Chrome or Brave, enable autofill using another service in the browser's settings. Support depends on the browser exposing Android autofill fields. HTTP pages, mismatched subdomains, ambiguous forms and unverified browsers are rejected.", style = MaterialTheme.typography.bodySmall)
     OutlinedButton(onClick = {
         val intent = Intent(Intent.ACTION_APPLICATION_PREFERENCES).addCategory(Intent.CATEGORY_DEFAULT)

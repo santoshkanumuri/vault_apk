@@ -227,6 +227,9 @@ fun PrivateVaultApp(
     val requestDailyBiometric by viewModel.requestDailyBiometric.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var showPrivacy by remember { mutableStateOf(false) }
+    var onboardingPage by rememberSaveable { mutableIntStateOf(0) }
+    var showSetup by rememberSaveable { mutableStateOf(false) }
+    var firstRunChoice by rememberSaveable { mutableStateOf(FirstRunChoice.NEW) }
     LaunchedEffect(message) {
         message?.let { snackbar.showSnackbar(it); viewModel.clearMessage() }
     }
@@ -241,17 +244,21 @@ fun PrivateVaultApp(
             }) {
                 AnimatedContent(targetState = status, label = "vault state") { state ->
                     when (state) {
-                        VaultStatus.NeedsSetup -> SetupScreen(viewModel)
+                        VaultStatus.NeedsSetup -> if (showSetup) SetupScreen(viewModel, firstRunChoice) { showSetup = false }
+                        else OnboardingScreen(onboardingPage, { onboardingPage = it },
+                            { firstRunChoice = it; showSetup = true }, { showPrivacy = true })
                         is VaultStatus.Locked -> UnlockScreen(
                             viewModel, state,
                             biometricAvailable && state.canUseBiometric,
                             onBiometricUnlock
                         )
-                        VaultStatus.Unlocked -> VaultHome(viewModel, onCopySecret, onBiometricAction)
+                        VaultStatus.Unlocked -> VaultHome(viewModel, onCopySecret, onBiometricAction,
+                            firstRunChoice, { firstRunChoice = FirstRunChoice.NEW })
                     }
                 }
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
-                if (status !is VaultStatus.Unlocked) TextButton(onClick = { showPrivacy = true }, modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding()) { Text("Privacy policy") }
+                if (status is VaultStatus.Locked || status is VaultStatus.NeedsSetup && showSetup)
+                    TextButton(onClick = { showPrivacy = true }, modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding()) { Text("Privacy policy") }
                 if (showPrivacy) PrivacyPolicyDialog { showPrivacy = false }
             }
         }
@@ -259,12 +266,18 @@ fun PrivateVaultApp(
 }
 
 @Composable
-private fun SetupScreen(viewModel: VaultViewModel) {
+private fun SetupScreen(viewModel: VaultViewModel, firstRunChoice: FirstRunChoice, onBack: () -> Unit) {
     var password by remember { mutableStateOf("") }
     var enableNfc by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf("") }
     val valid = password.length >= PasswordCrypto.MIN_PASSWORD_LENGTH && password == confirm
-    CenteredAuthCard("Create your private vault", "Your master password cannot be recovered.") {
+    BackHandler(onBack = onBack)
+    val description = when (firstRunChoice) {
+        FirstRunChoice.NEW -> "Your master password cannot be recovered."
+        FirstRunChoice.RESTORE -> "Create a password for this phone. You will enter the backup's original password next."
+        FirstRunChoice.BROWSER_IMPORT -> "Create your encrypted vault first. Then choose your Chrome or Brave password CSV."
+    }
+    CenteredAuthCard("Create your private vault", description, onBack = onBack) {
         SecretField("Master password", password) { password = it }
         SecretField("Confirm password", confirm) { confirm = it }
         Text("Use at least ${PasswordCrypto.MIN_PASSWORD_LENGTH} characters. A long phrase is easier to remember.", style = MaterialTheme.typography.bodySmall)
@@ -305,10 +318,11 @@ private fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, c
 }
 
 @Composable
-private fun CenteredAuthCard(title: String, subtitle: String, content: @Composable ColumnScope.() -> Unit) {
+private fun CenteredAuthCard(title: String, subtitle: String, onBack: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(24.dp), contentAlignment = Alignment.Center) {
         Card(Modifier.widthIn(max = 460.dp).fillMaxWidth(), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (onBack != null) BackIcon(onBack)
                 Text("PRIVATE VAULT", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
                 Text(subtitle, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .7f))
@@ -319,7 +333,9 @@ private fun CenteredAuthCard(title: String, subtitle: String, content: @Composab
 }
 
 @Composable
-private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) -> Unit, onBiometricAction: (() -> Unit) -> Unit) {
+private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) -> Unit,
+    onBiometricAction: (() -> Unit) -> Unit, firstRunChoice: FirstRunChoice,
+    onFirstRunChoiceHandled: () -> Unit) {
     val restoreSummary by viewModel.restoreSummary.collectAsStateWithLifecycle()
     val importPreview by viewModel.importPreview.collectAsStateWithLifecycle()
     val entries by viewModel.entries.collectAsStateWithLifecycle()
@@ -330,7 +346,9 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
     var editing by remember { mutableStateOf<VaultEntry?>(null) }
     var addType by remember { mutableStateOf<EntryType?>(null) }
     var showGroups by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
+    var initialImportChoice by remember { mutableStateOf(firstRunChoice.takeIf { it != FirstRunChoice.NEW }) }
+    var showSettings by remember { mutableStateOf(initialImportChoice != null) }
+    LaunchedEffect(firstRunChoice) { if (firstRunChoice != FirstRunChoice.NEW) onFirstRunChoiceHandled() }
     var showQuickAdd by remember { mutableStateOf(false) }
     var selectedFolderId by rememberSaveable { mutableStateOf<String?>(null) }
     var showFolderEditor by remember { mutableStateOf(false) }
@@ -432,7 +450,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
         openEntry = { id -> showGroups = false; selectEntry(id) },
         close = { showGroups = false }
     )
-    if (showSettings) SettingsDialog(viewModel, { showSettings = false })
+    if (showSettings) SettingsDialog(viewModel, initialImportChoice) { showSettings = false; initialImportChoice = null }
     if (showFolderEditor && tab.type != null && tab.type != EntryType.CARD) AlertDialog(properties = wideDialogProperties,
         onDismissRequest = { showFolderEditor = false },
         title = { Text(if (folderToEdit == null) "New folder" else "Rename folder") },
@@ -1543,10 +1561,10 @@ private fun GroupEntryDetails(
 }
 
 @Composable
-internal fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
+internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: FirstRunChoice? = null, close: () -> Unit) {
     val passkeys by viewModel.passkeys.collectAsStateWithLifecycle()
     var deletePasskey by remember { mutableStateOf<com.privatevault.app.data.PasskeySummary?>(null) }
-    var page by remember { mutableStateOf<String?>(null) }
+    var page by remember { mutableStateOf<String?>(if (initialImportChoice != null) "Backup and import" else null) }
     val pageScroll = remember(page) { androidx.compose.foundation.ScrollState(0) }
     LaunchedEffect(page) { if (page == "Passkeys") viewModel.refreshPasskeys() }
     var showPrivacy by remember { mutableStateOf(false) }
@@ -1575,6 +1593,11 @@ internal fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
     val importPasswords = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         viewModel.externalFlowActive = false
         if (uri != null) viewModel.previewPasswordImport(uri) else viewModel.touch()
+    }
+    val browserImportContent: @Composable () -> Unit = {
+        Text("Import browser passwords", style = MaterialTheme.typography.titleMedium)
+        Text("Export passwords as CSV from Chrome or Brave, then choose that file here. You will review the accounts before saving. CSV files contain readable passwords. This does not import passkeys.")
+        OutlinedButton(onClick = { viewModel.externalFlowActive = true; importPasswords.launch(arrayOf("text/*", "application/csv", "application/vnd.ms-excel", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("Choose password CSV") }
     }
 
     BackHandler { if (page != null) page = null else close() }
@@ -1630,13 +1653,18 @@ internal fun SettingsDialog(viewModel: VaultViewModel, close: () -> Unit) {
             CodeAppDetectionPreference()
             }
             if (page == "Backup and import") {
-            FilledTonalButton(onClick = { action = "export" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Export encrypted backup") }
-            FilledTonalButton(onClick = { action = "restore" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Restore encrypted backup") }
+            if (initialImportChoice == FirstRunChoice.RESTORE)
+                Text("Next: restore your encrypted backup. Enter the password used when you made it, then choose the .pvault file. Review its contents before replacing this new vault.")
+            if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT)
+                Text("Next: choose your Chrome or Brave password CSV. Review the accounts before saving them to your vault. Browser passkeys are not included.")
+            if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT) { browserImportContent(); HorizontalDivider() }
+            (if (initialImportChoice == FirstRunChoice.RESTORE) listOf("restore", "export") else listOf("export", "restore")).forEach { kind ->
+                FilledTonalButton(onClick = { action = kind }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                    Text(if (kind == "export") "Export encrypted backup" else "Restore encrypted backup")
+                }
+            }
             Text("A cloud file provider may upload an encrypted backup outside this app.", style = MaterialTheme.typography.bodySmall)
-            HorizontalDivider()
-            Text("Import browser passwords", style = MaterialTheme.typography.titleMedium)
-            Text("Export passwords as CSV from Chrome or Brave, then choose that file here. You will review the accounts before saving. CSV files contain readable passwords. This does not import passkeys.")
-            OutlinedButton(onClick = { viewModel.externalFlowActive = true; importPasswords.launch(arrayOf("text/*", "application/csv", "application/vnd.ms-excel", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("Choose password CSV") }
+            if (initialImportChoice != FirstRunChoice.BROWSER_IMPORT) { HorizontalDivider(); browserImportContent() }
             }
             if (page == "Security") {
                 Text("Strong fingerprint access lasts up to 24 hours after master-password authentication and biometric confirmation. The phone PIN cannot unlock the vault.")

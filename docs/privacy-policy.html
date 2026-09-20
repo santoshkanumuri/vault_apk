@@ -27,7 +27,7 @@ On Android 14 or newer, you can enable Private Vault as a passkey provider. Supp
 
 For supported browser login forms, Android can offer to save the login. After you accept that prompt, Private Vault temporarily holds the submitted username and password in process memory for up to two minutes while you unlock and review it. It saves or updates the encrypted record only after your confirmation. Cancellation or expiry clears the pending password. No plaintext form file is created. Username-first filling checks each page separately and does not carry passwords to a different website.
 
-Optional Chrome/Brave CSV import reads the password file you select, previews account names, and saves confirmed entries in the encrypted vault. Private Vault does not keep a plaintext copy of the imported file. The original CSV contains readable passwords and remains outside the vault until you delete it.
+Optional password import reads the CSV or unencrypted Bitwarden JSON file you select, previews account names, and saves confirmed entries in the encrypted vault. Private Vault does not keep a plaintext copy of the imported file. The original export contains readable passwords and remains outside the vault until you delete it.
 
 Manual exports create an encrypted backup containing your records, photos, and vault settings. If you choose a cloud document provider, that provider may upload the encrypted file under its own terms. Private Vault does not upload it itself. Backups require the password used when they were exported, even after you change the current vault password.
 

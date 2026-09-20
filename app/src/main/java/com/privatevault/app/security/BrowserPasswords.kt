@@ -1,5 +1,7 @@
 package com.privatevault.app.security
 
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.privatevault.app.data.EntryType
 import com.privatevault.app.data.VaultEntry
 import org.apache.commons.csv.CSVFormat
@@ -31,32 +33,79 @@ internal fun readBrowserPasswords(input: Reader): List<VaultEntry> {
         override fun read(): Int = super.read().also { if (it != -1) { count++; require(count <= 4 * 1024 * 1024) } }
     }
     try {
-        // UTF-8 BOM occurs in some browser exports. Password whitespace is never trimmed.
+        // UTF-8 BOM occurs in some exports. Password whitespace is never trimmed.
         val reader = java.io.PushbackReader(limited, 1)
-        val first = reader.read()
-        if (first != -1 && first != 0xFEFF) reader.unread(first)
-        val format = CSVFormat.RFC4180.builder().setHeader().setSkipHeaderRecord(true)
-            .setDuplicateHeaderMode(DuplicateHeaderMode.DISALLOW).setIgnoreEmptyLines(true).get()
-        return format.parse(reader).use { csv ->
-            require(csv.headerNames.containsAll(listOf("name", "url", "username", "password")))
-            val entries = mutableListOf<VaultEntry>()
-            for (row in csv) {
-                require(entries.size < 5000 && row.isConsistent)
-                val url = row.get("url")
-                val password = row.get("password")
-                require(password.isNotEmpty())
-                entries.add(VaultEntry(type = EntryType.PASSWORD, title = row.get("name").ifBlank { url.ifBlank { "Imported login" } },
-                    primaryValue = row.get("username"), secondaryValue = password, tertiaryValue = url,
-                    notes = if (row.isMapped("note")) row.get("note") else ""))
-            }
-            require(entries.isNotEmpty())
-            entries
-        }
+        var first = reader.read()
+        if (first == 0xFEFF) first = reader.read()
+        while (first != -1 && first.toChar().isWhitespace()) first = reader.read()
+        require(first != -1)
+        reader.unread(first)
+        return if (first.toChar() == '{') readBitwardenJson(reader) else readPasswordCsv(reader)
     } catch (_: Exception) {
-        // Parser exceptions can contain a fragment of a secret-bearing CSV row.
-        throw IllegalArgumentException("Could not read CSV. Use a UTF-8 Chrome/Brave export with nonempty passwords, up to 5,000 rows and 4 million characters.")
+        // Parser exceptions can contain a fragment of a secret-bearing export.
+        throw IllegalArgumentException("Could not read password export. Use a supported UTF-8 CSV or an unencrypted Bitwarden JSON export with up to 5,000 logins and 4 million characters.")
     }
 }
+
+private fun readPasswordCsv(reader: Reader): List<VaultEntry> {
+    val format = CSVFormat.RFC4180.builder().setHeader().setSkipHeaderRecord(true)
+        .setDuplicateHeaderMode(DuplicateHeaderMode.DISALLOW).setIgnoreEmptyLines(true).get()
+    return format.parse(reader).use { csv ->
+        val normalizedHeaders = csv.headerNames.map { it.trim().lowercase(Locale.ROOT) }
+        require(normalizedHeaders.distinct().size == normalizedHeaders.size)
+        val headers = csv.headerNames.associateBy { it.trim().lowercase(Locale.ROOT) }
+        fun header(vararg names: String): String? = names.firstNotNullOfOrNull(headers::get)
+        val bitwarden = header("login_password") != null && header("login_username") != null
+        val passwordHeader = requireNotNull(header("password", "login_password"))
+        val usernameHeader = requireNotNull(header("username", "user name", "login_username", "login name", "login", "email"))
+        val urlHeader = requireNotNull(header("url", "website", "web site", "login_uri", "login_url", "hostname"))
+        val titleHeader = header("name", "title", "account")
+        val notesHeader = header("note", "notes", "extra", "comments")
+        val typeHeader = if (bitwarden) header("type") else null
+        val entries = mutableListOf<VaultEntry>()
+        for (row in csv) {
+            require(row.isConsistent)
+            if (typeHeader != null && !row.get(typeHeader).equals("login", true)) continue
+            val url = row.get(urlHeader)
+            val password = row.get(passwordHeader)
+            if (password.isEmpty()) continue
+            require(entries.size < 5000)
+            val title = titleHeader?.let(row::get).orEmpty().ifBlank { url.ifBlank { "Imported login" } }
+            entries += VaultEntry(type = EntryType.PASSWORD, title = title,
+                primaryValue = row.get(usernameHeader), secondaryValue = password, tertiaryValue = url,
+                notes = notesHeader?.let(row::get).orEmpty())
+        }
+        require(entries.isNotEmpty())
+        entries
+    }
+}
+
+private fun readBitwardenJson(reader: Reader): List<VaultEntry> {
+    val root = JsonParser.parseReader(reader).asJsonObject
+    require(root.get("encrypted")?.takeIf { it.isJsonPrimitive }?.asBoolean != true)
+    val items = root.getAsJsonArray("items") ?: error("Missing items")
+    val entries = mutableListOf<VaultEntry>()
+    for (element in items) {
+        val item = element.asJsonObject
+        if (item.int("type") != 1) continue
+        val login = item.getAsJsonObject("login") ?: error("Missing login")
+        val password = login.string("password")
+        if (password.isEmpty()) continue
+        require(entries.size < 5000)
+        val url = login.getAsJsonArray("uris")?.asSequence()
+            ?.mapNotNull { it.takeIf { value -> value.isJsonObject }?.asJsonObject?.string("uri") }
+            ?.firstOrNull { it.isNotBlank() }.orEmpty()
+        val name = item.string("name")
+        require(name.isNotBlank())
+        entries += VaultEntry(type = EntryType.PASSWORD, title = name, primaryValue = login.string("username"),
+            secondaryValue = password, tertiaryValue = url, notes = item.string("notes"))
+    }
+    require(entries.isNotEmpty())
+    return entries
+}
+
+private fun JsonObject.string(name: String): String = get(name)?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+private fun JsonObject.int(name: String): Int? = get(name)?.takeIf { it.isJsonPrimitive }?.runCatching { asInt }?.getOrNull()
 
 internal fun sameImportedLogin(a: VaultEntry, b: VaultEntry): Boolean =
     sameImportedAccount(a, b) && a.secondaryValue == b.secondaryValue

@@ -10,6 +10,7 @@ These are the main libraries used by Private Vault. Their code remains subject t
 | Bouncy Castle | Argon2id and Base32 | Bouncy Castle license |
 | Google Tink | Streaming backup encryption | Apache-2.0 |
 | Apache Commons CSV, IO and Codec | Browser password CSV parsing | Apache-2.0 |
+| Gson | Bitwarden JSON parsing | Apache-2.0 |
 | java-otp | TOTP generation | MIT |
 | ZXing | QR decoding | Apache-2.0 |
 | EMV NFC Paycard Enrollment | Contactless card reading | Apache-2.0 |

@@ -21,6 +21,76 @@ class BrowserPasswordsTest {
             assertFalse(error.message!!.contains("secret"))
         }
     }
+    @Test fun importsBitwardenCsvAndSkipsNonLoginItems() {
+        val csv = "folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n" +
+            ",,login,Mail,personal,,,https://mail.example.com,user@example.com,secret,\n" +
+            ",,note,Recovery,private note,,,,,,"
+        val entry = readBrowserPasswords(csv.reader()).single()
+        assertEquals("Mail", entry.title)
+        assertEquals("https://mail.example.com", entry.tertiaryValue)
+        assertEquals("user@example.com", entry.primaryValue)
+        assertEquals("secret", entry.secondaryValue)
+        assertEquals("personal", entry.notes)
+    }
+    @Test fun acceptsBitwardenLoginUrlAndSpacesAroundHeaders() {
+        val csv = "folder, favorite,type,name,notes,fields, reprompt, login_url, login_username,login_password,login_totp\n" +
+            ",,login,Mail,personal,,,https://mail.example.com,user@example.com,secret,"
+        val entry = readBrowserPasswords(csv.reader()).single()
+        assertEquals("https://mail.example.com", entry.tertiaryValue)
+        assertEquals("user@example.com", entry.primaryValue)
+    }
+    @Test fun skipsPasswordlessBrowserRowsInsteadOfRejectingTheFile() {
+        val csv = "name,url,username,password,note\n" +
+            "Passkey only,https://passkey.example,user,,\n" +
+            "Mail,https://mail.example,user,secret,"
+        val entry = readBrowserPasswords(csv.reader()).single()
+        assertEquals("Mail", entry.title)
+        assertEquals("secret", entry.secondaryValue)
+    }
+    @Test fun importsFirefoxSafariAndOnePasswordStyleHeaders() {
+        val firefox = readBrowserPasswords("url,username,password,httpRealm\nhttps://example.com,user,secret,".reader()).single()
+        assertEquals("https://example.com", firefox.title)
+
+        val onePassword = readBrowserPasswords("Title,Website,Username,Password,Notes\nExample,https://example.com,user,secret,memo".reader()).single()
+        assertEquals("Example", onePassword.title)
+        assertEquals("memo", onePassword.notes)
+    }
+    @Test fun importsLastPassAndKeePassStyleHeaders() {
+        val lastPass = readBrowserPasswords("url,username,password,extra,name,grouping,fav\nhttps://example.com,user,secret,memo,Example,,0".reader()).single()
+        assertEquals("Example", lastPass.title)
+        assertEquals("memo", lastPass.notes)
+
+        val keepass = readBrowserPasswords("Account,Login Name,Password,Web Site,Comments\nExample,user,secret,https://example.com,memo".reader()).single()
+        assertEquals("user", keepass.primaryValue)
+        assertEquals("https://example.com", keepass.tertiaryValue)
+    }
+    @Test fun importsUnencryptedBitwardenJsonLogins() {
+        val json = """{
+            "encrypted": false,
+            "items": [
+              {"type": 1, "name": "Mail", "notes": "personal", "login": {
+                "username": "user@example.com", "password": " secret ",
+                "uris": [{"uri": "https://mail.example.com/login"}]
+              }},
+              {"type": 2, "name": "Secure note", "secureNote": {"type": 0}}
+            ]
+        }"""
+        val entry = readBrowserPasswords(json.reader()).single()
+        assertEquals("Mail", entry.title)
+        assertEquals("user@example.com", entry.primaryValue)
+        assertEquals(" secret ", entry.secondaryValue)
+        assertEquals("https://mail.example.com/login", entry.tertiaryValue)
+        assertEquals("personal", entry.notes)
+    }
+    @Test fun rejectsEncryptedOrMalformedJsonWithoutEchoingSecrets() {
+        listOf(
+            """{"encrypted":true,"data":"secret-ciphertext"}""",
+            """{"items":[{"type":1,"login":{"password":"secret"}}]}"""
+        ).forEach {
+            val error = assertThrows(IllegalArgumentException::class.java) { readBrowserPasswords(it.reader()) }
+            assertFalse(error.message!!.contains("secret"))
+        }
+    }
     @Test fun originsAreExactAndRejectUnsafeAddresses() {
         assertEquals("https://example.com", httpsOrigin("https://EXAMPLE.com:443/login?a=b"))
         assertEquals("https://example.com:8443", httpsOrigin("https://example.com:8443"))

@@ -96,7 +96,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             val duplicateRows = preview?.duplicateRows ?: 0
             _message.value = "Added ${result.added} logins and updated ${result.updated}. " +
                 "Skipped ${result.skippedExact + duplicateRows} duplicates and ${result.skippedConflicts} incoming password changes. " +
-                "Delete the readable CSV export after checking your logins."
+                "Delete the readable export file after checking your logins."
         }
     }
     fun cancelRestore() {

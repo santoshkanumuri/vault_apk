@@ -5,9 +5,9 @@ buildscript {
         gradlePluginPortal()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.9.2")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.20")
-        classpath("org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.0.20")
-        classpath("com.google.devtools.ksp:symbol-processing-gradle-plugin:2.0.20-1.0.24")
+        classpath("com.android.tools.build:gradle:9.0.1")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.10")
+        classpath("org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.2.10")
+        classpath("com.google.devtools.ksp:symbol-processing-gradle-plugin:2.3.6")
     }
 }

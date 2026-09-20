@@ -2,7 +2,6 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
@@ -20,8 +19,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 29
         targetSdk = 36
-        versionCode = 30
-        versionName = "1.9.4"
+        versionCode = 32
+        versionName = "1.9.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -30,7 +29,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
 
     signingConfigs {
         if (privateSigningFile.exists()) {
@@ -46,8 +44,8 @@ android {
     buildTypes {
         debug { applicationIdSuffix = ".debug" }
         release {
-            isMinifyEnabled = false
-            isShrinkResources = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             if (privateSigningFile.exists()) signingConfig = signingConfigs.getByName("privateRelease")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -60,6 +58,7 @@ dependencies {
     implementation("com.webauthn4j:webauthn4j-core:0.31.10.RELEASE")
     implementation("androidx.autofill:autofill:1.1.0")
     implementation("org.apache.commons:commons-csv:1.14.1")
+    implementation("com.google.code.gson:gson:2.13.2")
     implementation("com.eatthepath:java-otp:1.0.0")
     implementation("com.google.zxing:core:3.5.3")
     implementation("androidx.camera:camera-camera2:1.4.2")
@@ -76,8 +75,8 @@ dependencies {
     implementation("androidx.compose.material3:material3:1.2.1")
     implementation("androidx.compose.material:material-icons-extended:1.6.8")
     implementation("androidx.biometric:biometric:1.2.0-alpha05")
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
+    implementation("androidx.room:room-runtime:2.8.4")
+    implementation("androidx.room:room-ktx:2.8.4")
     implementation("androidx.sqlite:sqlite:2.4.0")
     // This SQLCipher Android line supports 16 KB memory pages; verify native alignment on release.
     implementation("net.zetetic:sqlcipher-android:4.6.1@aar")
@@ -87,7 +86,7 @@ dependencies {
     implementation("com.github.devnied.emvnfccard:library:3.2.0")
     // The EMV parser must never log card responses, even in debug builds.
     implementation("org.slf4j:slf4j-nop:1.7.36")
-    ksp("androidx.room:room-compiler:2.6.1")
+    ksp("androidx.room:room-compiler:2.8.4")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

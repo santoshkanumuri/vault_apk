@@ -475,7 +475,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
             text = { LazyColumn(Modifier.heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
                     Text("${preview.newCount} new · ${preview.alreadySavedCount} already saved · ${preview.conflictCount} password changes" +
-                        if (preview.duplicateRows > 0) " · ${preview.duplicateRows} repeated CSV rows consolidated" else "")
+                        if (preview.duplicateRows > 0) " · ${preview.duplicateRows} repeated export rows consolidated" else "")
                 }
                 if (preview.conflictCount > 0) {
                     item { Text("Saved accounts with a different incoming password need your choice.", fontWeight = FontWeight.SemiBold) }
@@ -503,7 +503,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                         }, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                     }
                 }
-                item { Text("The CSV contains readable passwords. Delete it after checking the import.", style = MaterialTheme.typography.bodySmall) }
+                item { Text("The export file contains readable passwords. Delete it after checking the import.", style = MaterialTheme.typography.bodySmall) }
             } },
             confirmButton = { Button(enabled = overwritePasswords != null,
                 onClick = { viewModel.confirmPasswordImport(overwritePasswords == true) }) { Text("Continue") } },
@@ -1595,9 +1595,9 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         if (uri != null) viewModel.previewPasswordImport(uri) else viewModel.touch()
     }
     val browserImportContent: @Composable () -> Unit = {
-        Text("Import browser passwords", style = MaterialTheme.typography.titleMedium)
-        Text("Export passwords as CSV from Chrome or Brave, then choose that file here. You will review the accounts before saving. CSV files contain readable passwords. This does not import passkeys.")
-        OutlinedButton(onClick = { viewModel.externalFlowActive = true; importPasswords.launch(arrayOf("text/*", "application/csv", "application/vnd.ms-excel", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("Choose password CSV") }
+        Text("Import passwords", style = MaterialTheme.typography.titleMedium)
+        Text("Choose a password CSV from a browser or password manager, or an unencrypted Bitwarden JSON export. You will review the accounts before saving. Export files contain readable passwords. This does not import passkeys.")
+        OutlinedButton(onClick = { viewModel.externalFlowActive = true; importPasswords.launch(arrayOf("text/*", "application/csv", "application/json", "application/vnd.ms-excel", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("Choose password export") }
     }
 
     BackHandler { if (page != null) page = null else close() }
@@ -1609,7 +1609,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
           }
           Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().align(Alignment.CenterHorizontally).weight(1f).verticalScroll(pageScroll).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (page == null) {
-                listOf("Security" to "Master password and lock behavior", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and Chrome/Brave passwords", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "About" to "Privacy and security limits").forEach { (name, description) ->
+                listOf("Security" to "Master password and lock behavior", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and password exports", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "About" to "Privacy and security limits").forEach { (name, description) ->
                     Card(Modifier.fillMaxWidth().clickable { page = name }) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(name, style = MaterialTheme.typography.titleMedium)
@@ -1656,7 +1656,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             if (initialImportChoice == FirstRunChoice.RESTORE)
                 Text("Next: restore your encrypted backup. Enter the password used when you made it, then choose the .pvault file. Review its contents before replacing this new vault.")
             if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT)
-                Text("Next: choose your Chrome or Brave password CSV. Review the accounts before saving them to your vault. Browser passkeys are not included.")
+                Text("Next: choose a password CSV or an unencrypted Bitwarden JSON export. Review the accounts before saving them to your vault. Passkeys are not included.")
             if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT) { browserImportContent(); HorizontalDivider() }
             (if (initialImportChoice == FirstRunChoice.RESTORE) listOf("restore", "export") else listOf("export", "restore")).forEach { kind ->
                 FilledTonalButton(onClick = { action = kind }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {

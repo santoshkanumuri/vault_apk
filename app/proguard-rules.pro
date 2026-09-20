@@ -1,3 +1,5 @@
 -keep class net.zetetic.database.sqlcipher.** { *; }
 -keep class org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**
+-dontwarn java.beans.ConstructorProperties
+-dontwarn java.beans.Transient

@@ -34,7 +34,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.privatevault.app.data.*
 import com.privatevault.app.security.Totp
-import com.privatevault.app.security.decodePhoto
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -134,26 +133,8 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         viewModel.externalFlowActive = false
         if (uri != null) scope.launch {
-            runCatching {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    val bytes = context.contentResolver.openInputStream(uri)!!.use { input ->
-                        val output = java.io.ByteArrayOutputStream()
-                        val chunk = ByteArray(8192)
-                        try {
-                            while (true) {
-                                val n = input.read(chunk); if (n < 0) break
-                                require(output.size() + n <= 20 * 1024 * 1024)
-                                output.write(chunk, 0, n)
-                            }
-                            output.toByteArray()
-                        } finally { chunk.fill(0) }
-                    }
-                    try {
-                        val bitmap = decodePhoto(bytes, 2048)
-                        try { readQr(bitmap) ?: error("No QR") } finally { bitmap.recycle() }
-                    } finally { bytes.fill(0) }
-                }
-            }.onSuccess { acceptQr(it) }.onFailure { error = "Could not read that QR image. Try scanning it or entering the setup key." }
+            runCatching { readQrImage(context, uri) }
+                .onSuccess { acceptQr(it) }.onFailure { error = "Could not read that QR image. Try scanning it or entering the setup key." }
         }
     }
     val valid = issuer.isNotBlank() && runCatching { Totp.validate(secret, algorithm, digits.toInt(), period.toInt()) }.isSuccess

@@ -75,7 +75,8 @@ class AuthenticatorBackupTest {
             source.dao().saveEntry(records.last(), setOf(group.id, folder.id))
             assertTrue(runCatching { source.dao().saveEntry(records.first(), setOf(folder.id)) }.isFailure)
             assertEquals(listOf(authenticator.id), source.dao().authenticatorEntries().map { it.id })
-            source.dao().saveSettings(VaultSettings(lightMode = true, nfcEnabled = true))
+            source.dao().saveSettings(VaultSettings(lightMode = true, nfcEnabled = true,
+                backgroundTimeoutMs = 30_000L, inactivityTimeoutMs = 900_000L, masterPasswordIntervalMs = 604_800_000L))
             val bitmap = Bitmap.createBitmap(12, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
             val photoBytes = ByteArrayOutputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it); it.toByteArray() }
             bitmap.recycle()

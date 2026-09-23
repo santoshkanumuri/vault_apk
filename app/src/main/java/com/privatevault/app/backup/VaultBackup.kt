@@ -189,6 +189,9 @@ class VaultBackupManager(
                     lightMode = parsed.lightMode,
                     nfcEnabled = parsed.nfcEnabled,
                     vaultId = parsed.vaultId.ifBlank { java.util.UUID.randomUUID().toString() },
+                    backgroundTimeoutMs = parsed.backgroundTimeoutMs,
+                    inactivityTimeoutMs = parsed.inactivityTimeoutMs,
+                    masterPasswordIntervalMs = parsed.masterPasswordIntervalMs,
                 ),
                 parsed.passkeys,
             )
@@ -205,9 +208,12 @@ class VaultBackupManager(
 
     private fun serialize(snapshot: BackupData): ByteArray {
         require(snapshot.vaultId.isNotBlank()) { "Vault ID is missing" }
-        val root = JSONObject().put("version", 8)
+        val root = JSONObject().put("version", 9)
             .put("lightMode", snapshot.lightMode).put("nfcEnabled", snapshot.nfcEnabled)
             .put("vaultId", snapshot.vaultId)
+            .put("backgroundTimeoutMs", snapshot.backgroundTimeoutMs)
+            .put("inactivityTimeoutMs", snapshot.inactivityTimeoutMs)
+            .put("masterPasswordIntervalMs", snapshot.masterPasswordIntervalMs)
         root.put("entries", JSONArray().apply { snapshot.entries.forEach { put(it.toJson()) } })
         root.put("groups", JSONArray().apply { snapshot.groups.forEach { put(it.toJson()) } })
         root.put("links", JSONArray().apply { snapshot.links.forEach { put(JSONObject().put("entryId", it.entryId).put("groupId", it.groupId)) } })
@@ -220,7 +226,7 @@ class VaultBackupManager(
 
     private fun parse(bytes: ByteArray): BackupData {
         val root = JSONObject(bytes.toString(Charsets.UTF_8))
-        require(root.getInt("version") in 1..8) { "Unsupported backup version" }
+        require(root.getInt("version") in 1..9) { "Unsupported backup version" }
         fun <T> JSONArray.mapJson(block: (JSONObject) -> T) = (0 until length()).map { block(getJSONObject(it)) }
         val result = BackupData(
             root.getJSONArray("entries").mapJson { it.toEntry() },
@@ -238,6 +244,9 @@ class VaultBackupManager(
             },
             lightMode = root.optBoolean("lightMode", false),
             nfcEnabled = root.optBoolean("nfcEnabled", false),
+            backgroundTimeoutMs = root.optLong("backgroundTimeoutMs", 10_000L).also { require(it in com.privatevault.app.security.backgroundTimeouts) },
+            inactivityTimeoutMs = root.optLong("inactivityTimeoutMs", 60_000L).also { require(it in com.privatevault.app.security.inactivityTimeouts) },
+            masterPasswordIntervalMs = root.optLong("masterPasswordIntervalMs", 86_400_000L).also { require(it in com.privatevault.app.security.masterPasswordIntervals) },
             passkeys = (if (root.getInt("version") >= 5) root.getJSONArray("passkeys") else JSONArray()).mapJson {
                 com.privatevault.app.data.VaultPasskey(it.getString("id"), it.getString("rpId"), it.getString("userHandle"),
                     it.getString("username"), it.getString("displayName"), it.getString("privateKey"), it.getString("publicKey"), it.getLong("createdAt"))
@@ -318,6 +327,9 @@ data class BackupData(
     val nfcEnabled: Boolean = false,
     val passkeys: List<com.privatevault.app.data.VaultPasskey> = emptyList(),
     val vaultId: String = "",
+    val backgroundTimeoutMs: Long = 10_000L,
+    val inactivityTimeoutMs: Long = 60_000L,
+    val masterPasswordIntervalMs: Long = 86_400_000L,
 )
 
 class PreparedRestore internal constructor(val data: BackupData, private val files: List<String>, private val store: EncryptedPhotoStore) : AutoCloseable {

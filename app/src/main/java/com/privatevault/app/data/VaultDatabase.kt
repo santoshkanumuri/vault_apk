@@ -32,6 +32,9 @@ data class VaultSettings(
     val lightMode: Boolean = false,
     val nfcEnabled: Boolean = false,
     @androidx.room.ColumnInfo(defaultValue = "''") val vaultId: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "10000") val backgroundTimeoutMs: Long = 10_000L,
+    @androidx.room.ColumnInfo(defaultValue = "60000") val inactivityTimeoutMs: Long = 60_000L,
+    @androidx.room.ColumnInfo(defaultValue = "86400000") val masterPasswordIntervalMs: Long = 86_400_000L,
 )
 
 @Entity(tableName = "entries")
@@ -122,6 +125,7 @@ data class LoginImportResult(
 )
 
 data class PasskeyImportResult(val added: Int, val alreadySaved: Int)
+data class AuthenticatorImportResult(val added: Int, val alreadySaved: Int, val conflicts: Int)
 
 enum class LoginImportAction { ADD, SKIP_EXACT, KEEP_SAVED, USE_IMPORTED, SKIP_AMBIGUOUS }
 
@@ -156,6 +160,21 @@ interface VaultDao {
     @Query("SELECT * FROM entries ORDER BY updatedAt DESC")
     suspend fun allEntries(): List<EntryWithDetails>
 
+    @Transaction
+    suspend fun importAuthenticatorAccounts(accounts: List<com.privatevault.app.security.TotpSetup>): AuthenticatorImportResult {
+        val statuses = com.privatevault.app.security.authenticatorImportStatuses(allEntries().map { it.entry }, accounts)
+        accounts.zip(statuses).forEach { (account, status) ->
+            if (status == com.privatevault.app.security.AuthenticatorImportStatus.NEW) {
+                insertEntry(VaultEntry(type = EntryType.AUTHENTICATOR, title = account.issuer.ifBlank { account.account }, primaryValue = account.account,
+                    secondaryValue = com.privatevault.app.security.Totp.normalizeSecret(account.secret),
+                    totpAlgorithm = account.algorithm, totpDigits = account.digits, totpPeriod = account.period))
+            }
+        }
+        return AuthenticatorImportResult(statuses.count { it == com.privatevault.app.security.AuthenticatorImportStatus.NEW },
+            statuses.count { it == com.privatevault.app.security.AuthenticatorImportStatus.ALREADY_SAVED },
+            statuses.count { it == com.privatevault.app.security.AuthenticatorImportStatus.CONFLICT })
+    }
+
     @Query("SELECT * FROM entries WHERE type = 'AUTHENTICATOR' ORDER BY title COLLATE NOCASE, primaryValue COLLATE NOCASE")
     suspend fun authenticatorEntries(): List<VaultEntry>
 
@@ -169,6 +188,18 @@ interface VaultDao {
     suspend fun deleteEntryAndLinks(entry: VaultEntry) {
         clearAuthenticatorLinks(entry.id)
         deleteEntry(entry)
+    }
+
+    @Transaction
+    suspend fun deleteExactPasswordDuplicates(selectedIds: Set<String>): Int {
+        if (selectedIds.isEmpty()) return 0
+        val groups = com.privatevault.app.security.exactPasswordDuplicateGroups(allEntries())
+        val deletable = groups.flatMap { it.duplicates }.associateBy { it.entry.id }
+        require(selectedIds.all(deletable::containsKey)) {
+            "Passwords changed after review. Check for duplicates again."
+        }
+        selectedIds.forEach { deleteEntry(requireNotNull(deletable[it]).entry) }
+        return selectedIds.size
     }
 
     @Transaction
@@ -282,7 +313,7 @@ interface VaultDao {
             else -> storedOptions
         }
         if (storedOptions != options) saveSettings(options)
-        return com.privatevault.app.backup.BackupData(entries.map { it.entry }, allGroupsWithEntries().map { it.group }, allLinks(), entries.flatMap { it.photos }, options.lightMode, options.nfcEnabled, allPasskeys(), options.vaultId)
+        return com.privatevault.app.backup.BackupData(entries.map { it.entry }, allGroupsWithEntries().map { it.group }, allLinks(), entries.flatMap { it.photos }, options.lightMode, options.nfcEnabled, allPasskeys(), options.vaultId, options.backgroundTimeoutMs, options.inactivityTimeoutMs, options.masterPasswordIntervalMs)
     }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -440,7 +471,7 @@ class EntryTypeConverter {
     entities = [VaultEntry::class, VaultGroup::class, EntryGroupCrossRef::class, VaultPhoto::class, VaultSettings::class, VaultPasskey::class,
         SyncOperationEntity::class, SyncDeviceHeadEntity::class, SyncRecordStateEntity::class, SyncTombstoneEntity::class,
         SyncAttachmentManifestEntity::class, SyncConflictEntity::class, SyncPeerAcknowledgementEntity::class],
-    version = 12,
+    version = 13,
     exportSchema = false
 )
 @androidx.room.TypeConverters(EntryTypeConverter::class)
@@ -449,6 +480,13 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun syncDao(): SyncDao
 
     companion object {
+        internal val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vault_settings ADD COLUMN backgroundTimeoutMs INTEGER NOT NULL DEFAULT 10000")
+                db.execSQL("ALTER TABLE vault_settings ADD COLUMN inactivityTimeoutMs INTEGER NOT NULL DEFAULT 60000")
+                db.execSQL("ALTER TABLE vault_settings ADD COLUMN masterPasswordIntervalMs INTEGER NOT NULL DEFAULT 86400000")
+            }
+        }
         internal val MIGRATION_11_12 = object : Migration(11, 12) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE entries ADD COLUMN autofillOrigins TEXT NOT NULL DEFAULT ''")
@@ -532,7 +570,7 @@ abstract class VaultDatabase : RoomDatabase() {
             val factory = SupportOpenHelperFactory(key.copyOf())
             return Room.databaseBuilder(context, VaultDatabase::class.java, "vault.db")
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
                 .build()
         }
     }

@@ -125,9 +125,9 @@ class NativeAutofillTest {
                     putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
                 }))
                 click("Unlock")
-                waitNode("Authorized test login") { it.text?.toString() == "Authorized test login" }
-                assertNull(find { it.text?.toString() == "Unauthorized login" })
                 if (generatedFlow != null) {
+                    waitNode("Authorized test login") { it.text?.toString() == "Authorized test login" }
+                    assertNull(find { it.text?.toString() == "Unauthorized login" })
                     if (newAccount) {
                         click("Generate for a new account")
                         val username = waitNode("New account username") { it.isEditable && it.packageName?.toString() == context.packageName }
@@ -166,7 +166,15 @@ class NativeAutofillTest {
                     assertTrue("Generated password must be saved, not the current password", saved)
                     continue
                 }
-                click(if (otp) "Fill code" else "Fill login")
+                if (otp) {
+                    waitNode("Authorized test login") { it.text?.toString() == "Authorized test login" }
+                    assertNull(find { it.text?.toString() == "Unauthorized login" })
+                    click("Fill code")
+                } else {
+                    waitNode("Authenticated account suggestion") { it.text?.toString() == testUsername }
+                    assertNull(find { it.text?.toString() == "Unauthorized login" })
+                    click(testUsername)
+                }
                 val filled = waitNode("Filled field") {
                     (if (browser != null) it.viewIdResourceName == "username" else it.contentDescription?.toString() == (if (otp) "Test code" else "Test username")) && !it.text.isNullOrBlank() &&
                         it.text?.toString() != (if (otp) "Test code" else "Test username")
@@ -226,7 +234,8 @@ class NativeAutofillTest {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
                     }))
                     click("Unlock")
-                    click("Fill login")
+                    waitNode("Second-page account suggestion") { it.text?.toString() == testUsername }
+                    click(testUsername)
                     waitNode("Second page filled") { it.viewIdResourceName == "password" && it.text?.length == "test-password-123".length }
                 }
                 if (browser != null && InstrumentationRegistry.getArguments().getString("testBrowserSave") == "true") {

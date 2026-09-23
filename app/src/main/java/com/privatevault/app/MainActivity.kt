@@ -132,8 +132,8 @@ class MainActivity : FragmentActivity() {
                 }
             })
         val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Enable fingerprint for 24 hours")
-            .setSubtitle("Confirm once, then use fingerprint for the rest of the day")
+            .setTitle("Enable fingerprint unlock")
+            .setSubtitle("Confirm your fingerprint to protect the vault key")
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .setNegativeButtonText("Not now")
             .build()

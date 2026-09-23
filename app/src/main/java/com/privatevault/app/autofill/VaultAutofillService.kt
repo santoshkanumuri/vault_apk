@@ -110,11 +110,13 @@ class VaultAutofillService : AutofillService() {
             val token = PendingLoginFills.put(LoginFillRequest(destination, identity, fields.username, fields.password, fields.otp, SystemClock.elapsedRealtime() + 120_000, fields.origin, fields.newPasswords))
             cancellationSignal.setOnCancelListener { PendingLoginFills.remove(token) }
             val intent = Intent(this, VaultCodesActivity::class.java).setAction("vault.autofill.$token").putExtra("login_fill_token", token)
-            val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE)
+            val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE)
             val sender = pendingIntent.intentSender
             val presentation = RemoteViews(packageName, com.privatevault.app.R.layout.autofill_suggestion)
+            presentation.setContentDescription(com.privatevault.app.R.id.autofill_suggestion_root,
+                "Unlock Nuvori to choose a login")
             val dataset = Dataset.Builder(presentation).setAuthentication(sender)
-            val inline = if (android.os.Build.VERSION.SDK_INT >= 30 && resources.configuration.screenHeightDp >= 600) runCatching {
+            val inline = if (android.os.Build.VERSION.SDK_INT >= 30) runCatching {
                 request.inlineSuggestionsRequest?.takeIf { it.maxSuggestionCount > 0 }?.inlinePresentationSpecs?.firstOrNull {
                     androidx.autofill.inline.UiVersions.getVersions(it.style).contains(androidx.autofill.inline.UiVersions.INLINE_UI_VERSION_1)
                 }?.let { spec ->

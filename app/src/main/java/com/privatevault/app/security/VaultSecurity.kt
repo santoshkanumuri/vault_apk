@@ -113,11 +113,19 @@ class VaultKeyManager(context: Context) {
 class BiometricGate(context: Context) {
     private val alias = "private_vault_daily_gate"
     private val prefs = context.getSharedPreferences("vault_biometric_session", Context.MODE_PRIVATE)
+    private val resolver = context.contentResolver
+    private fun bootCount(): Int = android.provider.Settings.Global.getInt(resolver, android.provider.Settings.Global.BOOT_COUNT, -1)
 
     val hasValidDailySession: Boolean
         get() {
-            val valid = prefs.getInt("format", 0) == 2 && prefs.contains("wrapped_key") && prefs.getLong("expires_at", 0) > System.currentTimeMillis()
+            val nowWall = System.currentTimeMillis()
+            val valid = prefs.getInt("format", 0) == 3 && prefs.contains("wrapped_key") && biometricSessionValid(
+                nowWall, android.os.SystemClock.elapsedRealtime(), bootCount(),
+                prefs.getLong("created_wall", 0), prefs.getLong("created_elapsed", -1), prefs.getInt("boot_count", -1),
+                prefs.getLong("last_seen_wall", 0), prefs.getLong("duration", 0)
+            )
             if (!valid) clearDailySession()
+            else prefs.edit(commit = true) { putLong("last_seen_wall", nowWall) }
             return valid
         }
 
@@ -126,12 +134,20 @@ class BiometricGate(context: Context) {
         return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
     }
 
-    fun enableDailySession(cipher: Cipher, vaultKey: ByteArray) {
+    fun enableDailySession(cipher: Cipher, vaultKey: ByteArray, duration: Long) {
+        require(duration in masterPasswordIntervals && duration > 0)
+        val boot = bootCount()
+        check(boot >= 0) { "Cannot verify device reboot" }
+        val nowWall = System.currentTimeMillis()
         prefs.edit(commit = true) {
             putString("wrapped_key", android.util.Base64.encodeToString(cipher.doFinal(vaultKey), android.util.Base64.NO_WRAP))
             putString("nonce", android.util.Base64.encodeToString(cipher.iv, android.util.Base64.NO_WRAP))
-            putLong("expires_at", System.currentTimeMillis() + DAILY_SESSION_MILLIS)
-            putInt("format", 2)
+            putLong("created_wall", nowWall)
+            putLong("last_seen_wall", nowWall)
+            putLong("created_elapsed", android.os.SystemClock.elapsedRealtime())
+            putInt("boot_count", boot)
+            putLong("duration", duration)
+            putInt("format", 3)
         }
     }
 
@@ -177,7 +193,6 @@ class BiometricGate(context: Context) {
         return generator.generateKey()
     }
 
-    private companion object { const val DAILY_SESSION_MILLIS = 24L * 60 * 60 * 1000 }
 }
 
 class BiometricActionGate {

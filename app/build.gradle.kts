@@ -19,8 +19,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 29
         targetSdk = 36
-        versionCode = 35
-        versionName = "1.9.9"
+        versionCode = 36
+        versionName = "1.9.10-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -83,6 +83,7 @@ dependencies {
     // This SQLCipher Android line supports 16 KB memory pages; verify native alignment on release.
     implementation("net.zetetic:sqlcipher-android:4.6.1@aar")
     implementation("org.bouncycastle:bcprov-jdk18on:1.77")
+    implementation("com.google.protobuf:protobuf-java:3.25.5")
     implementation("com.google.crypto.tink:tink-android:1.23.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.github.devnied.emvnfccard:library:3.2.0")

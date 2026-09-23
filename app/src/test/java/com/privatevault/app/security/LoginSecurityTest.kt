@@ -49,4 +49,20 @@ class LoginSecurityTest {
         assertTrue(trustedFillFocus(hasWindowFocus = false, confirmedDialogAction = false, generatedPassword = true))
         assertFalse(trustedFillFocus(hasWindowFocus = false, confirmedDialogAction = false, generatedPassword = false))
     }
+
+    @Test fun authenticatedSuggestionsContainOnlyAuthorizedAccountsAndNeverLabelWithThePassword() {
+        val identity = "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83"
+        val authorized = VaultEntry(type = EntryType.PASSWORD, title = "Bank", primaryValue = "person@example.com",
+            secondaryValue = "do-not-show-this", tertiaryValue = "https://bank.example/login", favorite = true)
+        val unrelated = authorized.copy(id = "unrelated", title = "Other", tertiaryValue = "https://other.example")
+
+        val suggestions = authorizedPasswordSuggestions(
+            listOf(unrelated, authorized), "com.android.chrome", identity, "https://bank.example")
+        val label = loginSuggestionLabel(suggestions.single())
+
+        assertEquals("person@example.com", label.title)
+        assertTrue(label.subtitle.contains("••••••••"))
+        assertTrue(label.contentDescription.contains("Password hidden"))
+        assertFalse(listOf(label.title, label.subtitle, label.contentDescription).any { it.contains("do-not-show-this") })
+    }
 }

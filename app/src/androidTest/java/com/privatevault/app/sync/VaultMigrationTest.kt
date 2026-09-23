@@ -29,6 +29,7 @@ class VaultMigrationTest {
             database.execSQL("CREATE TABLE photos (id TEXT NOT NULL, entryId TEXT NOT NULL, encryptedFileName TEXT NOT NULL, encryptedThumbnailFileName TEXT NOT NULL, isCover INTEGER NOT NULL, addedAt INTEGER NOT NULL, PRIMARY KEY(id), FOREIGN KEY(entryId) REFERENCES entries(id) ON UPDATE NO ACTION ON DELETE CASCADE)")
             database.execSQL("CREATE INDEX index_photos_entryId ON photos (entryId)")
             database.execSQL("CREATE TABLE vault_settings (id INTEGER NOT NULL, lightMode INTEGER NOT NULL, nfcEnabled INTEGER NOT NULL, PRIMARY KEY(id))")
+            database.execSQL("INSERT INTO vault_settings VALUES (1, 0, 0)")
             database.execSQL("CREATE TABLE passkeys (id TEXT NOT NULL, rpId TEXT NOT NULL, userHandle TEXT NOT NULL, username TEXT NOT NULL, displayName TEXT NOT NULL, privateKey TEXT NOT NULL, publicKey TEXT NOT NULL, createdAt INTEGER NOT NULL, PRIMARY KEY(id))")
             database.execSQL("INSERT INTO entries VALUES ('entry-before-migration', 'NOTE', 'Preserved', '', '', '', '', 'CREDIT', '', 'SHA1', 6, 30, '', '', '', '', 0, '', 0, 0, 0, 1, 1)")
             database.version = 9
@@ -42,14 +43,17 @@ class VaultMigrationTest {
     }
 
     @Test
-    fun migratesVersionNineToTwelveAndPreservesVaultData() = runBlocking {
+    fun migratesVersionNineToThirteenAndPreservesVaultData() = runBlocking {
         val database = Room.databaseBuilder(context, VaultDatabase::class.java, databaseName)
-            .addMigrations(VaultDatabase.MIGRATION_9_10, VaultDatabase.MIGRATION_10_11, VaultDatabase.MIGRATION_11_12)
+            .addMigrations(VaultDatabase.MIGRATION_9_10, VaultDatabase.MIGRATION_10_11, VaultDatabase.MIGRATION_11_12, VaultDatabase.MIGRATION_12_13)
             .allowMainThreadQueries()
             .build()
         migrated = database
 
         assertEquals("Preserved", database.dao().entry("entry-before-migration")?.entry?.title)
         assertTrue(database.syncDao().operations().isEmpty())
+        assertEquals(10_000L, database.dao().settings()?.backgroundTimeoutMs)
+        assertEquals(60_000L, database.dao().settings()?.inactivityTimeoutMs)
+        assertEquals(86_400_000L, database.dao().settings()?.masterPasswordIntervalMs)
     }
 }

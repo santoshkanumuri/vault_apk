@@ -25,6 +25,26 @@ internal fun loginAuthorizedForDestination(entry: VaultEntry, packageName: Strin
         httpsOrigin(origin) == origin && (httpsOrigin(entry.tertiaryValue) == origin ||
             entry.autofillOrigins.lineSequence().any { it == origin })
 
+internal fun authorizedPasswordSuggestions(
+    entries: List<VaultEntry>,
+    packageName: String,
+    identity: String,
+    origin: String?,
+): List<VaultEntry> = entries
+    .filter { it.type == EntryType.PASSWORD && it.secondaryValue.isNotEmpty() &&
+        loginAuthorizedForDestination(it, packageName, identity, origin) }
+    .sortedWith(compareByDescending<VaultEntry> { it.favorite }
+        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.primaryValue })
+
+internal data class LoginSuggestionLabel(val title: String, val subtitle: String, val contentDescription: String)
+
+internal fun loginSuggestionLabel(entry: VaultEntry): LoginSuggestionLabel {
+    require(entry.type == EntryType.PASSWORD && entry.secondaryValue.isNotEmpty())
+    val account = entry.primaryValue.ifBlank { entry.title }
+    return LoginSuggestionLabel(account, "•••••••• · ${entry.title}", "Fill $account from Nuvori. Password hidden.")
+}
+
 internal fun trustedFillFocus(hasWindowFocus: Boolean, confirmedDialogAction: Boolean, generatedPassword: Boolean): Boolean =
     hasWindowFocus || confirmedDialogAction || generatedPassword
 

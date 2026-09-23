@@ -171,13 +171,17 @@ private fun readPasswordCsv(text: String, mapping: PasswordColumnMapping?): List
         val typeHeader = if (matchedProfile?.provider == "Bitwarden") header("type") else null
         val entries = mutableListOf<VaultEntry>()
         for (row in csv) {
-            if (row.size() > csv.headerNames.size || !row.isSet(urlHeader) || !row.isSet(usernameHeader) || !row.isSet(passwordHeader)) {
+            val hasUnexpectedValue = (csv.headerNames.size until row.size()).any { row.get(it).isNotEmpty() }
+            if (hasUnexpectedValue) {
                 throw PasswordImportFormatException("A CSV row does not match the header columns. Export the file again without editing it in a spreadsheet.")
             }
             if (typeHeader != null && !row.get(typeHeader).equals("login", true)) continue
-            val url = row.get(urlHeader)
-            val password = row.get(passwordHeader)
+            val password = passwordHeader.takeIf(row::isSet)?.let(row::get).orEmpty()
             if (password.isEmpty()) continue
+            if (!row.isSet(urlHeader) || !row.isSet(usernameHeader)) {
+                throw PasswordImportFormatException("A CSV row does not match the header columns. Export the file again without editing it in a spreadsheet.")
+            }
+            val url = row.get(urlHeader)
             require(entries.size < 5000)
             val title = titleHeader?.takeIf(row::isSet)?.let(row::get).orEmpty().ifBlank { url.ifBlank { "Imported login" } }
             entries += VaultEntry(type = EntryType.PASSWORD, title = title,

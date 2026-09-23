@@ -27,7 +27,7 @@ import kotlinx.coroutines.launch
 import javax.crypto.Cipher
 import java.util.UUID
 
-enum class LockReason { STARTUP, BACKGROUND, INACTIVITY, SCREEN_OFF }
+enum class LockReason { STARTUP, BACKGROUND, INACTIVITY, SCREEN_OFF, MANUAL }
 
 sealed interface VaultStatus {
     data object NeedsSetup : VaultStatus
@@ -72,6 +72,13 @@ data class PasswordImportPreview(
     val ambiguousCount: Int
 )
 
+internal data class PasswordDuplicateReview(
+    val groups: List<com.privatevault.app.security.ExactPasswordDuplicateGroup>,
+    val selectedIds: Set<String> = emptySet()
+) {
+    val duplicateCount: Int get() = groups.sumOf { it.duplicates.size }
+}
+
 enum class PasskeyTransferStatus { NEW, ALREADY_SAVED, CONFLICT }
 
 data class PasskeyTransferItem(
@@ -107,6 +114,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val importPreview = _importPreview.asStateFlow()
     private val _importMapping = MutableStateFlow<PasswordImportMappingRequest?>(null)
     internal val importMapping = _importMapping.asStateFlow()
+    private val _passwordDuplicateReview = MutableStateFlow<PasswordDuplicateReview?>(null)
+    internal val passwordDuplicateReview = _passwordDuplicateReview.asStateFlow()
     private var pendingTransferredPasskeys = emptyList<com.privatevault.app.data.VaultPasskey>()
     private val _passkeyTransferPreview = MutableStateFlow<PasskeyTransferPreview?>(null)
     val passkeyTransferPreview = _passkeyTransferPreview.asStateFlow()
@@ -116,6 +125,41 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         pendingPasswordImportUri = null
         _importPreview.value = null
         _importMapping.value = null
+    }
+
+    internal fun checkPasswordDuplicates() = securedLaunch {
+        val groups = com.privatevault.app.security.exactPasswordDuplicateGroups(dao().allEntries())
+        if (groups.isEmpty()) {
+            _passwordDuplicateReview.value = null
+            _message.value = "No exact password duplicates found."
+        } else {
+            _passwordDuplicateReview.value = PasswordDuplicateReview(groups)
+        }
+    }
+
+    internal fun setPasswordDuplicateSelected(id: String, selected: Boolean) {
+        val review = _passwordDuplicateReview.value ?: return
+        if (review.groups.none { group -> group.duplicates.any { it.entry.id == id } }) return
+        _passwordDuplicateReview.value = review.copy(selectedIds = if (selected) review.selectedIds + id else review.selectedIds - id)
+    }
+
+    internal fun setAllPasswordDuplicatesSelected(selected: Boolean) {
+        val review = _passwordDuplicateReview.value ?: return
+        val ids = review.groups.flatMap { it.duplicates }.mapTo(linkedSetOf()) { it.entry.id }
+        _passwordDuplicateReview.value = review.copy(selectedIds = if (selected) ids else emptySet())
+    }
+
+    internal fun cancelPasswordDuplicateReview() {
+        _passwordDuplicateReview.value = null
+    }
+
+    internal fun deleteSelectedPasswordDuplicates() = securedLaunch {
+        val selectedIds = _passwordDuplicateReview.value?.selectedIds.orEmpty()
+        require(selectedIds.isNotEmpty()) { "Select at least one duplicate." }
+        val deleted = dao().deleteExactPasswordDuplicates(selectedIds)
+        cancelPasswordDuplicateReview()
+        refresh()
+        _message.value = "Deleted $deleted exact password ${if (deleted == 1) "duplicate" else "duplicates"}."
     }
 
     fun cancelCredentialTransfer() {
@@ -303,7 +347,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private var backgroundJob: Job? = null
     private var backgroundDeadline: Long? = null
     private var inactivityDeadline = 0L
+    private var lastActivityElapsed = 0L
+    private val _securitySettings = MutableStateFlow(com.privatevault.app.data.VaultSettings())
+    val securitySettings = _securitySettings.asStateFlow()
     @Volatile private var backgrounded = false
+    private var externalReturnPending = false
 
     private val _status = MutableStateFlow<VaultStatus>(
         if (keyManager.isInitialized) VaultStatus.Locked(LockReason.STARTUP, biometricGate.hasValidDailySession) else VaultStatus.NeedsSetup
@@ -361,6 +409,35 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setBackgroundTimeout(value: Long) = updateSecuritySettings(value, null, null)
+    fun setInactivityTimeout(value: Long) = updateSecuritySettings(null, value, null)
+    fun setMasterPasswordInterval(value: Long) = updateSecuritySettings(null, null, value)
+
+    private fun updateSecuritySettings(background: Long?, inactivity: Long?, master: Long?) {
+        if (background != null) require(background in com.privatevault.app.security.backgroundTimeouts)
+        if (inactivity != null) require(inactivity in com.privatevault.app.security.inactivityTimeouts)
+        if (master != null) require(master in com.privatevault.app.security.masterPasswordIntervals)
+        val db = database ?: return
+        if (master != null && master != _securitySettings.value.masterPasswordIntervalMs) {
+            biometricGate.clearDailySession()
+            _requestDailyBiometric.value = false
+        }
+        viewModelScope.launch {
+            runCatching {
+                val current = db.dao().settings() ?: return@runCatching
+                val updated = current.copy(
+                    backgroundTimeoutMs = background ?: current.backgroundTimeoutMs,
+                    inactivityTimeoutMs = inactivity ?: current.inactivityTimeoutMs,
+                    masterPasswordIntervalMs = master ?: current.masterPasswordIntervalMs
+                )
+                db.dao().saveSettings(updated)
+                if (database !== db || _status.value !is VaultStatus.Unlocked) return@runCatching
+                _securitySettings.value = updated
+                if (inactivity != null) scheduleInactivity()
+            }.onFailure { _message.value = "Could not save security settings." }
+        }
+    }
+
     fun requestNfcScan() {
         if (_nfcEnabled.value && nfcSupported && _status.value is VaultStatus.Unlocked && !backgrounded) {
             touch()
@@ -385,7 +462,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             .onSuccess {
                 open(it)
                 setNfcEnabled(enableNfc)
-                _requestDailyBiometric.value = true
+                _requestDailyBiometric.value = _securitySettings.value.masterPasswordIntervalMs > 0
             }
             .onFailure { _message.value = it.userMessage("Could not create the vault") }
         password.fill('\u0000')
@@ -395,7 +472,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { keyManager.unlock(password) }
             .onSuccess {
                 open(it)
-                _requestDailyBiometric.value = true
+                _requestDailyBiometric.value = _securitySettings.value.masterPasswordIntervalMs > 0
             }
             .onFailure { _message.value = "The master password is incorrect." }
         password.fill('\u0000')
@@ -432,6 +509,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             preferences.edit().putBoolean("light_mode", _lightMode.value).putBoolean("nfc_enabled", _nfcEnabled.value).commit()
         }
         if (storedOptions != options) dao().saveSettings(options.copy(lightMode = _lightMode.value, nfcEnabled = _nfcEnabled.value))
+        _securitySettings.value = options
         _status.value = VaultStatus.Unlocked
         refresh()
         val retained = _entries.value.flatMap { it.photos }.flatMap { listOf(it.encryptedFileName, it.encryptedThumbnailFileName) }.toSet()
@@ -445,8 +523,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun enableDailyBiometric(cipher: Cipher) {
         val key = sessionKey ?: return
-        runCatching { biometricGate.enableDailySession(cipher, key) }
-            .onSuccess { _requestDailyBiometric.value = false; _message.value = "Fingerprint enabled for 24 hours." }
+        val interval = _securitySettings.value.masterPasswordIntervalMs
+        if (interval == 0L) { _requestDailyBiometric.value = false; return }
+        runCatching { biometricGate.enableDailySession(cipher, key, interval) }
+            .onSuccess { _requestDailyBiometric.value = false; _message.value = "Fingerprint enabled for the selected interval." }
             .onFailure { biometricGate.clearDailySession(); _requestDailyBiometric.value = false; _message.value = "Could not enable fingerprint. Use the master password next time." }
     }
 
@@ -454,11 +534,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun lock(reason: LockReason) {
         cancelPasswordImport()
+        cancelPasswordDuplicateReview()
         cancelCredentialTransfer()
         cancelRestore()
         clearCamera()
         cancelNfcScan()
         externalFlowActive = false
+        externalReturnPending = false
         backgroundJob?.cancel()
         backgroundDeadline = null
         if (_status.value !is VaultStatus.Unlocked) return
@@ -475,11 +557,24 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun touch() {
-        if (_status.value !is VaultStatus.Unlocked || backgrounded) return
+        if (_status.value !is VaultStatus.Unlocked || backgrounded || externalReturnPending || externalFlowActive) return
+        lastActivityElapsed = android.os.SystemClock.elapsedRealtime()
+        scheduleInactivity()
+    }
+
+    fun touchFromUser() {
+        externalReturnPending = false
+        touch()
+    }
+
+    private fun scheduleInactivity() {
+        if (_status.value !is VaultStatus.Unlocked) return
         inactivityJob?.cancel()
-        inactivityDeadline = android.os.SystemClock.elapsedRealtime() + 60_000L
+        inactivityDeadline = lastActivityElapsed + _securitySettings.value.inactivityTimeoutMs
+        val remaining = inactivityDeadline - android.os.SystemClock.elapsedRealtime()
+        if (remaining <= 0) { lock(LockReason.INACTIVITY); return }
         inactivityJob = viewModelScope.launch {
-            delay(60_000)
+            delay(remaining)
             lock(LockReason.INACTIVITY)
         }
     }
@@ -488,9 +583,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         backgrounded = true
         if (_status.value !is VaultStatus.Unlocked) return
         val now = android.os.SystemClock.elapsedRealtime()
-        val deadline = com.privatevault.app.security.backgroundLockDeadline(now, inactivityDeadline, externalFlowActive)
+        if (externalFlowActive) externalReturnPending = true
+        val deadline = com.privatevault.app.security.backgroundLockDeadline(now, inactivityDeadline, externalFlowActive, _securitySettings.value.backgroundTimeoutMs)
         externalFlowActive = false
         backgroundDeadline = deadline
+        if (deadline <= now) { lock(LockReason.BACKGROUND); return }
         backgroundJob?.cancel()
         backgroundJob = viewModelScope.launch {
             delay((deadline - now).coerceAtLeast(0L))
@@ -500,12 +597,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onAppForegrounded() {
         val now = android.os.SystemClock.elapsedRealtime()
-        // Check elapsed time before extending inactivity; Android may delay background jobs.
+        if (_status.value is VaultStatus.Unlocked && now >= inactivityDeadline) lock(LockReason.INACTIVITY)
         if (backgroundDeadline?.let { now >= it } == true) lock(LockReason.BACKGROUND)
         backgroundJob?.cancel()
         backgroundDeadline = null
         backgrounded = false
-        touch()
+        if (_status.value is VaultStatus.Unlocked) scheduleInactivity()
         val activeDatabase = database
         if (activeDatabase != null && _status.value is VaultStatus.Unlocked) viewModelScope.launch {
             // Autofill's separate authenticated activity can save while this screen is away.
@@ -521,6 +618,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
         saveLocalEntry(entry, groupIds)
         refresh()
+    }
+
+    fun importAuthenticatorAccounts(accounts: List<com.privatevault.app.security.TotpSetup>) = securedLaunch {
+        require(accounts.isNotEmpty() && accounts.size <= 100)
+        val result = dao().importAuthenticatorAccounts(accounts)
+        refresh()
+        _message.value = "Imported ${result.added} authenticator ${if (result.added == 1) "account" else "accounts"}. ${result.alreadySaved} already saved. ${result.conflicts} conflicts skipped."
     }
 
     fun refreshPasskeys() = securedLaunch { _passkeys.value = dao().passkeySummaries() }
@@ -685,6 +789,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         VaultBackupManager(getApplication(), dao(), photoStore).commitRestore(prepared)
         _lightMode.value = prepared.data.lightMode
         _nfcEnabled.value = prepared.data.nfcEnabled && nfcSupported
+        _securitySettings.value = (dao().settings() ?: com.privatevault.app.data.VaultSettings())
         preferences.edit().putBoolean("light_mode", _lightMode.value).putBoolean("nfc_enabled", _nfcEnabled.value).commit()
         biometricGate.clearDailySession()
         cancelRestore()
@@ -717,6 +822,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         cancelPasswordImport()
+        cancelPasswordDuplicateReview()
         cancelRestore()
         clearCamera()
         database?.close()

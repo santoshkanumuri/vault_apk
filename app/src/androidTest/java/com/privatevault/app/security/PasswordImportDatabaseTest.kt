@@ -12,6 +12,8 @@ import com.privatevault.app.data.VaultEntry
 import com.privatevault.app.data.VaultGroup
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -98,6 +100,35 @@ class PasswordImportDatabaseTest {
         assertTrue(runCatching { database.dao().importLogins(listOf(
             LoginImportRequest(incoming, LoginImportAction.USE_IMPORTED, matches))) }.isFailure)
         assertEquals(beforeUnsafeAttempt, database.dao().backupSnapshot())
+    }
+
+    @Test fun exactDuplicateCleanupKeepsTheOldestCopy() = withDatabase { database ->
+        val folder = VaultGroup(id = "finance", name = "Finance", folderType = EntryType.PASSWORD)
+        database.dao().insertGroup(folder)
+        val keeper = VaultEntry(id = "keeper", type = EntryType.PASSWORD, title = "Bank", primaryValue = "user",
+            secondaryValue = "secret", tertiaryValue = "https://bank.example", notes = "Personal",
+            createdAt = 10, updatedAt = 20, sortOrder = 30)
+        val duplicate = keeper.copy(id = "duplicate", createdAt = 40, updatedAt = 50, sortOrder = 60)
+        database.dao().saveEntryExact(keeper, setOf(folder.id))
+        database.dao().saveEntryExact(duplicate, setOf(folder.id))
+
+        assertEquals(1, database.dao().deleteExactPasswordDuplicates(setOf(duplicate.id)))
+
+        assertNotNull(database.dao().entry(keeper.id))
+        assertNull(database.dao().entry(duplicate.id))
+    }
+
+    @Test fun exactDuplicateCleanupRejectsAStaleReview() = withDatabase { database ->
+        val keeper = VaultEntry(id = "keeper", type = EntryType.PASSWORD, title = "Bank", primaryValue = "user",
+            secondaryValue = "secret", tertiaryValue = "https://bank.example", createdAt = 10)
+        val duplicate = keeper.copy(id = "duplicate", createdAt = 20)
+        database.dao().insertEntry(keeper)
+        database.dao().insertEntry(duplicate)
+        database.dao().updateEntry(duplicate.copy(notes = "Changed after review"))
+
+        assertTrue(runCatching { database.dao().deleteExactPasswordDuplicates(setOf(duplicate.id)) }.isFailure)
+        assertNotNull(database.dao().entry(keeper.id))
+        assertNotNull(database.dao().entry(duplicate.id))
     }
 
     private fun withDatabase(block: suspend (VaultDatabase) -> Unit) = runBlocking {

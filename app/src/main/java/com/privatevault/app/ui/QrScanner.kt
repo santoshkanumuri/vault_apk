@@ -1,6 +1,9 @@
 package com.privatevault.app
 
 import android.graphics.Bitmap
+import android.content.Context
+import android.net.Uri
+import com.privatevault.app.security.decodePhoto
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -42,8 +45,30 @@ internal fun readQr(bitmap: Bitmap): String? {
     } finally { pixels.fill(0) }
 }
 
+internal suspend fun readQrImage(context: Context, uri: Uri): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    val bytes = context.contentResolver.openInputStream(uri)!!.use { input ->
+        val output = java.io.ByteArrayOutputStream()
+        val chunk = ByteArray(8192)
+        try {
+            while (true) {
+                val count = input.read(chunk)
+                if (count < 0) break
+                require(output.size() + count <= 20 * 1024 * 1024)
+                output.write(chunk, 0, count)
+            }
+            output.toByteArray()
+        } finally { chunk.fill(0) }
+    }
+    try {
+        val bitmap = decodePhoto(bytes, 2048)
+        try { readQr(bitmap) ?: error("No QR") } finally { bitmap.recycle() }
+    } finally { bytes.fill(0) }
+}
+
 @Composable
-internal fun QrScanner(onResult: (String) -> Unit, close: () -> Unit) {
+internal fun QrScanner(onResult: (String) -> Unit, close: () -> Unit,
+                       title: String = "Scan authenticator setup QR",
+                       help: String = "Only standard TOTP setup codes are supported. No camera images are saved.") {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val result by rememberUpdatedState(onResult)
@@ -93,8 +118,8 @@ internal fun QrScanner(onResult: (String) -> Unit, close: () -> Unit) {
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn)) {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
-                Text("Scan authenticator setup QR", style = MaterialTheme.typography.titleLarge)
-                Text("Only standard TOTP setup codes are supported. No camera images are saved.")
+                Text(title, style = MaterialTheme.typography.titleLarge)
+                Text(help)
                 AndroidView(factory = { previewView }, modifier = Modifier.weight(1f).fillMaxWidth())
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 TextButton(onClick = close, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Cancel") }

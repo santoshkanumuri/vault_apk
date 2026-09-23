@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -41,7 +42,9 @@ import com.privatevault.app.security.VaultKeyManager
 import com.privatevault.app.security.recentCodeApp
 import com.privatevault.app.security.matchingCodeEntries
 import com.privatevault.app.security.appSigningIdentity
+import com.privatevault.app.security.authorizedPasswordSuggestions
 import com.privatevault.app.security.loginAuthorizedForDestination
+import com.privatevault.app.security.loginSuggestionLabel
 import com.privatevault.app.autofill.LoginFillRequest
 import com.privatevault.app.autofill.PendingLoginFills
 import com.privatevault.app.autofill.PendingLoginSaves
@@ -52,6 +55,8 @@ import com.privatevault.app.data.EntryType
 import android.view.autofill.AutofillManager
 import android.view.autofill.AutofillValue
 import android.service.autofill.Dataset
+import android.service.autofill.FillResponse
+import android.service.autofill.InlinePresentation
 import android.widget.RemoteViews
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +95,7 @@ class VaultCodesActivity : FragmentActivity() {
     private var autofillMode = false
     private val handler = Handler(Looper.getMainLooper())
     private val timeout = Runnable { dismissPicker() }
+    private var inactivityTimeoutMs = 60_000L
     private val screenOff = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) = dismissPicker()
     }
@@ -187,26 +193,31 @@ class VaultCodesActivity : FragmentActivity() {
                 } else {
                     // Keep ownership here so cancellation during derivation still wipes the key.
                     withContext(Dispatchers.IO) { key = keyManager.unlock(password) }
-                    if (biometricAvailable()) {
-                        try {
-                            val cipher = confirm(gate.dailyEncryptionCipher(), "Enable fingerprint for 24 hours")
-                            gate.enableDailySession(cipher, requireNotNull(key))
-                        } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { /* Password authentication still permits this visit. */ }
-                    }
                 }
                 var loadedPasskeys = emptyList<com.privatevault.app.data.VaultPasskey>()
+                var masterInterval = 86_400_000L
                 val loaded = withContext(Dispatchers.IO) {
                     val database = VaultDatabase.open(applicationContext, requireNotNull(key))
                     try {
+                        val settings = database.dao().settings()
+                        masterInterval = settings?.masterPasswordIntervalMs ?: 86_400_000L
+                        inactivityTimeoutMs = settings?.inactivityTimeoutMs ?: 60_000L
                         if (passkeyOperation != null) { loadedPasskeys = database.dao().allPasskeys(); emptyList() }
                         else if (autofillMode) database.dao().loginAndCodeEntries() else database.dao().authenticatorEntries()
                     } finally { database.close() }
+                }
+                if (password != null && masterInterval > 0 && biometricAvailable()) {
+                    try {
+                        val cipher = confirm(gate.dailyEncryptionCipher(), "Enable fingerprint unlock")
+                        gate.enableDailySession(cipher, requireNotNull(key), masterInterval)
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { /* Password authentication still permits this visit. */ }
                 }
                 if (pickerVisible) {
                     if (autofillMode || passkeyOperation != null) saveKey = requireNotNull(key).copyOf()
                     passkeys = loadedPasskeys
                     entries = loaded; unlocked = true; onUserInteraction()
+                    if (returnAuthenticatedPasswordSuggestions()) return@launch
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {
@@ -272,6 +283,108 @@ class VaultCodesActivity : FragmentActivity() {
     private fun fillDestination(request: LoginFillRequest): String = request.origin ?: runCatching {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(request.packageName, 0)).toString()
     }.getOrDefault(request.packageName)
+
+    private fun accountPresentation(entry: VaultEntry): RemoteViews {
+        val label = loginSuggestionLabel(entry)
+        return RemoteViews(packageName, R.layout.autofill_suggestion).apply {
+            setTextViewText(R.id.autofill_suggestion_title, label.title)
+            setTextViewText(R.id.autofill_suggestion_subtitle, label.subtitle)
+            setContentDescription(R.id.autofill_suggestion_root, label.contentDescription)
+        }
+    }
+
+    private fun autofillAttributionIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        Intent(this, MainActivity::class.java).setAction("vault.autofill.attribution"),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    @androidx.annotation.RequiresApi(31)
+    @Suppress("DEPRECATION")
+    private fun authenticationInlineSpec(): android.widget.inline.InlinePresentationSpec? {
+        val request = if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(
+                AutofillManager.EXTRA_INLINE_SUGGESTIONS_REQUEST,
+                android.view.inputmethod.InlineSuggestionsRequest::class.java,
+            )
+        } else {
+            intent.getParcelableExtra(AutofillManager.EXTRA_INLINE_SUGGESTIONS_REQUEST)
+        }
+        return request?.inlinePresentationSpecs?.firstOrNull {
+            androidx.autofill.inline.UiVersions.getVersions(it.style)
+                .contains(androidx.autofill.inline.UiVersions.INLINE_UI_VERSION_1)
+        }
+    }
+
+    @androidx.annotation.RequiresApi(31)
+    @android.annotation.SuppressLint("RestrictedApi")
+    private fun accountInlinePresentation(
+        entry: VaultEntry,
+        spec: android.widget.inline.InlinePresentationSpec,
+    ): InlinePresentation {
+        val label = loginSuggestionLabel(entry)
+        val content = androidx.autofill.inline.v1.InlineSuggestionUi
+            .newContentBuilder(autofillAttributionIntent())
+            .setTitle(label.title)
+            .setSubtitle("\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022")
+            .setStartIcon(android.graphics.drawable.Icon.createWithResource(this, R.mipmap.ic_launcher))
+            .setContentDescription(label.contentDescription)
+            .build()
+        return InlinePresentation(content.slice, spec, false)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun returnAuthenticatedPasswordSuggestions(): Boolean {
+        val request = loginFill ?: return false
+        if (passwordCredentialOperation != null || request.otp != null || request.newPasswords.isNotEmpty() ||
+            (request.username == null && request.password == null)) return false
+        if (request.expiresAt <= android.os.SystemClock.elapsedRealtime() ||
+            appSigningIdentity(this, request.packageName) != request.identity ||
+            (request.origin != null && !trustedBrowser(request.packageName, request.identity))) {
+            dismissPicker()
+            return true
+        }
+        val matches = authorizedPasswordSuggestions(
+            entries,
+            request.packageName,
+            request.identity,
+            request.origin,
+        )
+        if (matches.isEmpty()) return false
+        val response = runCatching {
+            val inlineSpec = if (Build.VERSION.SDK_INT >= 31) authenticationInlineSpec() else null
+            FillResponse.Builder().apply {
+                matches.forEach { entry ->
+                    val presentation = accountPresentation(entry)
+                    val inline = if (Build.VERSION.SDK_INT >= 31 && inlineSpec != null) {
+                        accountInlinePresentation(entry, inlineSpec)
+                    } else null
+                    val dataset = Dataset.Builder(presentation).setId(entry.id)
+                    request.username?.let {
+                        if (Build.VERSION.SDK_INT >= 30 && inline != null) {
+                            dataset.setValue(it, AutofillValue.forText(entry.primaryValue), presentation, inline)
+                        } else dataset.setValue(it, AutofillValue.forText(entry.primaryValue))
+                    }
+                    request.password?.let {
+                        if (Build.VERSION.SDK_INT >= 30 && inline != null) {
+                            dataset.setValue(it, AutofillValue.forText(entry.secondaryValue), presentation, inline)
+                        } else dataset.setValue(it, AutofillValue.forText(entry.secondaryValue))
+                    }
+                    addDataset(dataset.build())
+                }
+            }.build()
+        }.getOrElse {
+            message = "Could not show saved accounts. Search the vault to fill manually."
+            return false
+        }
+        setResult(
+            RESULT_OK,
+            Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, response),
+        )
+        dismissPicker()
+        return true
+    }
 
     private fun linkAndFill(entry: VaultEntry) {
         val request = loginFill ?: return
@@ -483,7 +596,7 @@ class VaultCodesActivity : FragmentActivity() {
     override fun onUserInteraction() {
         super.onUserInteraction()
         handler.removeCallbacks(timeout)
-        handler.postDelayed(timeout, 60_000)
+        handler.postDelayed(timeout, inactivityTimeoutMs)
     }
 
     override fun onStop() {
@@ -648,7 +761,7 @@ class VaultCodesActivity : FragmentActivity() {
                                 }
                                 item { OutlinedTextField(password, { password = it }, label = { Text("Master password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth()) }
                                 item { Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation." else if (saveMode) "Unlock to review a login from ${loginSave?.let(::saveDestination).orEmpty()}. Nothing is saved until you confirm." else if (autofillMode) "Unlock to choose a login for ${loginFill?.let(::fillDestination).orEmpty()}. Nothing is filled until you select an account." else "Unlock to choose an account and copy its current code. Your password autofill app stays unchanged.") }
-                                item { Text("A master password starts a new 24-hour fingerprint session. Fingerprint use does not extend it.", style = MaterialTheme.typography.bodySmall) }
+                                item { Text("A master password starts a new fingerprint session. Fingerprint use does not extend it.", style = MaterialTheme.typography.bodySmall) }
                             }
                             if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
                         }

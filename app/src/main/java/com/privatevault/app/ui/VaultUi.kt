@@ -14,6 +14,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LocalContentColor
@@ -147,6 +148,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -257,10 +260,9 @@ fun PrivateVaultApp(
     MaterialTheme(colorScheme = if (lightMode) VaultLightColors else VaultColors) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Box(Modifier.fillMaxSize().pointerInput(status) {
-                awaitPointerEventScope { while (true) { awaitPointerEvent(); viewModel.touch() } }
+                awaitPointerEventScope { while (true) { awaitPointerEvent(); viewModel.touchFromUser() } }
             }) {
-                AnimatedContent(targetState = status, label = "vault state") { state ->
-                    when (state) {
+                when (val state = status) {
                         VaultStatus.NeedsSetup -> if (showSetup) SetupScreen(viewModel, firstRunChoice) { showSetup = false }
                         else OnboardingScreen(onboardingPage, { onboardingPage = it },
                             { firstRunChoice = it; showSetup = true }, { showPrivacy = true })
@@ -271,7 +273,6 @@ fun PrivateVaultApp(
                         )
                         VaultStatus.Unlocked -> VaultHome(viewModel, onCopySecret, onBiometricAction,
                             firstRunChoice, { firstRunChoice = FirstRunChoice.NEW })
-                    }
                 }
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
                 if (status is VaultStatus.Locked || status is VaultStatus.NeedsSetup && showSetup)
@@ -306,15 +307,16 @@ private fun SetupScreen(viewModel: VaultViewModel, firstRunChoice: FirstRunChoic
 }
 
 @Composable
-private fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, canUseBiometric: Boolean, biometric: () -> Unit) {
+internal fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, canUseBiometric: Boolean, biometric: () -> Unit) {
     var password by remember { mutableStateOf("") }
     var usePassword by remember(canUseBiometric) { mutableStateOf(!canUseBiometric) }
     LaunchedEffect(canUseBiometric) { if (canUseBiometric) biometric() }
     val reason = when (state.reason) {
-        LockReason.STARTUP -> if (state.canUseBiometric) "Use fingerprint, or enter the master password to start a new 24-hour session." else "Enter the master password to start a 24-hour biometric session."
-        LockReason.INACTIVITY -> "The vault locked after one minute of inactivity. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
+        LockReason.STARTUP -> if (state.canUseBiometric) "Use fingerprint or enter the master password." else "Enter the master password to unlock."
+        LockReason.INACTIVITY -> "The vault locked after inactivity. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
         LockReason.SCREEN_OFF -> "The vault locked when the screen turned off. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
         LockReason.BACKGROUND -> "The vault locked when you left the app. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
+        LockReason.MANUAL -> "The vault locked. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
     }
     CenteredAuthCard("Nuvori", reason) {
         if (canUseBiometric) {
@@ -1792,25 +1794,113 @@ private fun GroupEntryDetails(
 }
 
 @Composable
+private fun SecurityChoices(title: String, explanation: String, selected: Long, choices: List<Pair<Long, String>>, onSelect: (Long) -> Unit) {
+    Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(explanation, style = MaterialTheme.typography.bodySmall)
+        choices.forEach { (value, label) ->
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected == value, role = Role.RadioButton, onClick = { onSelect(value) }), verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = selected == value, onClick = null)
+                Text(label, Modifier.padding(start = 8.dp))
+            }
+        }
+    }
+}
+
+@Composable
 internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: FirstRunChoice? = null, close: () -> Unit) {
     val passkeys by viewModel.passkeys.collectAsStateWithLifecycle()
+    val savedAuthenticatorEntries by viewModel.entries.collectAsStateWithLifecycle()
     val passkeyTransfer by viewModel.passkeyTransferPreview.collectAsStateWithLifecycle()
+    val passwordDuplicateReview by viewModel.passwordDuplicateReview.collectAsStateWithLifecycle()
     var deletePasskey by remember { mutableStateOf<com.privatevault.app.data.PasskeySummary?>(null) }
+    var confirmPasswordDuplicateDelete by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf<String?>(if (initialImportChoice != null) "Backup and import" else null) }
+    var pendingInterval by remember { mutableStateOf<Long?>(null) }
+    var authenticatorPages by remember { mutableStateOf<Map<Int, com.privatevault.app.security.AuthenticatorTransferPage>>(emptyMap()) }
+    var authenticatorBatchId by remember { mutableIntStateOf(0) }
+    var authenticatorScanner by remember { mutableStateOf(false) }
+    var authenticatorError by remember { mutableStateOf<String?>(null) }
+    var oneAuthUri by remember { mutableStateOf<Uri?>(null) }
+    var oneAuthPassword by remember { mutableStateOf("") }
     val pageScroll = remember(page) { androidx.compose.foundation.ScrollState(0) }
-    LaunchedEffect(page) { if (page == "Passkeys") viewModel.refreshPasskeys() }
+    LaunchedEffect(page) {
+        if (page == "Passkeys") viewModel.refreshPasskeys()
+        if (page != "Import authenticator codes") {
+            authenticatorPages = emptyMap(); authenticatorError = null
+            oneAuthUri = null; oneAuthPassword = ""
+        }
+    }
     var showPrivacy by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val transferScope = rememberCoroutineScope()
+    fun acceptAuthenticatorPage(transfer: com.privatevault.app.security.AuthenticatorTransferPage) {
+        if (authenticatorPages.isNotEmpty() && (transfer.batchId != authenticatorBatchId || transfer.batchSize != authenticatorPages.values.first().batchSize)) {
+            authenticatorError = "This import belongs to a different transfer. Clear the current batch first."
+        } else if (authenticatorPages.filterKeys { it != transfer.batchIndex }.values.sumOf { it.accounts.size } + transfer.accounts.size > 100) {
+            authenticatorError = "Import up to 100 codes at a time. Export a smaller set."
+        } else {
+            authenticatorBatchId = transfer.batchId
+            authenticatorPages = authenticatorPages + (transfer.batchIndex to transfer)
+            authenticatorError = null
+        }
+    }
+    fun acceptAuthenticatorQr(text: String) {
+        runCatching { com.privatevault.app.security.parseAuthenticatorTransferQr(text) }
+            .onSuccess(::acceptAuthenticatorPage)
+            .onFailure { authenticatorError = "Could not read this transfer QR. HOTP and unsupported code formats cannot be imported." }
+        authenticatorScanner = false
+    }
+    val authenticatorPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) authenticatorScanner = true else authenticatorError = "Camera permission is needed to scan a transfer QR."
+    }
+    val authenticatorImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        viewModel.externalFlowActive = false
+        if (uri != null) transferScope.launch {
+            runCatching { readQrImage(context, uri) }.onSuccess(::acceptAuthenticatorQr)
+                .onFailure { authenticatorError = "Could not read that QR image." }
+        }
+    }
+    suspend fun readAuthenticatorFile(uri: Uri): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val bytes = context.contentResolver.openInputStream(uri)!!.use { input ->
+            val output = java.io.ByteArrayOutputStream()
+            val chunk = ByteArray(8192)
+            try {
+                while (true) {
+                    val count = input.read(chunk)
+                    if (count < 0) break
+                    require(output.size() + count <= 1_048_576)
+                    output.write(chunk, 0, count)
+                }
+                output.toByteArray()
+            } finally { chunk.fill(0) }
+        }
+        try { bytes.toString(Charsets.UTF_8) } finally { bytes.fill(0) }
+    }
+    val authenticatorFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        viewModel.externalFlowActive = false
+        if (uri != null) transferScope.launch {
+            runCatching { readAuthenticatorFile(uri) }.onSuccess { content ->
+                if (com.privatevault.app.security.isEncryptedOneAuthExport(content)) oneAuthUri = uri
+                else runCatching { com.privatevault.app.security.parseAuthenticatorTransferText(content) }
+                    .onSuccess(::acceptAuthenticatorPage)
+                    .onFailure { authenticatorError = "Use a OneAuth oneauth_04 JSON export or a text file with one otpauth://totp link per line." }
+            }.onFailure { authenticatorError = "Could not read that authenticator export file." }
+        }
+    }
     var transferBusy by remember { mutableStateOf(false) }
     val lightMode by viewModel.lightMode.collectAsStateWithLifecycle()
     val nfcEnabled by viewModel.nfcEnabled.collectAsStateWithLifecycle()
+    val security by viewModel.securitySettings.collectAsStateWithLifecycle()
     var action by remember { mutableStateOf<String?>(null) }
     var password by remember { mutableStateOf("") }
     var current by remember { mutableStateOf("") }
     var replacement by remember { mutableStateOf("") }
     var pendingBackupPassword by remember { mutableStateOf<CharArray?>(null) }
     DisposableEffect(Unit) { onDispose { pendingBackupPassword?.fill('\u0000'); pendingBackupPassword = null } }
+    LaunchedEffect(passwordDuplicateReview) {
+        if (passwordDuplicateReview == null) confirmPasswordDuplicateDelete = false
+    }
 
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         viewModel.externalFlowActive = false
@@ -1834,16 +1924,16 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         OutlinedButton(onClick = { viewModel.externalFlowActive = true; importPasswords.launch(arrayOf("text/*", "application/csv", "application/json", "application/vnd.ms-excel", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("Choose password export") }
     }
 
-    BackHandler { if (page != null) page = null else close() }
+    BackHandler { if (page == "Confirm interval") { page = "Security"; pendingInterval = null } else if (page != null) page = null else close() }
       Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = 16.dp)) {
           Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
-            BackIcon { if (page != null) page = null else close() }
+            BackIcon { if (page == "Confirm interval") { page = "Security"; pendingInterval = null } else if (page != null) page = null else close() }
             Text(page ?: "Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
           }
           Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().align(Alignment.CenterHorizontally).weight(1f).verticalScroll(pageScroll).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (page == null) {
-                listOf("Security" to "Master password and lock behavior", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and password exports", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "About" to "Privacy and security limits").forEach { (name, description) ->
+                listOf("Security" to "Master password and lock behavior", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Import authenticator codes" to "Transfer TOTP codes from another app", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and password exports", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "About" to "Privacy and security limits").forEach { (name, description) ->
                     Card(Modifier.fillMaxWidth().clickable { page = name }) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(name, style = MaterialTheme.typography.titleMedium)
@@ -1912,6 +2002,40 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 }
             }
             if (page == "Cards and NFC") NfcPreference(nfcEnabled, viewModel.nfcSupported, viewModel::setNfcEnabled)
+            if (page == "Import authenticator codes") {
+                Text("In Google Authenticator, choose Transfer accounts, then Export accounts. Scan every QR page before importing. A second device may be needed to display the codes.")
+                Text("You can also scan a standard TOTP setup QR, choose a Zoho OneAuth encrypted JSON export, or import a text file with one otpauth://totp link per line. Microsoft Authenticator does not provide a compatible account export.", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = {
+                    if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) authenticatorScanner = true
+                    else authenticatorPermission.launch(android.Manifest.permission.CAMERA)
+                }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Scan transfer QR") }
+                OutlinedButton(onClick = { viewModel.externalFlowActive = true; authenticatorImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Choose QR image") }
+                OutlinedButton(onClick = { viewModel.externalFlowActive = true; authenticatorFile.launch(arrayOf("application/json", "text/plain", "text/*", "application/octet-stream")) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Choose OneAuth JSON or TOTP text file") }
+                Text("Plaintext TOTP files contain readable setup keys. Delete them after checking the imported codes.", style = MaterialTheme.typography.bodySmall)
+                authenticatorError?.let { Text(it, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }, color = MaterialTheme.colorScheme.error) }
+                if (authenticatorPages.isNotEmpty()) {
+                    val expected = authenticatorPages.values.first().batchSize
+                    Text("${authenticatorPages.size} of $expected QR ${if (expected == 1) "page" else "pages"} scanned", style = MaterialTheme.typography.titleMedium)
+                    val accounts = authenticatorPages.toSortedMap().values.flatMap { it.accounts }
+                    val statuses = com.privatevault.app.security.authenticatorImportStatuses(savedAuthenticatorEntries.map { it.entry }, accounts)
+                    accounts.zip(statuses).forEach { (account, status) ->
+                        val label = when (status) {
+                            com.privatevault.app.security.AuthenticatorImportStatus.NEW -> "New"
+                            com.privatevault.app.security.AuthenticatorImportStatus.ALREADY_SAVED -> "Already saved"
+                            com.privatevault.app.security.AuthenticatorImportStatus.CONFLICT -> "Different setup key, skipped"
+                        }
+                        Text("${account.issuer.ifBlank { account.account }} · ${account.account} · $label")
+                    }
+                    Text("Review these accounts before saving. Imported codes do not remove them from the original app. Check a code on each website before deleting the original.", style = MaterialTheme.typography.bodySmall)
+                    Button(enabled = authenticatorPages.size == expected, onClick = {
+                        viewModel.importAuthenticatorAccounts(accounts)
+                        authenticatorPages = emptyMap()
+                    }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Import codes") }
+                    TextButton(onClick = { authenticatorPages = emptyMap(); authenticatorError = null }) { Text("Clear scanned pages") }
+                }
+            }
             if (page == "Autofill and codes") {
             AutofillPreference()
             HorizontalDivider()
@@ -1932,11 +2056,32 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             }
             Text("A cloud file provider may upload an encrypted backup outside this app.", style = MaterialTheme.typography.bodySmall)
             if (initialImportChoice != FirstRunChoice.BROWSER_IMPORT) { HorizontalDivider(); browserImportContent() }
+            HorizontalDivider()
+            Text("Exact duplicate passwords", style = MaterialTheme.typography.titleMedium)
+            Text("Find password entries whose saved fields, tags, folders, and app or website links match exactly. Entry IDs and activity dates are ignored. Entries with photos are never included.")
+            OutlinedButton(onClick = viewModel::checkPasswordDuplicates,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Check for exact duplicates") }
             }
             if (page == "Security") {
-                Text("Strong fingerprint access lasts up to 24 hours after master-password authentication and biometric confirmation. The phone PIN cannot unlock the vault.")
-                Text("Screen-off locks immediately. Ordinary app switching allows up to 10 seconds. Inactivity locks after one minute.")
+                SecurityChoices("Auto-lock after leaving the app", "The vault locks after you switch apps. Screen-off always locks immediately.",
+                    security.backgroundTimeoutMs, listOf(0L to "Immediately", 10_000L to "10 seconds", 30_000L to "30 seconds", 60_000L to "1 minute", 300_000L to "5 minutes"), viewModel::setBackgroundTimeout)
+                SecurityChoices("Auto-lock after inactivity while open", "The countdown starts after your last interaction. Leaving the app never extends it.",
+                    security.inactivityTimeoutMs, listOf(60_000L to "1 minute", 300_000L to "5 minutes", 900_000L to "15 minutes", 1_800_000L to "30 minutes"), viewModel::setInactivityTimeout)
+                SecurityChoices("Require the master password again", "Fingerprint is required for every biometric unlock. This controls how long the protected vault key remains available for fingerprint unlock.",
+                    security.masterPasswordIntervalMs, listOf(0L to "Every unlock", 86_400_000L to "After 1 day", 604_800_000L to "After 1 week", 2_592_000_000L to "After 1 month")) { value ->
+                    if (value >= 604_800_000L) { pendingInterval = value; page = "Confirm interval" }
+                    else viewModel.setMasterPasswordInterval(value)
+                }
+                Text("Changing this interval ends the current fingerprint session. Enter your master password after the next lock to start a new one.", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = { action = "password" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Change master password") }
+                OutlinedButton(onClick = { viewModel.lock(LockReason.MANUAL); close() }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Lock now") }
+            }
+            if (page == "Confirm interval") {
+                Text("Confirm longer fingerprint access", style = MaterialTheme.typography.titleLarge)
+                Text("Nuvori cannot reset your master password. If you forget it, your vault cannot be recovered.")
+                if (pendingInterval == 2_592_000_000L) Text("Anyone who can pass the device biometric may unlock the vault for up to 30 days.")
+                Button(onClick = { pendingInterval?.let(viewModel::setMasterPasswordInterval); pendingInterval = null; page = "Security" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Confirm") }
+                OutlinedButton(onClick = { pendingInterval = null; page = "Security" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Cancel") }
             }
             if (page == "About") {
                 Text("Nuvori", style = MaterialTheme.typography.titleLarge)
@@ -1949,6 +2094,77 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
       }
 
     if (showPrivacy) PrivacyPolicyDialog { showPrivacy = false }
+    passwordDuplicateReview?.let { review ->
+        val allIds = review.groups.flatMap { it.duplicates }.mapTo(linkedSetOf()) { it.entry.id }
+        val allSelected = allIds.isNotEmpty() && review.selectedIds == allIds
+        if (confirmPasswordDuplicateDelete) {
+            AlertDialog(
+                onDismissRequest = { confirmPasswordDuplicateDelete = false },
+                title = { Text("Delete selected duplicates?") },
+                text = { Text("Delete ${review.selectedIds.size} selected password ${if (review.selectedIds.size == 1) "duplicate" else "duplicates"}? The oldest matching copy in each set will remain. This cannot be undone, although older backups may still contain deleted copies.") },
+                confirmButton = { DeleteButton(onClick = {
+                    viewModel.deleteSelectedPasswordDuplicates()
+                    confirmPasswordDuplicateDelete = false
+                }, label = "Delete selected") },
+                dismissButton = { TextButton(onClick = { confirmPasswordDuplicateDelete = false }) { Text("Back") } }
+            )
+        } else {
+            AlertDialog(
+                modifier = wideDialogModifier,
+                properties = wideDialogProperties,
+                onDismissRequest = viewModel::cancelPasswordDuplicateReview,
+                title = { Text("Review exact duplicates") },
+                text = {
+                    LazyColumn(Modifier.heightIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        item {
+                            Text("Found ${review.duplicateCount} removable ${if (review.duplicateCount == 1) "copy" else "copies"} in ${review.groups.size} matching ${if (review.groups.size == 1) "set" else "sets"}. Nothing is selected by default.")
+                        }
+                        item {
+                            Row(
+                                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                    .toggleable(value = allSelected, role = Role.Checkbox,
+                                        onValueChange = viewModel::setAllPasswordDuplicatesSelected),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(checked = allSelected, onCheckedChange = null)
+                                Text(if (review.selectedIds.isEmpty()) "Select all duplicates" else "Select all duplicates (${review.selectedIds.size} selected)")
+                            }
+                        }
+                        items(review.groups, key = { it.keeper.entry.id }) { group ->
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(group.keeper.entry.title, style = MaterialTheme.typography.titleMedium)
+                                    if (group.keeper.entry.primaryValue.isNotBlank()) Text(group.keeper.entry.primaryValue)
+                                    if (group.keeper.entry.tertiaryValue.isNotBlank()) Text(group.keeper.entry.tertiaryValue,
+                                        style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text("Oldest copy kept. All saved fields and relationships match.",
+                                        style = MaterialTheme.typography.bodySmall)
+                                    group.duplicates.forEachIndexed { index, item ->
+                                        val selected = item.entry.id in review.selectedIds
+                                        Row(
+                                            Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                                .toggleable(value = selected, role = Role.Checkbox,
+                                                    onValueChange = { viewModel.setPasswordDuplicateSelected(item.entry.id, it) }),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Checkbox(checked = selected, onCheckedChange = null)
+                                            Text("Delete duplicate copy ${index + 1}")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = { DeleteButton(
+                    onClick = { confirmPasswordDuplicateDelete = true },
+                    enabled = review.selectedIds.isNotEmpty(),
+                    label = "Delete selected"
+                ) },
+                dismissButton = { TextButton(onClick = viewModel::cancelPasswordDuplicateReview) { Text("Cancel") } }
+            )
+        }
+    }
     deletePasskey?.let { key ->
         AlertDialog(onDismissRequest = { deletePasskey = null }, title = { Text("Delete passkey?") },
             text = { Text("Remove the passkey for ${key.username} at ${key.rpId}? Make sure you have another way to sign in. Older backups may still contain it.") },
@@ -2027,6 +2243,36 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         confirmButton = { Button(onClick = { viewModel.changePassword(current.toCharArray(), replacement.toCharArray()); current = ""; replacement = ""; action = null }, enabled = current.isNotEmpty() && replacement.length >= PasswordCrypto.MIN_PASSWORD_LENGTH) { Text("Change") } },
         dismissButton = { TextButton(onClick = { action = null }) { Text("Cancel") } }
     )
+    oneAuthUri?.let { uri ->
+        AlertDialog(
+            modifier = wideDialogModifier,
+            properties = wideDialogProperties,
+            onDismissRequest = { oneAuthUri = null; oneAuthPassword = "" },
+            title = { Text("Unlock OneAuth export") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Enter the password you set when you exported this JSON file. Nuvori will decrypt it on this device and show the accounts before saving.")
+                SecretField("Export password", oneAuthPassword) { oneAuthPassword = it }
+            } },
+            confirmButton = { Button(enabled = oneAuthPassword.isNotEmpty(), onClick = {
+                val pass = oneAuthPassword.toCharArray()
+                oneAuthPassword = ""
+                oneAuthUri = null
+                transferScope.launch {
+                    try {
+                        val transfer = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.privatevault.app.security.parseEncryptedOneAuthExport(readAuthenticatorFile(uri), pass)
+                        }
+                        acceptAuthenticatorPage(transfer)
+                    } catch (_: Exception) {
+                        authenticatorError = "Could not decrypt this OneAuth export. Check its password and format."
+                    } finally { pass.fill('\u0000') }
+                }
+            }) { Text("Review codes") } },
+            dismissButton = { TextButton(onClick = { oneAuthUri = null; oneAuthPassword = "" }) { Text("Cancel") } }
+        )
+    }
+    if (authenticatorScanner) QrScanner(::acceptAuthenticatorQr, { authenticatorScanner = false },
+        "Scan authenticator transfer QR", "Scan every page from Google Authenticator or a standard TOTP setup QR. No camera images are saved.")
 }
 
 @Composable

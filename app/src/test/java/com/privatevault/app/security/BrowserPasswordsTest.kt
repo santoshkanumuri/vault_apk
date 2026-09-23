@@ -9,7 +9,7 @@ import java.io.ByteArrayInputStream
 class BrowserPasswordsTest {
     @Test fun importsSanitizedProviderFixtures() {
         val fixtures = listOf(
-            "chrome.csv", "brave.csv", "edge.csv", "firefox.csv", "safari.csv",
+            "chrome.csv", "google-device.csv", "brave.csv", "edge.csv", "firefox.csv", "safari.csv",
             "onepassword.csv", "lastpass.csv", "keepass.csv", "bitwarden.csv", "bitwarden.json"
         )
         fixtures.forEach { name ->
@@ -162,6 +162,17 @@ class BrowserPasswordsTest {
         val entry = readBrowserPasswords(csv.reader()).single()
         assertEquals("Mail", entry.title)
         assertEquals("secret", entry.secondaryValue)
+    }
+    @Test fun importsGoogleDeviceRowsWithOmittedPasswordsAndEmptyTrailingCells() {
+        val reader = requireNotNull(javaClass.getResourceAsStream("/password-import/google-device.csv"))
+            .reader(Charsets.UTF_8)
+
+        val entry = reader.use(::readBrowserPasswords).single()
+
+        assertEquals("Mail", entry.title)
+        assertEquals("user@example.com", entry.primaryValue)
+        assertEquals("synthetic-secret", entry.secondaryValue)
+        assertEquals("https://mail.example", entry.tertiaryValue)
     }
     @Test fun importsFirefoxSafariAndOnePasswordStyleHeaders() {
         val firefox = readBrowserPasswords("url,username,password,httpRealm\nhttps://example.com,user,secret,".reader()).single()

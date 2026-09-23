@@ -13,8 +13,12 @@ class BiometricExpiryTest {
         val prefs = context.getSharedPreferences("vault_biometric_session", Context.MODE_PRIVATE)
         val gate = BiometricGate(context)
         fun expire() {
-            prefs.edit().putInt("format", 2).putString("wrapped_key", "dummy")
-                .putLong("expires_at", System.currentTimeMillis() - 1).commit()
+            prefs.edit().putInt("format", 3).putString("wrapped_key", "dummy")
+                .putLong("created_wall", System.currentTimeMillis() - 86_400_000L)
+                .putLong("created_elapsed", android.os.SystemClock.elapsedRealtime())
+                .putInt("boot_count", android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.BOOT_COUNT, -1))
+                .putLong("last_seen_wall", System.currentTimeMillis() - 86_400_000L)
+                .putLong("duration", 86_400_000L).commit()
         }
         try {
             expire()

@@ -34,6 +34,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.privatevault.app.data.VaultDatabase
 import com.privatevault.app.data.VaultEntry
+import com.privatevault.app.data.EntryWithDetails
 import com.privatevault.app.security.BiometricGate
 import com.privatevault.app.security.Totp
 import com.privatevault.app.security.VaultKeyManager
@@ -79,8 +80,10 @@ class VaultCodesActivity : FragmentActivity() {
     private var saving: Job? = null
     private var saveMode = false
     private var passkeyOperation: com.privatevault.app.passkeys.PasskeyOperation? = null
+    private var passwordCredentialOperation: com.privatevault.app.passkeys.PasswordCredentialOperation? = null
     private var passkeys by mutableStateOf<List<com.privatevault.app.data.VaultPasskey>>(emptyList())
     private var selectedUpdate by mutableStateOf<VaultEntry?>(null)
+    private var pendingLoginLink by mutableStateOf<VaultEntry?>(null)
     private var generating by mutableStateOf(false)
     private var generationEntry by mutableStateOf<VaultEntry?>(null)
     private var generationUsername by mutableStateOf("")
@@ -96,12 +99,40 @@ class VaultCodesActivity : FragmentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
         registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF))
-        saveMode = intent.hasExtra("login_save_token")
-        autofillMode = intent.hasExtra("login_fill_token") || saveMode || intent.hasExtra("passkey_create")
+        saveMode = intent.hasExtra("login_save_token") || intent.hasExtra("credential_password_create")
+        autofillMode = intent.hasExtra("login_fill_token") || saveMode || intent.hasExtra("passkey_create") || intent.hasExtra("credential_password_get")
         if (intent.hasExtra("passkey_create")) {
             if (Build.VERSION.SDK_INT < 34) { dismissPicker(); return }
             passkeyOperation = runCatching { com.privatevault.app.passkeys.PasskeyOperation.from(this, intent) }.getOrNull()
             if (passkeyOperation == null) { dismissPicker(); return }
+            handler.postDelayed({ dismissPicker() }, 120_000)
+        } else if (intent.hasExtra("credential_password_get") || intent.hasExtra("credential_password_create")) {
+            if (Build.VERSION.SDK_INT < 34) { dismissPicker(); return }
+            passwordCredentialOperation = runCatching {
+                com.privatevault.app.passkeys.PasswordCredentialOperation.from(this, intent)
+            }.getOrNull()
+            val operation = passwordCredentialOperation
+            if (operation == null) { dismissPicker(); return }
+            if (operation.create) {
+                loginSave = LoginSaveRequest(
+                    operation.destination.packageName,
+                    operation.destination.identity,
+                    operation.destination.origin,
+                    operation.username,
+                    operation.password.toCharArray(),
+                    android.os.SystemClock.elapsedRealtime() + 120_000,
+                )
+            } else {
+                loginFill = LoginFillRequest(
+                    operation.destination.packageName,
+                    operation.destination.identity,
+                    null,
+                    null,
+                    null,
+                    android.os.SystemClock.elapsedRealtime() + 120_000,
+                    operation.destination.origin,
+                )
+            }
             handler.postDelayed({ dismissPicker() }, 120_000)
         } else if (saveMode) {
             loginSave = PendingLoginSaves.take(intent.getStringExtra("login_save_token"))
@@ -173,7 +204,7 @@ class VaultCodesActivity : FragmentActivity() {
                     } finally { database.close() }
                 }
                 if (pickerVisible) {
-                    if (saveMode || passkeyOperation != null || loginFill?.newPasswords?.isNotEmpty() == true) saveKey = requireNotNull(key).copyOf()
+                    if (autofillMode || passkeyOperation != null) saveKey = requireNotNull(key).copyOf()
                     passkeys = loadedPasskeys
                     entries = loaded; unlocked = true; onUserInteraction()
                 }
@@ -221,11 +252,13 @@ class VaultCodesActivity : FragmentActivity() {
         saveKey?.fill(0)
         saveKey = null
         selectedUpdate = null
+        pendingLoginLink = null
         generating = false
         generationEntry = null
         generationUsername = ""
         passkeys = emptyList()
         passkeyOperation = null
+        passwordCredentialOperation = null
         saving?.cancel()
         authentication?.cancel()
         handler.removeCallbacksAndMessages(null)
@@ -235,6 +268,49 @@ class VaultCodesActivity : FragmentActivity() {
     private fun saveDestination(request: LoginSaveRequest): String = request.origin ?: runCatching {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(request.packageName, 0)).toString()
     }.getOrDefault(request.packageName)
+
+    private fun fillDestination(request: LoginFillRequest): String = request.origin ?: runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(request.packageName, 0)).toString()
+    }.getOrDefault(request.packageName)
+
+    private fun linkAndFill(entry: VaultEntry) {
+        val request = loginFill ?: return
+        if (busy || !pickerVisible || !unlocked ||
+            !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return
+        if (request.expiresAt <= android.os.SystemClock.elapsedRealtime() ||
+            appSigningIdentity(this, request.packageName) != request.identity ||
+            (request.origin != null && !trustedBrowser(request.packageName, request.identity))) {
+            dismissPicker(); return
+        }
+        val key = saveKey?.copyOf() ?: return
+        busy = true
+        saving = lifecycleScope.launch {
+            try {
+                val linked = withContext(Dispatchers.IO) {
+                    val database = VaultDatabase.open(applicationContext, key)
+                    try {
+                        val current = requireNotNull(database.dao().entry(entry.id))
+                        val updated = com.privatevault.app.security.linkLoginToDestination(
+                            current.entry,
+                            request.packageName,
+                            request.identity,
+                            request.origin,
+                        )
+                        com.privatevault.app.sync.LocalEntryChangeWriter(
+                            database,
+                            com.privatevault.app.sync.AndroidDeviceIdentityStore(applicationContext),
+                        ).save(updated, current.groups.map { it.id }.toSet(), key)
+                        updated
+                    } finally { database.close() }
+                }
+                entries = entries.map { if (it.id == linked.id) linked else it }
+                pendingLoginLink = null
+                fillLogin(linked, confirmedDialogAction = true)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { message = "Could not link this login. Nothing was filled." }
+            finally { key.fill(0); busy = false }
+        }
+    }
 
     private fun saveLogin(expected: VaultEntry?) {
         val request = loginSave ?: return
@@ -256,6 +332,16 @@ class VaultCodesActivity : FragmentActivity() {
                         else database.dao().saveNativeLogin(request.packageName, request.identity, saveDestination(request), request.username, secret.concatToString(), expected)
                     }
                     finally { database.close() }
+                }
+                if (passwordCredentialOperation?.create == true) {
+                    if (Build.VERSION.SDK_INT >= 34) passwordCredentialOperation?.revalidate(this@VaultCodesActivity)
+                    val result = Intent().also {
+                        androidx.credentials.provider.PendingIntentHandler.setCreateCredentialResponse(
+                            it,
+                            androidx.credentials.CreatePasswordResponse(),
+                        )
+                    }
+                    setResult(RESULT_OK, result)
                 }
                 dismissPicker()
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -329,15 +415,38 @@ class VaultCodesActivity : FragmentActivity() {
     }
 
     @Suppress("DEPRECATION")
-    private fun fillLogin(entry: VaultEntry?, generated: String? = null, generatedUsername: String? = null) {
+    private fun fillLogin(
+        entry: VaultEntry?,
+        generated: String? = null,
+        generatedUsername: String? = null,
+        confirmedDialogAction: Boolean = false,
+    ) {
         val request = loginFill ?: return
         if (!pickerVisible || !unlocked || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) ||
-            (generated == null && !hasWindowFocus())) return
+            !com.privatevault.app.security.trustedFillFocus(hasWindowFocus(), confirmedDialogAction, generated != null)) return
         if (request.expiresAt <= android.os.SystemClock.elapsedRealtime() ||
             appSigningIdentity(this, request.packageName) != request.identity ||
             (if (entry != null) !loginAuthorizedForDestination(entry, request.packageName, request.identity, request.origin)
              else request.newPasswords.isEmpty() || request.password != null || request.origin == null || !trustedBrowser(request.packageName, request.identity))) {
             dismissPicker(); return
+        }
+        if (passwordCredentialOperation?.create == false) {
+            val selected = entry ?: return
+            val result = runCatching {
+                if (Build.VERSION.SDK_INT >= 34) passwordCredentialOperation?.revalidate(this)
+                require(selected.secondaryValue.isNotEmpty())
+                Intent().also {
+                    androidx.credentials.provider.PendingIntentHandler.setGetCredentialResponse(
+                        it,
+                        androidx.credentials.GetCredentialResponse(
+                            androidx.credentials.PasswordCredential(selected.primaryValue, selected.secondaryValue),
+                        ),
+                    )
+                }
+            }.getOrElse { message = "Could not return this login to the app."; return }
+            setResult(RESULT_OK, result)
+            dismissPicker()
+            return
         }
         val result = runCatching {
             val presentation = RemoteViews(packageName, R.layout.autofill_suggestion)
@@ -395,8 +504,10 @@ class VaultCodesActivity : FragmentActivity() {
         loginSave?.clear()
         saveKey?.fill(0)
         selectedUpdate = null
+        pendingLoginLink = null
         passkeys = emptyList()
         passkeyOperation = null
+        passwordCredentialOperation = null
         handler.removeCallbacksAndMessages(null)
         unregisterReceiver(screenOff)
         super.onDestroy()
@@ -407,12 +518,13 @@ class VaultCodesActivity : FragmentActivity() {
         var password by remember { mutableStateOf("") }
         var search by remember { mutableStateOf("") }
         var showAll by remember { mutableStateOf(false) }
+        var findLogin by remember { mutableStateOf(false) }
         val keyboard = LocalSoftwareKeyboardController.current
         Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(8.dp), contentAlignment = Alignment.Center) {
             Surface(Modifier.widthIn(max = 560.dp).fillMaxWidth().fillMaxHeight(), shape = RoundedCornerShape(24.dp)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (passkeyOperation != null) "Passkeys" else if (saveMode) "Save login" else if (autofillMode) "Autofill" else "Codes",
+                        Text(if (passkeyOperation != null) "Passkeys" else if (saveMode) "Save login" else if (passwordCredentialOperation != null) "Sign in" else if (autofillMode) "Autofill" else "Codes",
                             Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (!unlocked && keyManager.isInitialized) Button(
                             onClick = { keyboard?.hide(); val value = password.toCharArray(); password = ""; authenticate(value) },
@@ -455,15 +567,18 @@ class VaultCodesActivity : FragmentActivity() {
                         }
                     } else if (unlocked && autofillMode) {
                         val request = loginFill
-                        val matches = entries.filter { entry -> request != null && loginAuthorizedForDestination(entry, request.packageName, request.identity, request.origin) &&
-                            if (request.otp != null) entries.any { it.id == entry.linkedAuthenticatorId && it.type == EntryType.AUTHENTICATOR } else entry.secondaryValue.isNotEmpty() }
+                        val eligible = entries.filter { entry -> entry.type == EntryType.PASSWORD && entry.secondaryValue.isNotEmpty() &&
+                            if (request?.otp != null) entries.any { it.id == entry.linkedAuthenticatorId && it.type == EntryType.AUTHENTICATOR } else true }
+                        val matches = eligible.filter { entry -> request != null && loginAuthorizedForDestination(entry, request.packageName, request.identity, request.origin) }
+                        val searched = eligible.filter { entry -> search.isBlank() || listOf(entry.title, entry.primaryValue, entry.tertiaryValue, entry.autofillOrigins)
+                            .any { it.contains(search, ignoreCase = true) } }
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            item { Text("Destination: ${request?.origin ?: request?.packageName.orEmpty()}", style = MaterialTheme.typography.bodySmall) }
+                            item { Text("Destination: ${request?.let(::fillDestination).orEmpty()}", style = MaterialTheme.typography.bodySmall) }
                             if (request?.newPasswords?.isNotEmpty() == true && request.password == null) item {
                                 Button(onClick = { prepareGeneration(null) }, modifier = Modifier.fillMaxWidth()) { Text("Generate for a new account") }
                             }
-                            if (matches.isEmpty()) item { Text(if (request?.origin != null) "No logins for this exact HTTPS website. Add its URL to the login in Nuvori. Subdomains must match exactly." else "No authorized logins. Open Passwords in Nuvori and link this app to a login. App identity changes require linking again.") }
-                            items(matches, key = { it.id }) { entry ->
+                            if (matches.isEmpty()) item { Text(if (request?.origin != null) "No login is linked to this exact HTTPS website." else "No login is linked to this app and signing identity.") }
+                            items(matches, key = { "matched-${it.id}" }) { entry ->
                                 Card(Modifier.fillMaxWidth()) {
                                     if (request?.newPasswords?.isNotEmpty() == true) Column(Modifier.padding(16.dp)) {
                                         Text(entry.title, style = MaterialTheme.typography.titleMedium)
@@ -478,7 +593,40 @@ class VaultCodesActivity : FragmentActivity() {
                                     }
                                 }
                             }
-                            item { Text(if (request?.newPasswords?.isNotEmpty() == true) "Generate a 24-character password and save a separate login before filling. Your current login stays available until you confirm the website accepted the change." else if (request?.otp != null) "Choose a login to fill its linked authenticator code." else if (request?.password == null) "Choose an account to fill its username. The next screen requires a separate selection." else "Choose a login to fill its username and password.") }
+                            if (request?.newPasswords?.isEmpty() == true && request.otp == null) item {
+                                OutlinedButton(
+                                    onClick = { findLogin = !findLogin; search = "" },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) { Text(if (findLogin) "Hide saved logins" else if (matches.isEmpty()) "Find and link an existing login" else "Use another saved login") }
+                            }
+                            if (findLogin) {
+                                item {
+                                    OutlinedTextField(
+                                        search,
+                                        { search = it },
+                                        label = { Text("Search saved logins") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+                                if (searched.isEmpty()) item { Text("No saved logins match this search.") }
+                                items(searched, key = { "search-${it.id}" }) { entry ->
+                                    val linked = request != null && loginAuthorizedForDestination(
+                                        entry, request.packageName, request.identity, request.origin)
+                                    val action = if (linked) "Fill" else "Fill and link"
+                                    CompactEntryRow(
+                                        item = EntryWithDetails(entry, emptyList(), emptyList()),
+                                        includeType = false,
+                                        showPreview = true,
+                                        trailing = action,
+                                        trailingColor = MaterialTheme.colorScheme.primary,
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        contentDescription = "$action ${entry.title}",
+                                        onClick = { if (linked) fillLogin(entry) else pendingLoginLink = entry },
+                                    )
+                                }
+                            }
+                            item { Text(if (request?.newPasswords?.isNotEmpty() == true) "Generate a 24-character password and save a separate login before filling. Your current login stays available until you confirm the website accepted the change." else if (request?.otp != null) "Choose a login to fill its linked authenticator code." else if (passwordCredentialOperation != null) "Choose a login to return through Android Credential Manager." else if (request?.password == null) "Choose an account to fill its username. The next screen requires a separate selection." else "Choose a login to fill its username and password.") }
                         }
                     } else if (unlocked) {
                         val suggested = matchingCodeEntries(entries, suggestedApp)
@@ -499,7 +647,7 @@ class VaultCodesActivity : FragmentActivity() {
                                     Button(onClick = { password = ""; authenticate(null) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Use fingerprint") }
                                 }
                                 item { OutlinedTextField(password, { password = it }, label = { Text("Master password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !busy, modifier = Modifier.fillMaxWidth()) }
-                                item { Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation." else if (saveMode) "Unlock to review a login from ${loginSave?.let(::saveDestination).orEmpty()}. Nothing is saved until you confirm." else if (autofillMode) "Unlock to choose a login for ${loginFill?.origin ?: loginFill?.packageName.orEmpty()}. Nothing is filled until you select an account." else "Unlock to choose an account and copy its current code. Your password autofill app stays unchanged.") }
+                                item { Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation." else if (saveMode) "Unlock to review a login from ${loginSave?.let(::saveDestination).orEmpty()}. Nothing is saved until you confirm." else if (autofillMode) "Unlock to choose a login for ${loginFill?.let(::fillDestination).orEmpty()}. Nothing is filled until you select an account." else "Unlock to choose an account and copy its current code. Your password autofill app stays unchanged.") }
                                 item { Text("A master password starts a new 24-hour fingerprint session. Fingerprint use does not extend it.", style = MaterialTheme.typography.bodySmall) }
                             }
                             if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
@@ -525,6 +673,19 @@ class VaultCodesActivity : FragmentActivity() {
                 text = { Text("Replace the password for ${entry.primaryValue} at ${loginSave?.let(::saveDestination).orEmpty()}? Groups, photos and the linked authenticator stay unchanged. Password history is not available; the previous password will be replaced.") },
                 confirmButton = { Button(enabled = !busy, onClick = { selectedUpdate = null; saveLogin(entry) }) { Text("Replace password") } },
                 dismissButton = { TextButton(onClick = { selectedUpdate = null }) { Text("Cancel") } })
+        }
+        pendingLoginLink?.let { entry ->
+            val request = loginFill
+            val destination = request?.let(::fillDestination).orEmpty()
+            AlertDialog(
+                onDismissRequest = { if (!busy) pendingLoginLink = null },
+                title = { Text("Fill and link this login?") },
+                text = { Text(if (request?.origin != null)
+                    "Fill ${entry.primaryValue} and link it to the exact website $destination. Nuvori can suggest it there next time."
+                else "Fill ${entry.primaryValue} and link it to $destination (${request?.packageName.orEmpty()}). Nuvori will also bind the link to the app's current signing certificate.") },
+                confirmButton = { Button(enabled = !busy, onClick = { linkAndFill(entry) }) { Text("Fill and link") } },
+                dismissButton = { TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text("Cancel") } },
+            )
         }
     }
 }

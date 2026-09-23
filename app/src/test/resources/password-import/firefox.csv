@@ -1,0 +1,2 @@
+url,username,password,httpRealm,formActionOrigin,guid,timeCreated,timeLastUsed,timePasswordChanged
+https://firefox.example/login,firefox-user,synthetic-secret,,https://firefox.example,synthetic-guid,1,2,3

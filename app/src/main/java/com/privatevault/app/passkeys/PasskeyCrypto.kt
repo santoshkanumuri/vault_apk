@@ -15,6 +15,7 @@ import org.json.JSONObject
 import java.net.URI
 import java.security.*
 import java.security.interfaces.ECPublicKey
+import java.security.interfaces.ECPrivateKey
 import java.security.spec.*
 import java.util.Base64
 
@@ -32,15 +33,17 @@ internal object PasskeyCrypto {
         val input = JSONObject(json)
         require(decode(input.getString("challenge")).size in 16..1024)
         val rp = if (create) input.getJSONObject("rp").getString("id") else input.getString("rpId")
-        // Offline first release: exact host only. Related-origin and parent-domain requests are unsupported.
-        require(httpsOrigin("https://$rp") == "https://$rp" &&
-            (origin.startsWith("android:apk-key-hash:") || rp == URI(origin).host)) { "Unsupported passkey website" }
+        // Credential Manager and the allowlisted browser validate the privileged origin. Rechecking it
+        // against the RP ID here rejects valid parent-domain and related-origin WebAuthn requests.
+        require(httpsOrigin("https://$rp") == "https://$rp") { "Unsupported passkey website" }
         if (create) {
             val algorithms = input.getJSONArray("pubKeyCredParams")
             require((0 until algorithms.length()).any { algorithms.getJSONObject(it).let { p -> p.optString("type") == "public-key" && p.optInt("alg") == -7 } })
             require(decode(input.getJSONObject("user").getString("id")).size in 1..64)
             require(input.getJSONObject("user").getString("name").length in 1..1024)
-            require(input.optString("attestation", "none") == "none") { "Only anonymous attestation is supported" }
+            require(input.optString("attestation", "none") in setOf("none", "indirect", "direct")) {
+                "Enterprise attestation is not supported"
+            }
         }
         return input
     }
@@ -98,7 +101,7 @@ internal object PasskeyCrypto {
             .put("authenticatorData", encode(auth)).put("signature", encode(signature)).put("userHandle", key.userHandle)).toString()
     }
     fun validateStored(key: VaultPasskey) {
-        require(decode(key.id).size == 32 && decode(key.userHandle).size in 1..64)
+        require(decode(key.id).size in 1..1023 && decode(key.userHandle).size in 1..64)
         require(httpsOrigin("https://${key.rpId}") == "https://${key.rpId}" && URI("https://${key.rpId}").host == key.rpId)
         require(key.username.length in 1..1024 && key.displayName.length <= 1024)
         val public = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(decode(key.publicKey))) as ECPublicKey
@@ -111,6 +114,30 @@ internal object PasskeyCrypto {
             val proof = Signature.getInstance("SHA256withECDSA").run { initSign(private); update(byteArrayOf(1, 2, 3)); sign() }
             require(Signature.getInstance("SHA256withECDSA").run { initVerify(public); update(byteArrayOf(1, 2, 3)); verify(proof) })
         } finally { secret.fill(0) }
+    }
+    fun importCxf(credentialId: String, rpId: String, userHandle: String, username: String,
+        displayName: String, privateKey: String, createdAt: Long): VaultPasskey? {
+        val privateBytes = decode(privateKey)
+        try {
+            val info = org.bouncycastle.asn1.pkcs.PrivateKeyInfo.getInstance(privateBytes)
+            if (info.privateKeyAlgorithm.algorithm != org.bouncycastle.asn1.x9.X9ObjectIdentifiers.id_ecPublicKey ||
+                info.privateKeyAlgorithm.parameters?.toASN1Primitive() != org.bouncycastle.asn1.x9.X9ObjectIdentifiers.prime256v1) return null
+            val factory = KeyFactory.getInstance("EC")
+            val private = factory.generatePrivate(PKCS8EncodedKeySpec(privateBytes)) as ECPrivateKey
+            val expected = AlgorithmParameters.getInstance("EC").apply { init(ECGenParameterSpec("secp256r1")) }
+                .getParameterSpec(ECParameterSpec::class.java)
+            require(private.params.curve == expected.curve && private.params.generator == expected.generator &&
+                private.params.order == expected.order && private.params.cofactor == expected.cofactor)
+            val bc = org.bouncycastle.jce.ECNamedCurveTable.getParameterSpec("secp256r1")
+            val point = bc.g.multiply(private.s).normalize()
+            val public = factory.generatePublic(ECPublicKeySpec(
+                ECPoint(point.affineXCoord.toBigInteger(), point.affineYCoord.toBigInteger()), private.params
+            ))
+            return VaultPasskey(credentialId, rpId, userHandle, username, displayName,
+                privateKey, encode(public.encoded), createdAt).also(::validateStored)
+        } finally {
+            privateBytes.fill(0)
+        }
     }
     private fun credential(id: String, response: JSONObject) = JSONObject().put("id", id).put("rawId", id)
         .put("type", "public-key").put("authenticatorAttachment", "platform").put("response", response).put("clientExtensionResults", JSONObject())

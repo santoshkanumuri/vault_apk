@@ -25,6 +25,7 @@ class LoginMigrationTest {
                 db.dao().saveEntry(login, emptySet())
                 // Recreate the actual v6 layout and version without touching a user's vault.
                 db.openHelper.writableDatabase.execSQL("ALTER TABLE entries DROP COLUMN autofillSignatures")
+                db.openHelper.writableDatabase.execSQL("ALTER TABLE entries DROP COLUMN autofillOrigins")
                 db.openHelper.writableDatabase.execSQL("ALTER TABLE entries DROP COLUMN linkedAuthenticatorId")
                 db.openHelper.writableDatabase.execSQL("ALTER TABLE vault_groups DROP COLUMN folderType")
                 db.openHelper.writableDatabase.execSQL("DROP TABLE passkeys")
@@ -37,7 +38,7 @@ class LoginMigrationTest {
                 assertEquals(login.secondaryValue, restored.secondaryValue)
                 assertEquals("", restored.autofillSignatures)
                 assertEquals("", restored.linkedAuthenticatorId)
-                assertEquals(9, db.openHelper.readableDatabase.version)
+                assertEquals(12, db.openHelper.readableDatabase.version)
                 assertTrue(db.dao().allPasskeys().isEmpty())
                 assertTrue(runCatching { db.dao().saveEntry(restored.copy(linkedAuthenticatorId = "missing"), emptySet()) }.isFailure)
                 assertEquals("", db.dao().entry(login.id)!!.entry.linkedAuthenticatorId)

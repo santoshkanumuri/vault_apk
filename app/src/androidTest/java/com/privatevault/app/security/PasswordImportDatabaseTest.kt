@@ -36,11 +36,11 @@ class PasswordImportDatabaseTest {
         val incoming = saved.copy(id = UUID.randomUUID().toString(), title = "Imported title",
             secondaryValue = "Imported password", notes = "Imported notes")
 
-        val kept = database.dao().importLogins(listOf(LoginImportRequest(incoming, LoginImportAction.KEEP_SAVED, match)))
+        val kept = database.dao().importLogins(listOf(LoginImportRequest(incoming, LoginImportAction.KEEP_SAVED, match, saved.id)))
         assertEquals(1, kept.skippedConflicts)
         assertEquals(before, database.dao().entry(saved.id))
 
-        val replaced = database.dao().importLogins(listOf(LoginImportRequest(incoming, LoginImportAction.USE_IMPORTED, match)))
+        val replaced = database.dao().importLogins(listOf(LoginImportRequest(incoming, LoginImportAction.USE_IMPORTED, match, saved.id)))
         assertEquals(1, replaced.updated)
         val after = database.dao().entry(saved.id)!!
         assertEquals("Imported password", after.entry.secondaryValue)
@@ -48,12 +48,13 @@ class PasswordImportDatabaseTest {
         assertEquals(before.entry.notes, after.entry.notes)
         assertEquals(before.entry.linkedApps, after.entry.linkedApps)
         assertEquals(before.entry.autofillSignatures, after.entry.autofillSignatures)
+        assertEquals(before.entry.autofillOrigins, after.entry.autofillOrigins)
         assertEquals(before.groups, after.groups)
 
         val exact = incoming.copy(id = UUID.randomUUID().toString())
         val exactMatch = listOf(LoginImportMatch.from(after.entry))
         assertEquals(1, database.dao().importLogins(listOf(
-            LoginImportRequest(exact, LoginImportAction.SKIP_EXACT, exactMatch))).skippedExact)
+            LoginImportRequest(exact, LoginImportAction.SKIP_EXACT, exactMatch, saved.id))).skippedExact)
 
         val newLogin = incoming.copy(id = UUID.randomUUID().toString(), title = "New", primaryValue = "new-user",
             tertiaryValue = "https://new.example/login")
@@ -75,7 +76,7 @@ class PasswordImportDatabaseTest {
 
         val result = runCatching { database.dao().importLogins(listOf(
             LoginImportRequest(newLogin, LoginImportAction.ADD, emptyList()),
-            LoginImportRequest(staleConflict, LoginImportAction.USE_IMPORTED, staleMatch)
+            LoginImportRequest(staleConflict, LoginImportAction.USE_IMPORTED, staleMatch, saved.id)
         )) }
 
         assertTrue(result.isFailure)

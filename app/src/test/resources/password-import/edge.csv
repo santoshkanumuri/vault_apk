@@ -1,0 +1,2 @@
+name,url,username,password,note
+Example,https://edge.example/login,edge-user,synthetic-secret,Edge note

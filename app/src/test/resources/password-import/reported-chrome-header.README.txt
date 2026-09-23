@@ -1,0 +1,4 @@
+Replace the line below with the sanitized header from the Chrome export that failed in production.
+Do not add credential rows or values to this fixture.
+
+name,url,username,password,note

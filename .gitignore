@@ -25,3 +25,5 @@ signing.properties
 !.env.example
 captures/
 NEXT-RELEASE-PLAN.md
+SYNC-RECOVERY-PLAN.md
+PASSWORD-MANAGER-PLAN.md

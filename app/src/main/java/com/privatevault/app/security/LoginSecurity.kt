@@ -22,7 +22,29 @@ internal fun loginAuthorized(entry: VaultEntry, packageName: String, identity: S
 internal fun loginAuthorizedForDestination(entry: VaultEntry, packageName: String, identity: String, origin: String?): Boolean =
     if (origin == null) loginAuthorized(entry, packageName, identity)
     else entry.type == EntryType.PASSWORD && trustedBrowser(packageName, identity) &&
-        httpsOrigin(origin) == origin && httpsOrigin(entry.tertiaryValue) == origin
+        httpsOrigin(origin) == origin && (httpsOrigin(entry.tertiaryValue) == origin ||
+            entry.autofillOrigins.lineSequence().any { it == origin })
+
+internal fun trustedFillFocus(hasWindowFocus: Boolean, confirmedDialogAction: Boolean, generatedPassword: Boolean): Boolean =
+    hasWindowFocus || confirmedDialogAction || generatedPassword
+
+internal fun linkLoginToDestination(
+    entry: VaultEntry,
+    packageName: String,
+    identity: String,
+    origin: String?,
+): VaultEntry {
+    require(entry.type == EntryType.PASSWORD && entry.secondaryValue.isNotEmpty())
+    return if (origin == null) {
+        require(packageName.isNotBlank() && identity.isNotBlank() && '\n' !in packageName && '=' !in packageName && '\n' !in identity)
+        entry.copy(autofillSignatures = (entry.autofillSignatures.lineSequence().filter(String::isNotBlank) +
+            "$packageName=$identity").distinct().joinToString("\n"))
+    } else {
+        require(httpsOrigin(origin) == origin)
+        entry.copy(autofillOrigins = (entry.autofillOrigins.lineSequence().filter(String::isNotBlank) + origin)
+            .distinct().joinToString("\n"))
+    }
+}
 
 internal fun generateLoginPassword(length: Int = 24): String {
     require(length in 16..64)

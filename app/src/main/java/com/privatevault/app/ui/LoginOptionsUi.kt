@@ -22,6 +22,12 @@ internal fun AutofillPreference() {
     OutlinedButton(onClick = {
         context.startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE, Uri.parse("package:${context.packageName}")))
     }, modifier = Modifier.fillMaxWidth()) { Text("Choose Nuvori autofill") }
+    if (android.os.Build.VERSION.SDK_INT >= 34) {
+        Text("Modern Android apps use Credential Manager instead of the Autofill service. Enable Nuvori there for passwords and passkeys as well.", style = MaterialTheme.typography.bodySmall)
+        OutlinedButton(onClick = {
+            runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
+        }, modifier = Modifier.fillMaxWidth()) { Text("Enable passwords and passkeys") }
+    }
     Text("In Chrome or Brave, enable autofill using another service in the browser's settings. Support depends on the browser exposing Android autofill fields. HTTP pages, mismatched subdomains, ambiguous forms and unverified browsers are rejected.", style = MaterialTheme.typography.bodySmall)
     OutlinedButton(onClick = {
         val intent = Intent(Intent.ACTION_APPLICATION_PREFERENCES).addCategory(Intent.CATEGORY_DEFAULT)

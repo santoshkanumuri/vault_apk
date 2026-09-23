@@ -19,8 +19,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 29
         targetSdk = 36
-        versionCode = 34
-        versionName = "1.9.8"
+        versionCode = 35
+        versionName = "1.9.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -55,6 +55,8 @@ android {
 
 dependencies {
     implementation("androidx.credentials:credentials:1.5.0")
+    implementation("androidx.credentials.providerevents:providerevents:1.0.0-alpha06")
+    implementation("androidx.credentials.providerevents:providerevents-play-services:1.0.0-alpha06")
     implementation("com.webauthn4j:webauthn4j-core:0.31.10.RELEASE")
     implementation("androidx.autofill:autofill:1.1.0")
     implementation("org.apache.commons:commons-csv:1.14.1")

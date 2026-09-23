@@ -27,7 +27,12 @@ enum class EntryType { CARD, QUESTION, PASSWORD, NOTE, AUTHENTICATOR }
 enum class CardKind { CREDIT, DEBIT }
 
 @Entity(tableName = "vault_settings")
-data class VaultSettings(@androidx.room.PrimaryKey val id: Int = 1, val lightMode: Boolean = false, val nfcEnabled: Boolean = false)
+data class VaultSettings(
+    @androidx.room.PrimaryKey val id: Int = 1,
+    val lightMode: Boolean = false,
+    val nfcEnabled: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "''") val vaultId: String = "",
+)
 
 @Entity(tableName = "entries")
 data class VaultEntry(
@@ -45,6 +50,7 @@ data class VaultEntry(
     val totpPeriod: Int = 30,
     val linkedApps: String = "",
     val autofillSignatures: String = "",
+    val autofillOrigins: String = "",
     val linkedAuthenticatorId: String = "",
     val notes: String = "",
     val color: Long = 0xFF08704AL,
@@ -115,6 +121,8 @@ data class LoginImportResult(
     val skippedConflicts: Int
 )
 
+data class PasskeyImportResult(val added: Int, val alreadySaved: Int)
+
 enum class LoginImportAction { ADD, SKIP_EXACT, KEEP_SAVED, USE_IMPORTED, SKIP_AMBIGUOUS }
 
 data class LoginImportMatch(val id: String, val updatedAt: Long, val passwordFingerprint: String) {
@@ -132,7 +140,8 @@ data class LoginImportMatch(val id: String, val updatedAt: Long, val passwordFin
 data class LoginImportRequest(
     val incoming: VaultEntry,
     val action: LoginImportAction,
-    val expectedMatches: List<LoginImportMatch>
+    val expectedMatches: List<LoginImportMatch>,
+    val matchedSavedEntryId: String? = null
 )
 
 @Dao
@@ -266,8 +275,14 @@ interface VaultDao {
     @Transaction
     suspend fun backupSnapshot(): com.privatevault.app.backup.BackupData {
         val entries = allEntries()
-        val options = settings() ?: VaultSettings()
-        return com.privatevault.app.backup.BackupData(entries.map { it.entry }, allGroupsWithEntries().map { it.group }, allLinks(), entries.flatMap { it.photos }, options.lightMode, options.nfcEnabled, allPasskeys())
+        val storedOptions = settings()
+        val options = when {
+            storedOptions == null -> VaultSettings(vaultId = UUID.randomUUID().toString())
+            storedOptions.vaultId.isBlank() -> storedOptions.copy(vaultId = UUID.randomUUID().toString())
+            else -> storedOptions
+        }
+        if (storedOptions != options) saveSettings(options)
+        return com.privatevault.app.backup.BackupData(entries.map { it.entry }, allGroupsWithEntries().map { it.group }, allLinks(), entries.flatMap { it.photos }, options.lightMode, options.nfcEnabled, allPasskeys(), options.vaultId)
     }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -294,6 +309,24 @@ interface VaultDao {
     @Query("DELETE FROM passkeys") suspend fun clearPasskeys()
     @Query("DELETE FROM passkeys WHERE id = :id") suspend fun deletePasskey(id: String)
 
+    @Transaction
+    suspend fun importPasskeys(passkeys: List<VaultPasskey>): PasskeyImportResult {
+        require(passkeys.map { it.id }.distinct().size == passkeys.size)
+        passkeys.forEach(com.privatevault.app.passkeys.PasskeyCrypto::validateStored)
+        val existing = allPasskeys().associateBy { it.id }
+        var alreadySaved = 0
+        val additions = passkeys.filter { incoming ->
+            val saved = existing[incoming.id] ?: return@filter true
+            require(saved.copy(createdAt = incoming.createdAt) == incoming) {
+                "A different passkey already uses this credential ID. Nothing was imported."
+            }
+            alreadySaved++
+            false
+        }
+        if (additions.isNotEmpty()) insertPasskeys(additions)
+        return PasskeyImportResult(additions.size, alreadySaved)
+    }
+
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertEntries(entries: List<VaultEntry>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertGroups(groups: List<VaultGroup>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertLinks(links: List<EntryGroupCrossRef>)
@@ -301,12 +334,17 @@ interface VaultDao {
 
     @Transaction
     suspend fun saveEntry(entry: VaultEntry, groupIds: Set<String>) {
+        saveEntryExact(entry.copy(updatedAt = System.currentTimeMillis()), groupIds)
+    }
+
+    @Transaction
+    suspend fun saveEntryExact(entry: VaultEntry, groupIds: Set<String>) {
         require(entry.linkedAuthenticatorId.isBlank() || (entry.type == EntryType.PASSWORD &&
             this.entry(entry.linkedAuthenticatorId)?.entry?.type == EntryType.AUTHENTICATOR)) { "Choose an existing authenticator." }
         val selectedGroups = allGroupsWithEntries().map { it.group }.filter { it.id in groupIds }
         require(selectedGroups.size == groupIds.size && selectedGroups.all { it.folderType == null || it.folderType == entry.type } &&
             selectedGroups.count { it.folderType != null } <= 1) { "Choose one folder for this entry type." }
-        insertEntry(entry.copy(updatedAt = System.currentTimeMillis()))
+        insertEntry(entry)
         clearLinks(entry.id)
         groupIds.forEach { link(EntryGroupCrossRef(entry.id, it)) }
     }
@@ -326,6 +364,9 @@ interface VaultDao {
             val matches = known.filter { com.privatevault.app.security.sameImportedAccount(it, entry) }
             val currentSnapshot = matches.map(LoginImportMatch::from).sortedBy { it.id }
             require(currentSnapshot == request.expectedMatches.sortedBy { it.id }) {
+                "Saved passwords changed after review. Review the import again."
+            }
+            require(request.matchedSavedEntryId == matches.singleOrNull()?.id) {
                 "Saved passwords changed after review. Review the import again."
             }
             when (request.action) {
@@ -396,15 +437,45 @@ class EntryTypeConverter {
 }
 
 @Database(
-    entities = [VaultEntry::class, VaultGroup::class, EntryGroupCrossRef::class, VaultPhoto::class, VaultSettings::class, VaultPasskey::class],
-    version = 9,
+    entities = [VaultEntry::class, VaultGroup::class, EntryGroupCrossRef::class, VaultPhoto::class, VaultSettings::class, VaultPasskey::class,
+        SyncOperationEntity::class, SyncDeviceHeadEntity::class, SyncRecordStateEntity::class, SyncTombstoneEntity::class,
+        SyncAttachmentManifestEntity::class, SyncConflictEntity::class, SyncPeerAcknowledgementEntity::class],
+    version = 12,
     exportSchema = false
 )
 @androidx.room.TypeConverters(EntryTypeConverter::class)
 abstract class VaultDatabase : RoomDatabase() {
     abstract fun dao(): VaultDao
+    abstract fun syncDao(): SyncDao
 
     companion object {
+        internal val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE entries ADD COLUMN autofillOrigins TEXT NOT NULL DEFAULT ''")
+            }
+        }
+        internal val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vault_settings ADD COLUMN vaultId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_record_states (entityType TEXT NOT NULL, entityId TEXT NOT NULL, revision INTEGER NOT NULL, recordVersionJson TEXT NOT NULL, PRIMARY KEY(entityType, entityId))")
+            }
+        }
+        internal val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_operations (mutationId TEXT NOT NULL PRIMARY KEY, formatVersion INTEGER NOT NULL, vaultId TEXT NOT NULL, deviceId TEXT NOT NULL, sequence INTEGER NOT NULL, previousHash TEXT NOT NULL, entityType TEXT NOT NULL, entityId TEXT NOT NULL, kind TEXT NOT NULL, baseRevision INTEGER NOT NULL, recordVersionJson TEXT NOT NULL, occurredAtUtc TEXT NOT NULL, payloadCiphertext TEXT NOT NULL, payloadNonce TEXT NOT NULL, deviceSignature TEXT NOT NULL, hash TEXT NOT NULL)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_sync_operations_vaultId_deviceId_sequence ON sync_operations (vaultId, deviceId, sequence)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_sync_operations_hash ON sync_operations (hash)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_operations_entityType_entityId ON sync_operations (entityType, entityId)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_device_heads (vaultId TEXT NOT NULL, deviceId TEXT NOT NULL, sequence INTEGER NOT NULL, hash TEXT NOT NULL, PRIMARY KEY(vaultId, deviceId))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_tombstones (tombstoneId TEXT NOT NULL PRIMARY KEY, entityType TEXT NOT NULL, entityId TEXT NOT NULL, deletedByDeviceId TEXT NOT NULL, deleteSequence INTEGER NOT NULL, recordVersionJson TEXT NOT NULL, deletedAtUtc TEXT NOT NULL, changeHash TEXT NOT NULL)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_sync_tombstones_entityType_entityId ON sync_tombstones (entityType, entityId)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_attachment_manifests (attachmentId TEXT NOT NULL PRIMARY KEY, ownerEntityType TEXT NOT NULL, ownerEntityId TEXT NOT NULL, encryptedFileName TEXT NOT NULL, ciphertextHash TEXT NOT NULL, sizeBytes INTEGER NOT NULL, keyEpoch INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_attachment_manifests_ownerEntityType_ownerEntityId ON sync_attachment_manifests (ownerEntityType, ownerEntityId)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_conflicts (conflictId TEXT NOT NULL PRIMARY KEY, entityType TEXT NOT NULL, entityId TEXT NOT NULL, localChangeHash TEXT NOT NULL, remoteChangeHash TEXT NOT NULL, localVersionJson TEXT NOT NULL, remoteVersionJson TEXT NOT NULL, detectedAtUtc TEXT NOT NULL, resolvedAtUtc TEXT NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_conflicts_entityType_entityId ON sync_conflicts (entityType, entityId)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_peer_acknowledgements (vaultId TEXT NOT NULL, peerDeviceId TEXT NOT NULL, sourceDeviceId TEXT NOT NULL, sequence INTEGER NOT NULL, acknowledgedAtUtc TEXT NOT NULL, PRIMARY KEY(vaultId, peerDeviceId, sourceDeviceId))")
+            }
+        }
         private val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE vault_groups ADD COLUMN folderType TEXT")
@@ -461,7 +532,7 @@ abstract class VaultDatabase : RoomDatabase() {
             val factory = SupportOpenHelperFactory(key.copyOf())
             return Room.databaseBuilder(context, VaultDatabase::class.java, "vault.db")
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                 .build()
         }
     }

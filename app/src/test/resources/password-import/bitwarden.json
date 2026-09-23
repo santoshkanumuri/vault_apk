@@ -1,0 +1,1 @@
+{"encrypted":false,"items":[{"type":1,"name":"Example","notes":"Bitwarden JSON note","login":{"username":"bitwarden-json-user","password":"synthetic-secret","uris":[{"uri":"https://bitwarden-json.example/login"}]}}]}

@@ -4,8 +4,24 @@ import org.junit.Assert.*
 import org.junit.Test
 import com.privatevault.app.data.EntryType
 import com.privatevault.app.data.VaultEntry
+import java.io.ByteArrayInputStream
 
 class BrowserPasswordsTest {
+    @Test fun importsSanitizedProviderFixtures() {
+        val fixtures = listOf(
+            "chrome.csv", "brave.csv", "edge.csv", "firefox.csv", "safari.csv",
+            "onepassword.csv", "lastpass.csv", "keepass.csv", "bitwarden.csv", "bitwarden.json"
+        )
+        fixtures.forEach { name ->
+            val reader = requireNotNull(javaClass.getResourceAsStream("/password-import/$name"))
+                .reader(Charsets.UTF_8)
+            val entry = reader.use(::readBrowserPasswords).single()
+            assertTrue(name, entry.tertiaryValue.startsWith("https://"))
+            assertTrue(name, entry.primaryValue.isNotBlank())
+            assertEquals(name, "synthetic-secret", entry.secondaryValue)
+        }
+    }
+
     @Test fun parsesBrowserCsvWithoutTrimmingSecretsAndSupportsMultilineNotes() {
         val csv = "\uFEFFname,url,username,password,note\r\nBank,https://example.com/login,user,\" a,b\"\"c \",\"first\nsecond\"\r\n"
         val entry = readBrowserPasswords(csv.reader()).single()
@@ -14,6 +30,40 @@ class BrowserPasswordsTest {
         assertEquals("https://example.com/login", entry.tertiaryValue)
         assertEquals("", entry.autofillSignatures)
         assertEquals("", entry.linkedAuthenticatorId)
+    }
+
+    @Test fun importsUtf16ChromeCsvWithSeparatorPreambleAndMissingOptionalTrailingCell() {
+        val csv = "sep=;\r\nname;url;username;password;note\r\nBank;https://example.com;user;secret"
+        val encoded = csv.toByteArray(Charsets.UTF_16LE)
+        val input = ByteArrayInputStream(byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + encoded)
+
+        val entry = readBrowserPasswords(input).single()
+
+        assertEquals("Bank", entry.title)
+        assertEquals("https://example.com", entry.tertiaryValue)
+        assertEquals("user", entry.primaryValue)
+        assertEquals("secret", entry.secondaryValue)
+        assertEquals("", entry.notes)
+    }
+
+    @Test fun importsTabSeparatedChromeColumns() {
+        val csv = "name\turl\tusername\tpassword\tnote\nBank\thttps://example.com\tuser\tsecret\tmemo"
+        assertEquals("secret", readBrowserPasswords(csv.reader()).single().secondaryValue)
+    }
+
+    @Test fun reportsPasswordlessExportsWithoutExposingRows() {
+        val error = assertThrows(PasswordImportFormatException::class.java) {
+            readBrowserPasswords("name,url,username,password,note\nBank,https://example.com,user,,private note".reader())
+        }
+        assertEquals("No non-empty passwords were found in the export.", error.message)
+        assertFalse(error.message!!.contains("private note"))
+    }
+
+    @Test fun rejectsMalformedTextEncodingWithASafeMessage() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            readBrowserPasswords(ByteArrayInputStream(byteArrayOf(0xC3.toByte(), 0x28)))
+        }
+        assertTrue(error.message!!.startsWith("Could not read password export."))
     }
     @Test fun rejectsBrokenRowsMissingColumnsAndMalformedQuotesWithoutEchoingSecrets() {
         listOf("name,url,password\nBank,https://example.com,secret", "name,url,username,password\nBank,url,user,\"unclosed-secret", "name,url,username,password\nBank,url,user,secret,extra").forEach {
@@ -62,6 +112,8 @@ class BrowserPasswordsTest {
             readBrowserPasswords(csv.reader())
         }
         assertEquals(listOf("label", "site address", "identity", "credential", "memo"), required.headers)
+        assertEquals(listOf("••••", "https://••••", "••••@••••", "••••", "••••"),
+            required.columns.map { it.sampleShape })
         assertFalse(required.message!!.contains("secret"))
 
         val entry = readBrowserPasswords(csv.reader(), PasswordColumnMapping(
@@ -73,6 +125,22 @@ class BrowserPasswordsTest {
         assertEquals("user@example.com", entry.primaryValue)
         assertEquals("secret", entry.secondaryValue)
         assertEquals("personal", entry.notes)
+    }
+
+    @Test fun requestsMappingWhenAliasesCompeteForTheSameField() {
+        val csv = "url,hostname,username,password\nhttps://example.com,example.com,user,secret"
+        val required = assertThrows(PasswordColumnMappingRequired::class.java) {
+            readBrowserPasswords(csv.reader())
+        }
+        assertNull(required.suggested.website)
+        assertFalse(required.columns.any { it.sampleShape.contains("secret") })
+    }
+
+    @Test fun neverShowsRecognizedPasswordSamplesDuringMapping() {
+        val required = assertThrows(PasswordColumnMappingRequired::class.java) {
+            readBrowserPasswords("username,password\nuser,https://secret.example".reader())
+        }
+        assertEquals("Hidden", required.columns.single { it.header == "password" }.sampleShape)
     }
 
     @Test fun rejectsDuplicateOrMissingExplicitColumnSelectionsWithoutReadingSecrets() {

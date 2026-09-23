@@ -539,9 +539,15 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                     Text("Ambiguous accounts match more than one saved login. They will not be changed.", style = MaterialTheme.typography.bodySmall)
                 }
                 item { HorizontalDivider() }
-                items(visibleImportItems, key = { it.id }) { item ->
+                items(visibleImportItems, key = { it.rowId }) { item ->
                     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            if (item.status == PasswordImportStatus.NEW) Checkbox(
+                                checked = item.selected,
+                                onCheckedChange = { viewModel.setPasswordImportSelected(item.rowId, it) },
+                                modifier = Modifier.semantics { contentDescription = "Import ${item.label}" }
+                            )
                             Text(item.label, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(when (item.status) {
                                 PasswordImportStatus.NEW -> "New"
@@ -558,7 +564,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                                 ).forEach { (decision, label) ->
                                     Row(Modifier.weight(1f).heightIn(min = 48.dp)
                                         .selectable(selected = item.decision == decision, role = Role.RadioButton,
-                                            onClick = { viewModel.setPasswordImportDecision(item.id, decision) })
+                                            onClick = { viewModel.setPasswordImportDecision(item.rowId, decision) })
                                         .padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                         RadioButton(selected = item.decision == decision, onClick = null)
                                         Text(label, style = MaterialTheme.typography.bodySmall)
@@ -589,12 +595,12 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
             title = { Text("Match password columns") },
             text = {
                 Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("This export uses unfamiliar headings. Match headings only; Nuvori will not inspect row values to guess.")
-                    PasswordColumnPicker("Website", website, request.headers, required = true) { website = it }
-                    PasswordColumnPicker("Username", username, request.headers, required = true) { username = it }
-                    PasswordColumnPicker("Password", password, request.headers, required = true) { password = it }
-                    PasswordColumnPicker("Title", title, request.headers, required = false) { title = it }
-                    PasswordColumnPicker("Notes", notes, request.headers, required = false) { notes = it }
+                    Text("Match each heading. Samples are masked, and password samples are always hidden.")
+                    PasswordColumnPicker("Website", website, request.columns, required = true) { website = it }
+                    PasswordColumnPicker("Username", username, request.columns, required = true) { username = it }
+                    PasswordColumnPicker("Password", password, request.columns, required = true) { password = it }
+                    PasswordColumnPicker("Title", title, request.columns, required = false) { title = it }
+                    PasswordColumnPicker("Notes", notes, request.columns, required = false) { notes = it }
                     if (!valid) Text("Choose three different required columns. Optional columns must also be different.", color = MaterialTheme.colorScheme.error)
                 }
             },
@@ -710,7 +716,7 @@ private fun VaultSummary(items: List<SummaryItem>, openCategory: (EntryType) -> 
 private fun PasswordColumnPicker(
     label: String,
     selected: String?,
-    headers: List<String>,
+    columns: List<com.privatevault.app.security.PasswordColumnPreview>,
     required: Boolean,
     onSelected: (String?) -> Unit
 ) {
@@ -722,9 +728,14 @@ private fun PasswordColumnPicker(
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (!required) DropdownMenuItem(text = { Text("Do not import") }, onClick = { onSelected(null); expanded = false })
-            headers.forEach { header ->
-                DropdownMenuItem(text = { Text(header, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = {
-                    onSelected(header)
+            columns.forEach { column ->
+                DropdownMenuItem(text = {
+                    Column {
+                        Text(column.header, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(column.sampleShape, style = MaterialTheme.typography.bodySmall)
+                    }
+                }, onClick = {
+                    onSelected(column.header)
                     expanded = false
                 })
             }
@@ -1093,12 +1104,14 @@ private fun EntryRow(item: EntryWithDetails, selected: Boolean, includeType: Boo
         onClick = onClick)
 
 @Composable
-private fun CompactEntryRow(
+internal fun CompactEntryRow(
     item: EntryWithDetails,
     includeType: Boolean,
     showPreview: Boolean,
     trailing: String? = null,
+    trailingColor: Color? = null,
     containerColor: Color,
+    contentDescription: String? = null,
     onClick: () -> Unit
 ) {
     val folder = item.groups.firstOrNull { it.folderType != null }?.name
@@ -1116,7 +1129,7 @@ private fun CompactEntryRow(
         Modifier.fillMaxWidth()
             .heightIn(min = 64.dp)
             .clickable(onClick = onClick)
-            .semantics { contentDescription = "Open ${item.entry.type.label()}: ${item.entry.title}" },
+            .semantics { this.contentDescription = contentDescription ?: "Open ${item.entry.type.label()}: ${item.entry.title}" },
         color = containerColor
     ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1135,7 +1148,7 @@ private fun CompactEntryRow(
                 if (metadata.isNotBlank()) Text(metadata, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = .65f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (trailing != null) Text(trailing, color = MaterialTheme.colorScheme.error,
+            if (trailing != null) Text(trailing, color = trailingColor ?: MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.labelMedium, maxLines = 1)
         }
     }
@@ -1781,12 +1794,15 @@ private fun GroupEntryDetails(
 @Composable
 internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: FirstRunChoice? = null, close: () -> Unit) {
     val passkeys by viewModel.passkeys.collectAsStateWithLifecycle()
+    val passkeyTransfer by viewModel.passkeyTransferPreview.collectAsStateWithLifecycle()
     var deletePasskey by remember { mutableStateOf<com.privatevault.app.data.PasskeySummary?>(null) }
     var page by remember { mutableStateOf<String?>(if (initialImportChoice != null) "Backup and import" else null) }
     val pageScroll = remember(page) { androidx.compose.foundation.ScrollState(0) }
     LaunchedEffect(page) { if (page == "Passkeys") viewModel.refreshPasskeys() }
     var showPrivacy by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val transferScope = rememberCoroutineScope()
+    var transferBusy by remember { mutableStateOf(false) }
     val lightMode by viewModel.lightMode.collectAsStateWithLifecycle()
     val nfcEnabled by viewModel.nfcEnabled.collectAsStateWithLifecycle()
     var action by remember { mutableStateOf<String?>(null) }
@@ -1848,9 +1864,42 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 if (android.os.Build.VERSION.SDK_INT >= 34) {
                     OutlinedButton(onClick = {
                         runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Enable Nuvori for passkeys") }
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Enable Nuvori for passwords and passkeys") }
                 } else Text("Creating and using passkeys requires Android 14 or newer. Stored passkeys remain included in backups.")
-                Text("Currently supports ES256 passkeys for the exact website host. Native apps and related or parent-domain requests are not supported yet.", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(
+                    enabled = !transferBusy,
+                    onClick = {
+                        transferBusy = true
+                        viewModel.externalFlowActive = true
+                        transferScope.launch {
+                            try {
+                                val manager = androidx.credentials.providerevents.ProviderEventsManager.create(context)
+                                val request = androidx.credentials.providerevents.transfer.ImportCredentialsRequest(
+                                    credentialTypes = setOf(androidx.credentials.providerevents.transfer.CredentialTypes.CREDENTIAL_TYPE_PUBLIC_KEY),
+                                    knownExtensions = emptySet()
+                                )
+                                val response = manager.importCredentials(context, request)
+                                viewModel.previewCredentialTransfer(
+                                    response.response.responseJson,
+                                    response.callingAppInfo.packageName
+                                )
+                            } catch (error: androidx.credentials.providerevents.exception.ImportCredentialsException) {
+                                viewModel.credentialTransferFailed(
+                                    error is androidx.credentials.providerevents.exception.ImportCredentialsCancellationException
+                                )
+                            } catch (_: Exception) {
+                                viewModel.credentialTransferFailed(false)
+                            } finally {
+                                viewModel.externalFlowActive = false
+                                transferBusy = false
+                                viewModel.touch()
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                ) { Text(if (transferBusy) "Waiting for password manager…" else "Import passkeys from another manager") }
+                Text("Android will show managers that support secure credential transfer. Browsers are listed only when their credential provider offers an export.", style = MaterialTheme.typography.bodySmall)
+                Text("Supports ES256 passkeys for websites and native apps that use Android Credential Manager. Apps using legacy FIDO APIs, enterprise attestation, or unsupported extensions cannot offer Nuvori.", style = MaterialTheme.typography.bodySmall)
                 if (passkeys.isEmpty()) Text("No passkeys saved yet.")
                 passkeys.forEach { key ->
                     Card(Modifier.fillMaxWidth()) {
@@ -1905,6 +1954,48 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             text = { Text("Remove the passkey for ${key.username} at ${key.rpId}? Make sure you have another way to sign in. Older backups may still contain it.") },
             confirmButton = { DeleteButton(onClick = { viewModel.deletePasskey(key.id); deletePasskey = null }) },
             dismissButton = { TextButton(onClick = { deletePasskey = null }) { Text("Cancel") } })
+    }
+    passkeyTransfer?.let { preview ->
+        val newCount = preview.items.count { it.status == PasskeyTransferStatus.NEW }
+        val savedCount = preview.items.count { it.status == PasskeyTransferStatus.ALREADY_SAVED }
+        val conflictCount = preview.items.count { it.status == PasskeyTransferStatus.CONFLICT }
+        AlertDialog(
+            onDismissRequest = viewModel::cancelCredentialTransfer,
+            title = { Text("Import passkeys from ${preview.exporter}?") },
+            text = {
+                LazyColumn(Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    item {
+                        Text("$newCount new · $savedCount already saved · $conflictCount conflicts")
+                        Text(preview.sourcePackage, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (preview.unsupported > 0) item {
+                        Text("${preview.unsupported} passkeys use an unsupported key type or extension and will not be imported.")
+                    }
+                    items(preview.items, key = { it.id }) { item ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text(item.rpId, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(item.username, style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            Text(when (item.status) {
+                                PasskeyTransferStatus.NEW -> "New"
+                                PasskeyTransferStatus.ALREADY_SAVED -> "Already saved"
+                                PasskeyTransferStatus.CONFLICT -> "Conflict"
+                            }, style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (conflictCount > 0) item {
+                        Text("A conflicting credential ID cannot be overwritten. Cancel this import and remove the conflicting passkey only after confirming you have another sign-in method.", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(enabled = conflictCount == 0 && preview.items.isNotEmpty(),
+                    onClick = viewModel::confirmCredentialTransfer) { Text("Import") }
+            },
+            dismissButton = { TextButton(onClick = viewModel::cancelCredentialTransfer) { Text("Cancel") } }
+        )
     }
     if (action == "export" || action == "restore") AlertDialog(
         modifier = wideDialogModifier,

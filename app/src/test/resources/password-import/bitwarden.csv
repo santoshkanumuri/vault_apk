@@ -1,0 +1,2 @@
+folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp
+,,login,Example,Bitwarden note,,,https://bitwarden.example/login,bitwarden-user,synthetic-secret,

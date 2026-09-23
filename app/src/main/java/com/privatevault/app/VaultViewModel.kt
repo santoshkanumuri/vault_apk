@@ -18,6 +18,7 @@ import com.privatevault.app.security.BiometricGate
 import com.privatevault.app.security.VaultKeyManager
 import com.privatevault.app.security.PasswordColumnMapping
 import com.privatevault.app.security.PasswordColumnMappingRequired
+import com.privatevault.app.security.PasswordColumnPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,10 +54,12 @@ internal fun PasswordImportFilter.matches(status: PasswordImportStatus): Boolean
 enum class PasswordImportDecision { KEEP_SAVED, USE_IMPORTED }
 
 data class PasswordImportItem(
-    val id: String,
+    val rowId: String,
+    val matchedSavedEntryId: String?,
     val label: String,
     val status: PasswordImportStatus,
-    val decision: PasswordImportDecision? = null
+    val decision: PasswordImportDecision? = null,
+    val selected: Boolean = status == PasswordImportStatus.NEW
 )
 
 data class PasswordImportPreview(
@@ -69,8 +72,24 @@ data class PasswordImportPreview(
     val ambiguousCount: Int
 )
 
+enum class PasskeyTransferStatus { NEW, ALREADY_SAVED, CONFLICT }
+
+data class PasskeyTransferItem(
+    val id: String,
+    val rpId: String,
+    val username: String,
+    val status: PasskeyTransferStatus
+)
+
+data class PasskeyTransferPreview(
+    val exporter: String,
+    val sourcePackage: String,
+    val items: List<PasskeyTransferItem>,
+    val unsupported: Int
+)
+
 internal data class PasswordImportMappingRequest(
-    val headers: List<String>,
+    val columns: List<PasswordColumnPreview>,
     val suggested: PasswordColumnMapping
 )
 
@@ -78,6 +97,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val keyManager = VaultKeyManager(application)
     private val biometricGate = BiometricGate(application)
     private val photoStore = EncryptedPhotoStore(application)
+    private val deviceIdentityStore = com.privatevault.app.sync.AndroidDeviceIdentityStore(application)
     private var preparedRestore: com.privatevault.app.backup.PreparedRestore? = null
     private val _restoreSummary = MutableStateFlow<String?>(null)
     val restoreSummary = _restoreSummary.asStateFlow()
@@ -87,6 +107,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val importPreview = _importPreview.asStateFlow()
     private val _importMapping = MutableStateFlow<PasswordImportMappingRequest?>(null)
     internal val importMapping = _importMapping.asStateFlow()
+    private var pendingTransferredPasskeys = emptyList<com.privatevault.app.data.VaultPasskey>()
+    private val _passkeyTransferPreview = MutableStateFlow<PasskeyTransferPreview?>(null)
+    val passkeyTransferPreview = _passkeyTransferPreview.asStateFlow()
 
     fun cancelPasswordImport() {
         pendingLoginRequests = emptyList()
@@ -95,21 +118,64 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _importMapping.value = null
     }
 
+    fun cancelCredentialTransfer() {
+        pendingTransferredPasskeys = emptyList()
+        _passkeyTransferPreview.value = null
+    }
+
+    fun previewCredentialTransfer(json: String, sourcePackage: String) = securedLaunch {
+        cancelCredentialTransfer()
+        val activeKey = requireNotNull(sessionKey)
+        val transfer = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            com.privatevault.app.passkeys.readCxfPasskeys(json)
+        }
+        if (sessionKey !== activeKey || _status.value !is VaultStatus.Unlocked) return@securedLaunch
+        val existing = dao().allPasskeys().associateBy { it.id }
+        val items = transfer.passkeys.map { incoming ->
+            val saved = existing[incoming.id]
+            val status = when {
+                saved == null -> PasskeyTransferStatus.NEW
+                saved.copy(createdAt = incoming.createdAt) == incoming -> PasskeyTransferStatus.ALREADY_SAVED
+                else -> PasskeyTransferStatus.CONFLICT
+            }
+            PasskeyTransferItem(incoming.id, incoming.rpId, incoming.username, status)
+        }
+        pendingTransferredPasskeys = transfer.passkeys
+        _passkeyTransferPreview.value = PasskeyTransferPreview(
+            transfer.exporterDisplayName, sourcePackage.take(200), items, transfer.unsupportedPasskeys
+        )
+    }
+
+    fun confirmCredentialTransfer() = securedLaunch {
+        val preview = requireNotNull(_passkeyTransferPreview.value)
+        require(preview.items.none { it.status == PasskeyTransferStatus.CONFLICT }) {
+            "Resolve passkey credential-ID conflicts before importing."
+        }
+        val result = dao().importPasskeys(pendingTransferredPasskeys)
+        cancelCredentialTransfer()
+        refreshPasskeys()
+        _message.value = "Imported ${result.added} passkeys. ${result.alreadySaved} were already saved."
+    }
+
+    fun credentialTransferFailed(cancelled: Boolean) {
+        externalFlowActive = false
+        touch()
+        if (!cancelled) _message.value = "No compatible passkey transfer was available. The source manager must support Android credential transfer."
+    }
+
     internal fun previewPasswordImport(uri: Uri, mapping: PasswordColumnMapping? = null) = securedLaunch {
         cancelPasswordImport()
         val activeKey = requireNotNull(sessionKey)
         val parsed = try {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-                java.io.InputStreamReader(requireNotNull(getApplication<Application>().contentResolver.openInputStream(uri)), decoder).buffered().use {
+                requireNotNull(getApplication<Application>().contentResolver.openInputStream(uri)).buffered().use {
                     com.privatevault.app.security.readBrowserPasswords(it, mapping)
                 }
             }
         } catch (required: PasswordColumnMappingRequired) {
             if (sessionKey === activeKey && _status.value is VaultStatus.Unlocked) {
                 pendingPasswordImportUri = uri
-                _importMapping.value = PasswordImportMappingRequest(required.headers, required.suggested)
+                _importMapping.value = PasswordImportMappingRequest(required.columns, required.suggested)
             }
             return@securedLaunch
         }
@@ -125,7 +191,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     com.privatevault.app.security.sameImportedLogin(matches.single(), entry) -> LoginImportAction.SKIP_EXACT
                     else -> LoginImportAction.KEEP_SAVED
                 }
-                LoginImportRequest(entry, action, matches.map(LoginImportMatch::from))
+                LoginImportRequest(entry, action, matches.map(LoginImportMatch::from), matches.singleOrNull()?.id)
             }
             val items = requests.map { request ->
                 val status = when (request.action) {
@@ -134,7 +200,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     LoginImportAction.KEEP_SAVED, LoginImportAction.USE_IMPORTED -> PasswordImportStatus.PASSWORD_DIFFERS
                     LoginImportAction.SKIP_AMBIGUOUS -> PasswordImportStatus.AMBIGUOUS
                 }
-                PasswordImportItem(request.incoming.id, "${request.incoming.title} · ${request.incoming.primaryValue}", status,
+                PasswordImportItem(request.incoming.id, request.matchedSavedEntryId,
+                    "${request.incoming.title} · ${request.incoming.primaryValue}", status,
                     if (status == PasswordImportStatus.PASSWORD_DIFFERS) PasswordImportDecision.KEEP_SAVED else null)
             }
             pendingLoginRequests = requests
@@ -153,8 +220,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPasswordImportDecision(id: String, decision: PasswordImportDecision) {
         val preview = _importPreview.value ?: return
-        if (preview.items.none { it.id == id && it.status == PasswordImportStatus.PASSWORD_DIFFERS }) return
-        _importPreview.value = preview.copy(items = preview.items.map { if (it.id == id) it.copy(decision = decision) else it })
+        if (preview.items.none { it.rowId == id && it.status == PasswordImportStatus.PASSWORD_DIFFERS }) return
+        _importPreview.value = preview.copy(items = preview.items.map { if (it.rowId == id) it.copy(decision = decision) else it })
         pendingLoginRequests = pendingLoginRequests.map { request ->
             if (request.incoming.id != id) request else request.copy(action = when (decision) {
                 PasswordImportDecision.KEEP_SAVED -> LoginImportAction.KEEP_SAVED
@@ -165,15 +232,25 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setAllPasswordImportDecisions(decision: PasswordImportDecision) {
         _importPreview.value?.items?.filter { it.status == PasswordImportStatus.PASSWORD_DIFFERS }
-            ?.forEach { setPasswordImportDecision(it.id, decision) }
+            ?.forEach { setPasswordImportDecision(it.rowId, decision) }
+    }
+
+    fun setPasswordImportSelected(id: String, selected: Boolean) {
+        val preview = _importPreview.value ?: return
+        if (preview.items.none { it.rowId == id && it.status == PasswordImportStatus.NEW }) return
+        _importPreview.value = preview.copy(items = preview.items.map {
+            if (it.rowId == id) it.copy(selected = selected) else it
+        })
     }
 
     fun confirmPasswordImport() = securedLaunch {
-        val requests = pendingLoginRequests
         val preview = _importPreview.value
-        if (requests.isNotEmpty()) {
+        if (preview != null) {
             require(preview?.items?.filter { it.status == PasswordImportStatus.PASSWORD_DIFFERS }
                 ?.all { it.decision != null } == true) { "Choose how to handle every changed password." }
+            val selectedNewRows = preview.items.filter { it.status == PasswordImportStatus.NEW && it.selected }
+                .mapTo(hashSetOf()) { it.rowId }
+            val requests = pendingLoginRequests.filter { it.action != LoginImportAction.ADD || it.incoming.id in selectedNewRows }
             val result = dao().importLogins(requests)
             cancelPasswordImport()
             refresh()
@@ -272,8 +349,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun persistSettings() {
         val db = database ?: return
-        val value = com.privatevault.app.data.VaultSettings(lightMode = _lightMode.value, nfcEnabled = _nfcEnabled.value)
-        viewModelScope.launch { runCatching { db.dao().saveSettings(value) } }
+        viewModelScope.launch {
+            runCatching {
+                val current = db.dao().settings() ?: com.privatevault.app.data.VaultSettings(
+                    vaultId = UUID.randomUUID().toString(),
+                )
+                db.dao().saveSettings(
+                    current.copy(lightMode = _lightMode.value, nfcEnabled = _nfcEnabled.value),
+                )
+            }
+        }
     }
 
     fun requestNfcScan() {
@@ -335,12 +420,18 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         sessionKey = key
         database = VaultDatabase.open(getApplication(), key)
         dao().convertCardFoldersToGroups()
-        val options = dao().settings()
-        if (options != null) {
+        val storedOptions = dao().settings()
+        val options = when {
+            storedOptions == null -> com.privatevault.app.data.VaultSettings(vaultId = UUID.randomUUID().toString())
+            storedOptions.vaultId.isBlank() -> storedOptions.copy(vaultId = UUID.randomUUID().toString())
+            else -> storedOptions
+        }
+        if (storedOptions != null) {
             _lightMode.value = options.lightMode
             _nfcEnabled.value = options.nfcEnabled && nfcSupported
             preferences.edit().putBoolean("light_mode", _lightMode.value).putBoolean("nfc_enabled", _nfcEnabled.value).commit()
-        } else dao().saveSettings(com.privatevault.app.data.VaultSettings(lightMode = _lightMode.value, nfcEnabled = _nfcEnabled.value))
+        }
+        if (storedOptions != options) dao().saveSettings(options.copy(lightMode = _lightMode.value, nfcEnabled = _nfcEnabled.value))
         _status.value = VaultStatus.Unlocked
         refresh()
         val retained = _entries.value.flatMap { it.photos }.flatMap { listOf(it.encryptedFileName, it.encryptedThumbnailFileName) }.toSet()
@@ -363,6 +454,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun lock(reason: LockReason) {
         cancelPasswordImport()
+        cancelCredentialTransfer()
         cancelRestore()
         clearCamera()
         cancelNfcScan()
@@ -427,7 +519,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         if (entry.type == com.privatevault.app.data.EntryType.AUTHENTICATOR) {
             com.privatevault.app.security.Totp.validate(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod)
         }
-        dao().saveEntry(entry, groupIds)
+        saveLocalEntry(entry, groupIds)
         refresh()
     }
 
@@ -460,7 +552,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
-        dao().saveEntry(duplicate, item.groups.map { it.id }.toSet())
+        saveLocalEntry(duplicate, item.groups.map { it.id }.toSet())
         refresh()
     }
 
@@ -608,6 +700,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun dao() = requireNotNull(database) { "Vault is locked" }.dao()
+
+    private suspend fun saveLocalEntry(entry: VaultEntry, groupIds: Set<String>) {
+        val activeDatabase = requireNotNull(database) { "Vault is locked" }
+        com.privatevault.app.sync.LocalEntryChangeWriter(activeDatabase, deviceIdentityStore)
+            .save(entry, groupIds, requireNotNull(sessionKey))
+    }
 
     private suspend fun refresh() {
         _passkeys.value = dao().passkeySummaries()

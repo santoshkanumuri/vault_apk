@@ -180,7 +180,18 @@ class VaultBackupManager(
         try {
             val parsed = prepared.data
             val oldPhotos = dao.backupSnapshot().photos
-            dao.replaceAll(parsed.entries, parsed.groups, parsed.links, parsed.photos, com.privatevault.app.data.VaultSettings(lightMode = parsed.lightMode, nfcEnabled = parsed.nfcEnabled), parsed.passkeys)
+            dao.replaceAll(
+                parsed.entries,
+                parsed.groups,
+                parsed.links,
+                parsed.photos,
+                com.privatevault.app.data.VaultSettings(
+                    lightMode = parsed.lightMode,
+                    nfcEnabled = parsed.nfcEnabled,
+                    vaultId = parsed.vaultId.ifBlank { java.util.UUID.randomUUID().toString() },
+                ),
+                parsed.passkeys,
+            )
             prepared.committed = true
             oldPhotos.forEach { photo ->
                 runCatching { photoStore.delete(photo.encryptedFileName) }
@@ -193,8 +204,10 @@ class VaultBackupManager(
     }
 
     private fun serialize(snapshot: BackupData): ByteArray {
-        val root = JSONObject().put("version", 6)
+        require(snapshot.vaultId.isNotBlank()) { "Vault ID is missing" }
+        val root = JSONObject().put("version", 8)
             .put("lightMode", snapshot.lightMode).put("nfcEnabled", snapshot.nfcEnabled)
+            .put("vaultId", snapshot.vaultId)
         root.put("entries", JSONArray().apply { snapshot.entries.forEach { put(it.toJson()) } })
         root.put("groups", JSONArray().apply { snapshot.groups.forEach { put(it.toJson()) } })
         root.put("links", JSONArray().apply { snapshot.links.forEach { put(JSONObject().put("entryId", it.entryId).put("groupId", it.groupId)) } })
@@ -207,7 +220,7 @@ class VaultBackupManager(
 
     private fun parse(bytes: ByteArray): BackupData {
         val root = JSONObject(bytes.toString(Charsets.UTF_8))
-        require(root.getInt("version") in 1..6) { "Unsupported backup version" }
+        require(root.getInt("version") in 1..8) { "Unsupported backup version" }
         fun <T> JSONArray.mapJson(block: (JSONObject) -> T) = (0 until length()).map { block(getJSONObject(it)) }
         val result = BackupData(
             root.getJSONArray("entries").mapJson { it.toEntry() },
@@ -228,7 +241,8 @@ class VaultBackupManager(
             passkeys = (if (root.getInt("version") >= 5) root.getJSONArray("passkeys") else JSONArray()).mapJson {
                 com.privatevault.app.data.VaultPasskey(it.getString("id"), it.getString("rpId"), it.getString("userHandle"),
                     it.getString("username"), it.getString("displayName"), it.getString("privateKey"), it.getString("publicKey"), it.getLong("createdAt"))
-            }
+            },
+            vaultId = if (root.getInt("version") >= 7) root.getString("vaultId") else "",
         )
         require(result.passkeys.map { it.id }.distinct().size == result.passkeys.size) { "Duplicate passkeys" }
         result.passkeys.forEach(com.privatevault.app.passkeys.PasskeyCrypto::validateStored)
@@ -259,7 +273,8 @@ class VaultBackupManager(
         .put("tertiaryValue", tertiaryValue).put("fourthValue", fourthValue).put("cardKind", cardKind.name).put("network", network)
         .put("totpAlgorithm", totpAlgorithm).put("totpDigits", totpDigits).put("totpPeriod", totpPeriod)
         .put("linkedApps", linkedApps)
-        .put("autofillSignatures", autofillSignatures).put("linkedAuthenticatorId", linkedAuthenticatorId)
+        .put("autofillSignatures", autofillSignatures).put("autofillOrigins", autofillOrigins)
+        .put("linkedAuthenticatorId", linkedAuthenticatorId)
         .put("notes", notes).put("color", color).put("tags", tags).put("favorite", favorite)
         .put("lastOpenedAt", lastOpenedAt).put("sortOrder", sortOrder)
         .put("createdAt", createdAt).put("updatedAt", updatedAt)
@@ -279,6 +294,7 @@ class VaultBackupManager(
         totpPeriod = optInt("totpPeriod", 30),
         linkedApps = optString("linkedApps", ""),
         autofillSignatures = optString("autofillSignatures", ""),
+        autofillOrigins = optString("autofillOrigins", ""),
         linkedAuthenticatorId = optString("linkedAuthenticatorId", ""),
         notes = getString("notes"),
         color = getLong("color"),
@@ -300,7 +316,8 @@ data class BackupData(
     val photos: List<VaultPhoto>,
     val lightMode: Boolean = false,
     val nfcEnabled: Boolean = false,
-    val passkeys: List<com.privatevault.app.data.VaultPasskey> = emptyList()
+    val passkeys: List<com.privatevault.app.data.VaultPasskey> = emptyList(),
+    val vaultId: String = "",
 )
 
 class PreparedRestore internal constructor(val data: BackupData, private val files: List<String>, private val store: EncryptedPhotoStore) : AutoCloseable {

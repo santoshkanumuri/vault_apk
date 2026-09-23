@@ -16,6 +16,12 @@ class PasskeyCryptoTest {
     }
     @Test fun registrationAndAssertionAreVerifiableAndBoundToChallenge() {
         val input = PasskeyCrypto.request(CREATE, "https://example.com", true)
+        assertEquals("direct", PasskeyCrypto.request(
+            JSONObject(CREATE).put("attestation", "direct").toString(), "https://example.com", true
+        ).getString("attestation"))
+        assertTrue(runCatching { PasskeyCrypto.request(
+            JSONObject(CREATE).put("attestation", "enterprise").toString(), "https://example.com", true
+        ) }.isFailure)
         val (key, created) = PasskeyCrypto.create(input, "https://example.com", null)
         PasskeyCrypto.validateStored(key)
         val response = JSONObject(created).getJSONObject("response")
@@ -39,7 +45,9 @@ class PasskeyCryptoTest {
         assertTrue(verifies(hash))
         assertFalse(verifies(hash.copyOf().apply { this[0] = 99 }))
         assertEquals("{}", String(PasskeyCrypto.decode(signed.getString("clientDataJSON"))))
-        assertTrue(runCatching { PasskeyCrypto.request(GET, "https://evil.example", false) }.isFailure)
+        val parentRp = JSONObject(GET).put("rpId", "id.me").toString()
+        assertEquals("id.me", PasskeyCrypto.request(parentRp, "https://api.id.me", false).getString("rpId"))
+        assertTrue(runCatching { PasskeyCrypto.request(GET, "http://example.com", false) }.isFailure)
         assertTrue(runCatching { PasskeyCrypto.request(CREATE, "http://example.com", true) }.isFailure)
         assertTrue(runCatching { PasskeyCrypto.request(CREATE.replace("-7", "-257"), "https://example.com", true) }.isFailure)
         assertTrue(runCatching { PasskeyCrypto.validateStored(key.copy(privateKey = "bad")) }.isFailure)

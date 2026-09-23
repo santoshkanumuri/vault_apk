@@ -29,9 +29,9 @@ The screenshots contain synthetic demonstration data only.
 
 ## Download
 
-**[Download Nuvori v1.9.8 APK](downloads/nuvori-v1.9.8.apk?raw=true)**
+**[Download Nuvori v1.9.9 APK](downloads/nuvori-v1.9.9.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.8.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.9.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 

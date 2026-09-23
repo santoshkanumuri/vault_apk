@@ -32,4 +32,21 @@ class LoginSecurityTest {
         assertFalse(loginAuthorizedForDestination(entry, "com.android.chrome", identity, "http://example.com"))
         assertFalse(loginAuthorizedForDestination(entry.copy(type = EntryType.AUTHENTICATOR), "com.android.chrome", identity, "https://example.com"))
     }
+    @Test fun linksExistingLoginWithoutReplacingItsPrimaryWebsite() {
+        val identity = "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83"
+        val entry = VaultEntry(type = EntryType.PASSWORD, title = "Bank", secondaryValue = "secret", tertiaryValue = "https://example.com/login")
+        val browserLinked = linkLoginToDestination(entry, "com.android.chrome", identity, "https://accounts.example.net")
+        val appLinked = linkLoginToDestination(browserLinked, "com.example.bank", "certificate", null)
+
+        assertEquals(entry.tertiaryValue, appLinked.tertiaryValue)
+        assertTrue(loginAuthorizedForDestination(appLinked, "com.android.chrome", identity, "https://accounts.example.net"))
+        assertTrue(loginAuthorized(appLinked, "com.example.bank", "certificate"))
+        assertFalse(loginAuthorizedForDestination(appLinked, "com.android.chrome", identity, "https://example.net"))
+    }
+
+    @Test fun acceptsAConfirmedDialogSelectionWithoutActivityWindowFocus() {
+        assertTrue(trustedFillFocus(hasWindowFocus = false, confirmedDialogAction = true, generatedPassword = false))
+        assertTrue(trustedFillFocus(hasWindowFocus = false, confirmedDialogAction = false, generatedPassword = true))
+        assertFalse(trustedFillFocus(hasWindowFocus = false, confirmedDialogAction = false, generatedPassword = false))
+    }
 }

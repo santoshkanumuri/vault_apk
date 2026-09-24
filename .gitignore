@@ -24,6 +24,7 @@ signing.properties
 .env.*
 !.env.example
 captures/
-NEXT-RELEASE-PLAN.md
-SYNC-RECOVERY-PLAN.md
-PASSWORD-MANAGER-PLAN.md
+*.md
+!README.md
+!THIRD_PARTY_NOTICES.md
+!docs/RELEASE-*.md

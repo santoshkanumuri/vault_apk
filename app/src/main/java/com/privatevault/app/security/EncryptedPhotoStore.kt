@@ -8,8 +8,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.security.SecureRandom
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import javax.crypto.Cipher
 import javax.crypto.CipherInputStream
 import javax.crypto.CipherOutputStream
@@ -48,8 +46,10 @@ class EncryptedPhotoStore(context: Context) {
         } finally { bytes.fill(0) }
     }
 
-    fun transform(fileName: String, thumbnailFileName: String, key: ByteArray, rotateDegrees: Float = 0f, crop: PhotoCrop? = null) {
-        val bytes = decryptedBytes(fileName, key)
+    fun transform(sourceFileName: String, destinationFileName: String, thumbnailFileName: String,
+        key: ByteArray, rotateDegrees: Float = 0f, crop: PhotoCrop? = null) {
+        require(sourceFileName != destinationFileName)
+        val bytes = decryptedBytes(sourceFileName, key)
         try {
             val decoded = decodePhoto(bytes)
             val rotated = if (rotateDegrees != 0f) Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, Matrix().apply { postRotate(rotateDegrees) }, true) else decoded
@@ -57,31 +57,34 @@ class EncryptedPhotoStore(context: Context) {
                 val bounds = crop.pixels(rotated.width, rotated.height)
                 Bitmap.createBitmap(rotated, bounds[0], bounds[1], bounds[2], bounds[3])
             } else rotated
-            replace(transformed, fileName, key)
-            createThumbnail(fileName, thumbnailFileName, key)
+            try {
+                encrypt(transformed, destinationFileName, key, lossless = true)
+                createThumbnail(destinationFileName, thumbnailFileName, key)
+            } catch (failure: Exception) {
+                delete(destinationFileName)
+                delete(thumbnailFileName)
+                throw failure
+            }
             if (transformed !== rotated) transformed.recycle()
             if (rotated !== decoded) rotated.recycle()
             decoded.recycle()
         } finally { bytes.fill(0) }
     }
 
-    private fun replace(bitmap: Bitmap, fileName: String, key: ByteArray) {
-        val temporary = "$fileName.tmp"
-        encrypt(bitmap, temporary, key, lossless = true)
-        val destination = File(directory, fileName)
-        val staged = File(directory, temporary)
-        Files.move(staged.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+    fun decryptedBytes(fileName: String, key: ByteArray): ByteArray {
+        return openDecrypted(fileName, key).use { it.readBytes() }
     }
 
-    fun decryptedBytes(fileName: String, key: ByteArray): ByteArray {
-        File(directory, fileName).inputStream().use { input ->
+    fun openDecrypted(fileName: String, key: ByteArray): InputStream {
+        val input = File(directory, fileName).inputStream()
+        return try {
             val nonce = ByteArray(12)
             java.io.DataInputStream(input).readFully(nonce)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
                 init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
             }
-            return CipherInputStream(input, cipher).use { it.readBytes() }
-        }
+            CipherInputStream(input, cipher)
+        } catch (failure: Exception) { input.close(); throw failure }
     }
 
     fun delete(fileName: String) { File(directory, fileName).delete() }

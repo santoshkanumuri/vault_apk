@@ -35,6 +35,7 @@ data class VaultSettings(
     @androidx.room.ColumnInfo(defaultValue = "10000") val backgroundTimeoutMs: Long = 10_000L,
     @androidx.room.ColumnInfo(defaultValue = "60000") val inactivityTimeoutMs: Long = 60_000L,
     @androidx.room.ColumnInfo(defaultValue = "86400000") val masterPasswordIntervalMs: Long = 86_400_000L,
+    @androidx.room.ColumnInfo(defaultValue = "0") val watchSyncEnabled: Boolean = false,
 )
 
 @Entity(tableName = "entries")
@@ -319,6 +320,9 @@ interface VaultDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPhoto(photo: VaultPhoto)
 
+    @Query("SELECT * FROM photos WHERE id = :id")
+    suspend fun photo(id: String): VaultPhoto?
+
     @Update suspend fun updatePhoto(photo: VaultPhoto)
 
     @Query("UPDATE photos SET isCover = 0 WHERE entryId = :entryId")
@@ -334,6 +338,17 @@ interface VaultDao {
 
     @Query("DELETE FROM entries") suspend fun clearEntries()
     @Query("DELETE FROM vault_groups") suspend fun clearGroups()
+    @Query("DELETE FROM sync_operations") suspend fun clearSyncOperations()
+    @Query("DELETE FROM sync_device_heads") suspend fun clearSyncDeviceHeads()
+    @Query("DELETE FROM sync_record_states") suspend fun clearSyncRecordStates()
+    @Query("DELETE FROM sync_tombstones") suspend fun clearSyncTombstones()
+    @Query("DELETE FROM sync_attachment_manifests") suspend fun clearSyncAttachments()
+    @Query("DELETE FROM sync_conflicts") suspend fun clearSyncConflicts()
+    @Query("DELETE FROM sync_peer_acknowledgements") suspend fun clearSyncAcknowledgements()
+    @Query("DELETE FROM sync_memberships") suspend fun clearSyncMemberships()
+    @Query("DELETE FROM sync_membership_events") suspend fun clearSyncMembershipEvents()
+    @Query("DELETE FROM sync_vault_state") suspend fun clearSyncVaultState()
+    @Query("DELETE FROM sync_peers") suspend fun clearSyncPeers()
     @Query("SELECT * FROM passkeys ORDER BY rpId, username") suspend fun allPasskeys(): List<VaultPasskey>
     @Query("SELECT id, rpId, username, createdAt FROM passkeys ORDER BY rpId, username") suspend fun passkeySummaries(): List<PasskeySummary>
     @Insert suspend fun insertPasskeys(passkeys: List<VaultPasskey>)
@@ -448,6 +463,17 @@ interface VaultDao {
         settings: VaultSettings = VaultSettings(),
         passkeys: List<VaultPasskey> = emptyList()
     ) {
+        clearSyncOperations()
+        clearSyncDeviceHeads()
+        clearSyncRecordStates()
+        clearSyncTombstones()
+        clearSyncAttachments()
+        clearSyncConflicts()
+        clearSyncAcknowledgements()
+        clearSyncMemberships()
+        clearSyncMembershipEvents()
+        clearSyncVaultState()
+        clearSyncPeers()
         clearEntries()
         clearGroups()
         clearPasskeys()
@@ -470,8 +496,10 @@ class EntryTypeConverter {
 @Database(
     entities = [VaultEntry::class, VaultGroup::class, EntryGroupCrossRef::class, VaultPhoto::class, VaultSettings::class, VaultPasskey::class,
         SyncOperationEntity::class, SyncDeviceHeadEntity::class, SyncRecordStateEntity::class, SyncTombstoneEntity::class,
-        SyncAttachmentManifestEntity::class, SyncConflictEntity::class, SyncPeerAcknowledgementEntity::class],
-    version = 13,
+        SyncAttachmentManifestEntity::class, SyncConflictEntity::class, SyncPeerAcknowledgementEntity::class,
+        SyncMembershipEntity::class, SyncVaultStateEntity::class, SyncPeerEntity::class,
+        SyncLegacyOperationEntity::class, SyncMembershipEventEntity::class],
+    version = 19,
     exportSchema = false
 )
 @androidx.room.TypeConverters(EntryTypeConverter::class)
@@ -480,6 +508,38 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun syncDao(): SyncDao
 
     companion object {
+        internal val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sync_vault_state ADD COLUMN transportSecret TEXT NOT NULL DEFAULT ''")
+            }
+        }
+        internal val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_membership_events (vaultId TEXT NOT NULL, sequence INTEGER NOT NULL, formatVersion INTEGER NOT NULL, previousHash TEXT NOT NULL, action TEXT NOT NULL, issuerDeviceId TEXT NOT NULL, subjectDeviceId TEXT NOT NULL, subjectPublicKey TEXT NOT NULL, keyEpoch INTEGER NOT NULL, signature TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY(vaultId, sequence))")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_sync_membership_events_hash ON sync_membership_events (hash)")
+            }
+        }
+        internal val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_legacy_operations (mutationId TEXT NOT NULL PRIMARY KEY, vaultId TEXT NOT NULL, signedOperationJson TEXT NOT NULL)")
+            }
+        }
+        internal val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_vault_state (id INTEGER NOT NULL PRIMARY KEY, vaultId TEXT NOT NULL, contentKey TEXT NOT NULL, keyEpoch INTEGER NOT NULL)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_peers (vaultId TEXT NOT NULL, deviceId TEXT NOT NULL, publicKey TEXT NOT NULL, transportSecret TEXT NOT NULL, PRIMARY KEY(vaultId, deviceId))")
+            }
+        }
+        internal val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_memberships (vaultId TEXT NOT NULL, deviceId TEXT NOT NULL, displayName TEXT NOT NULL, identityPublicKey TEXT NOT NULL, status TEXT NOT NULL, addedByDeviceId TEXT NOT NULL, membershipSequence INTEGER NOT NULL, keyEpoch INTEGER NOT NULL, PRIMARY KEY(vaultId, deviceId))")
+            }
+        }
+        internal val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE vault_settings ADD COLUMN watchSyncEnabled INTEGER NOT NULL DEFAULT 0")
+            }
+        }
         internal val MIGRATION_12_13 = object : Migration(12, 13) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE vault_settings ADD COLUMN backgroundTimeoutMs INTEGER NOT NULL DEFAULT 10000")
@@ -570,7 +630,7 @@ abstract class VaultDatabase : RoomDatabase() {
             val factory = SupportOpenHelperFactory(key.copyOf())
             return Room.databaseBuilder(context, VaultDatabase::class.java, "vault.db")
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
                 .build()
         }
     }

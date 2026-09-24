@@ -78,7 +78,8 @@ internal fun TotpTile(entry: VaultEntry, copy: (String, String) -> Unit, open: (
 
 @Composable
 internal fun MoreScreen(groupCount: Int, entries: List<EntryWithDetails>, groups: () -> Unit, questions: () -> Unit, notes: () -> Unit, settings: () -> Unit) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(Modifier.widthIn(max = 720.dp).fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("Your vault", style = MaterialTheme.typography.titleMedium) }
         item { MoreItem("Groups", "$groupCount groups · linked accounts in one place", Icons.Outlined.Folder, groups) }
         item { MoreItem("Security questions", "${entries.count { it.entry.type == EntryType.QUESTION }} saved questions", Icons.Outlined.QuestionAnswer, questions) }
@@ -86,6 +87,7 @@ internal fun MoreScreen(groupCount: Int, entries: List<EntryWithDetails>, groups
         item { HorizontalDivider() }
         item { Text("Manage Nuvori", style = MaterialTheme.typography.titleMedium) }
         item { MoreItem("Settings", "Security, autofill, backup, browser import and appearance", Icons.Outlined.Settings, settings) }
+        }
     }
 }
 

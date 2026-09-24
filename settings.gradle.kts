@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "PrivateVault"
 include(":app")
+include(":wear")
+include(":watchcommon")

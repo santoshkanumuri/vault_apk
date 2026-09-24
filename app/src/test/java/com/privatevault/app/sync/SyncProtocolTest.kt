@@ -32,6 +32,16 @@ class SyncProtocolTest {
     }
 
     @Test
+    fun parsesPersistedWholeCountersWithoutDoubleCast() {
+        val version = RecordVersion.parse("{\"counters\":{\"device-a\":1.0}}")
+        assertEquals(1L, version.counters.getValue("device-a"))
+        assertEquals(VersionRelation.BEFORE, version.relationTo(RecordVersion(mapOf("device-a" to 2L))))
+        assertThrows(ArithmeticException::class.java) {
+            RecordVersion.parse("{\"counters\":{\"device-a\":1.5}}")
+        }
+    }
+
+    @Test
     fun readsSharedFoundationFixture() {
         val json = checkNotNull(
             javaClass.classLoader?.getResourceAsStream("protocol/sync-foundation-v1.json"),

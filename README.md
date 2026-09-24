@@ -2,9 +2,9 @@
 
 **Yours, by design.**
 
-An offline Android app for cards, passwords, authenticator codes, passkeys, security questions, notes, and photos.
+An Android app for cards, passwords, authenticator codes, passkeys, security questions, notes, and photos. Vault data works offline; optional device sync uses your local Wi-Fi.
 
-No account, server, ads, or cloud sync. Your vault stays on your phone.
+No account, server, ads, or cloud sync. A paired Android device receives encrypted vault changes over your local Wi-Fi.
 
 <p align="center">
   <img src="docs/assets/nuvori-logo-transparent.png" alt="Nuvori logo" width="150">
@@ -29,9 +29,9 @@ The screenshots contain synthetic demonstration data only.
 
 ## Download
 
-**[Download Nuvori v1.9.9 APK](downloads/nuvori-v1.9.9.apk?raw=true)**
+**[Download Nuvori 2.0.0 phone preview APK](downloads/nuvori-v2.0.0-phone.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-1.9.9.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.0.0.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 
@@ -53,6 +53,7 @@ For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Pa
 - **Quick access to codes:** add the Vault codes tile from More > Settings. Unlock, choose an authenticator account, and copy its current code without changing your password autofill app. The picker closes on backgrounding and follows the same 24-hour fingerprint rule.
 - **App-linked codes:** choose Linked apps when editing an authenticator account. Optional Usage access lets the tile suggest accounts for the previous app. Codes start masked, with Copy, Show/Hide, and Show all controls. App links are included in encrypted backups. Browser websites cannot be identified this way.
 - **Photos:** full-resolution capture and original-file import, encrypted thumbnails, crop, rotate, cover selection, and zoom. Imported originals remain outside the vault.
+- **Android device sync preview:** pair up to four Android devices on the same Wi-Fi. Entries and photos sync through an encrypted local connection. The Android devices page has manual sync, a visible automatic sync service, retry intervals, and conflict review. Keep an encrypted backup while testing this preview.
 - **Home:** favorites, recently opened entries, expiry warnings, and quick add. Search across entry types, usernames, questions, card last four digits, folders, groups, tags, and notes. Passwords, answers, CVVs, full card numbers, and authenticator keys stay out of search.
 - **Appearance:** light mode or a pure black dark mode, with layouts for phones and larger screens.
 - **Optional NFC:** off by default. Start a scan from the card form to fill readable details, then review before saving. Not every card exposes its details. NFC does not provide the printed CVV or make payments.
@@ -69,7 +70,7 @@ Password history and saving credentials spread across multiple pages remain unsu
 
 ## How it works
 
-Kotlin and Jetpack Compose handle the interface. Room with SQLCipher stores the encrypted database. AES-GCM encrypts photos in private app storage. The app has no Internet permission.
+Kotlin and Jetpack Compose handle the interface. Room with SQLCipher stores the encrypted database. AES-GCM encrypts photos in private app storage. The app has Internet permission for direct local Wi-Fi sync; it does not use a Nuvori server.
 
 A random key encrypts the vault. Argon2id derives a key from your master password to protect that vault key. The app does not store the master password itself.
 
@@ -99,7 +100,7 @@ Tink Streaming AEAD encrypts the backup. Restore validates the encrypted file an
 
 ## Build from source
 
-Install **JDK 17**, **Android SDK API 36**, and **Build Tools 36.0.0**, or open the project in Android Studio. The Gradle wrapper downloads build dependencies; development needs Internet access even though the app does not.
+Install **JDK 17**, **Android SDK API 36**, and **Build Tools 36.0.0**, or open the project in Android Studio. The Gradle wrapper downloads build dependencies.
 
 Set the SDK path in your local `local.properties`, for example:
 

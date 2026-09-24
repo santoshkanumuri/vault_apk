@@ -1,10 +1,10 @@
 package com.privatevault.app.sync
 
 import androidx.room.withTransaction
-import com.google.gson.Gson
 import com.privatevault.app.data.SyncDeviceHeadEntity
 import com.privatevault.app.data.SyncOperationEntity
 import com.privatevault.app.data.SyncRecordStateEntity
+import com.privatevault.app.data.SyncTombstoneEntity
 import com.privatevault.app.data.VaultDatabase
 import com.privatevault.app.data.VaultEntry
 import org.json.JSONArray
@@ -25,7 +25,17 @@ class LocalEntryChangeWriter(
     private val clock: Clock = Clock.systemUTC(),
     private val random: SecureRandom = SecureRandom(),
 ) {
-    suspend fun save(entry: VaultEntry, groupIds: Set<String>, vaultKey: ByteArray) {
+    suspend fun save(entry: VaultEntry, groupIds: Set<String>, vaultKey: ByteArray) =
+        write(entry, groupIds, vaultKey, ChangeKind.UPSERT)
+
+    suspend fun delete(entry: VaultEntry, vaultKey: ByteArray) =
+        write(entry, emptySet(), vaultKey, ChangeKind.DELETE)
+
+    suspend fun recordDeletedEntry(entry: VaultEntry, vaultKey: ByteArray) =
+        write(entry, emptySet(), vaultKey, ChangeKind.DELETE, alreadyDeleted = true)
+
+    private suspend fun write(entry: VaultEntry, groupIds: Set<String>, vaultKey: ByteArray, kind: ChangeKind,
+        alreadyDeleted: Boolean = false) {
         require(vaultKey.size == 32) { "Vault key must be 32 bytes" }
         val identity = identityStore.getOrCreate()
         val savedEntry = entry.copy(updatedAt = clock.millis())
@@ -33,11 +43,12 @@ class LocalEntryChangeWriter(
         database.withTransaction {
             val settings = database.dao().settings() ?: error("Vault settings are missing")
             require(settings.vaultId.isNotBlank()) { "Vault ID is missing" }
+            database.requireLocalSyncAuthor(settings.vaultId, identity.deviceId)
             val syncDao = database.syncDao()
             val head = syncDao.deviceHead(settings.vaultId, identity.deviceId)
             val state = syncDao.recordState(ENTITY_TYPE, savedEntry.id)
             val currentVersion = state?.let {
-                Gson().fromJson(it.recordVersionJson, RecordVersion::class.java)
+                RecordVersion.parse(it.recordVersionJson)
             } ?: RecordVersion(emptyMap())
             val sequence = (head?.sequence ?: 0L) + 1L
             val counters = currentVersion.counters.toMutableMap().apply {
@@ -45,13 +56,19 @@ class LocalEntryChangeWriter(
             }
             val recordVersion = RecordVersion(counters)
             val mutationId = UUID.randomUUID().toString()
-            val encrypted = encryptPayload(
+            if (kind == ChangeKind.DELETE) {
+                val present = database.dao().entry(entry.id) != null
+                require(present != alreadyDeleted) { "Entry deletion state changed" }
+            }
+            val contentKey = database.syncContentKey(vaultKey)
+            val encrypted = try { encryptPayload(
                 savedEntry,
                 groupIds,
-                vaultKey,
+                contentKey,
                 settings.vaultId,
                 mutationId,
-            )
+                kind,
+            ) } finally { contentKey.fill(0) }
             val change = SyncChangeRecord.createSigned(
                 vaultId = settings.vaultId,
                 deviceId = identity.deviceId,
@@ -60,7 +77,7 @@ class LocalEntryChangeWriter(
                 mutationId = mutationId,
                 entityType = ENTITY_TYPE,
                 entityId = savedEntry.id,
-                kind = ChangeKind.UPSERT,
+                kind = kind,
                 baseRevision = state?.revision ?: 0L,
                 recordVersion = recordVersion,
                 occurredAtUtc = Instant.now(clock).toString(),
@@ -69,8 +86,13 @@ class LocalEntryChangeWriter(
                 signer = identityStore::sign,
             )
 
-            database.dao().saveEntryExact(savedEntry, groupIds)
+            if (kind == ChangeKind.UPSERT) database.dao().saveEntryExact(savedEntry, groupIds)
+            else if (!alreadyDeleted) database.dao().deleteEntryAndLinks(entry)
             syncDao.insertOperation(change.toEntity())
+            if (kind == ChangeKind.DELETE) syncDao.upsertTombstone(SyncTombstoneEntity(
+                mutationId, ENTITY_TYPE, entry.id, identity.deviceId, sequence,
+                recordVersion.toJson(), change.occurredAtUtc, change.hash,
+            ))
             syncDao.upsertDeviceHead(
                 SyncDeviceHeadEntity(change.vaultId, change.deviceId, change.sequence, change.hash),
             )
@@ -79,7 +101,7 @@ class LocalEntryChangeWriter(
                     ENTITY_TYPE,
                     savedEntry.id,
                     change.baseRevision + 1L,
-                    Gson().toJson(recordVersion),
+                    recordVersion.toJson(),
                 ),
             )
         }
@@ -91,10 +113,15 @@ class LocalEntryChangeWriter(
         vaultKey: ByteArray,
         vaultId: String,
         mutationId: String,
+        kind: ChangeKind,
     ): EncryptedPayload {
         val plaintext = JSONObject()
-            .put("entry", entry.toSyncJson())
-            .put("groupIds", JSONArray(groupIds.sorted()))
+            .apply {
+                if (kind == ChangeKind.UPSERT) {
+                    put("entry", entry.toSyncJson())
+                    put("groupIds", JSONArray(groupIds.sorted()))
+                } else put("deleted", true)
+            }
             .toString()
             .toByteArray(Charsets.UTF_8)
         val nonce = ByteArray(12).also(random::nextBytes)
@@ -129,7 +156,7 @@ class LocalEntryChangeWriter(
 
     private fun SyncChangeRecord.toEntity() = SyncOperationEntity(
         mutationId, formatVersion, vaultId, deviceId, sequence, previousHash,
-        entityType, entityId, kind.name.lowercase(), baseRevision, Gson().toJson(recordVersion),
+        entityType, entityId, kind.name.lowercase(), baseRevision, recordVersion.toJson(),
         occurredAtUtc, payloadCiphertext, payloadNonce, deviceSignature, hash,
     )
 

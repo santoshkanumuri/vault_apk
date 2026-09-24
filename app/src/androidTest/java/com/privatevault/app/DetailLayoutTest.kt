@@ -45,6 +45,49 @@ class DetailLayoutTest {
         compose.onNodeWithText("Quick add").assertDoesNotExist()
     }
 
+    @Test fun moreScreenUsesReadableWidthOnTablets() {
+        val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
+        val width = mutableIntStateOf(320)
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.requiredSize(width.intValue.dp, 600.dp).testTag("moreViewport")) {
+                    MoreScreen(0, emptyList(), {}, {}, {}, {})
+                }
+            }
+        }
+        val compact = compose.onNodeWithText("Settings").fetchSemanticsNode().boundsInRoot
+        assertTrue(compact.right <= 320f * density)
+        compose.runOnIdle { width.intValue = 1000 }
+        val viewport = compose.onNodeWithTag("moreViewport").fetchSemanticsNode().boundsInRoot
+        val tablet = compose.onNodeWithText("Settings").fetchSemanticsNode().boundsInRoot
+        assertTrue("Settings text should remain in a centered reading column: $tablet",
+            tablet.width <= 720f * density && kotlin.math.abs(tablet.center.x - viewport.center.x) <= 1f * density)
+    }
+
+    @Test fun wideDetailStaysInItsPaneAndUsesActionsMenu() {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as android.app.Application
+        val model = VaultViewModel(app)
+        compose.setContent {
+            MaterialTheme {
+                Row(Modifier.requiredSize(1000.dp, 600.dp)) {
+                    Box(Modifier.weight(.9f).fillMaxHeight().testTag("listPane")) {}
+                    Box(Modifier.weight(1.1f).fillMaxHeight().testTag("entryDetailPane")) {
+                        EntryDetail(EntryWithDetails(VaultEntry(type = EntryType.CARD, title = "Example card"), emptyList(), emptyList()),
+                            model, { _, _ -> }, { it() }, {}, {}, Modifier.fillMaxSize(), widePane = true)
+                    }
+                }
+            }
+        }
+        val list = compose.onNodeWithTag("listPane").fetchSemanticsNode().boundsInRoot
+        val pane = compose.onNodeWithTag("entryDetailPane").fetchSemanticsNode().boundsInRoot
+        val title = compose.onAllNodesWithText("Example card").onFirst().fetchSemanticsNode().boundsInRoot
+        assertTrue("Detail must begin beside the list", pane.left >= list.right && title.left >= pane.left)
+        assertTrue("Detail must stay inside its pane", title.right <= pane.right)
+        compose.onNodeWithText("Pull up to edit").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Open entry actions").performClick()
+        compose.onNodeWithText("Edit").assertIsDisplayed()
+    }
+
     @Test fun folderAndEntryRowsAreCompactAndNeverShowPasswords() {
         val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
         val folder = VaultGroup(name = "Work", folderType = EntryType.PASSWORD)

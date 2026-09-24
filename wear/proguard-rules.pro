@@ -1,0 +1,3 @@
+-keep class com.privatevault.app.watch.WatchAccount { *; }
+-keep class com.privatevault.app.watch.WatchSnapshot { *; }
+-keep class androidx.compose.ui.platform.AndroidCompositionLocals_androidKt { *; }

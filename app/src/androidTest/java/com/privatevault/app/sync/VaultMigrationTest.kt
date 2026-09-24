@@ -43,17 +43,23 @@ class VaultMigrationTest {
     }
 
     @Test
-    fun migratesVersionNineToThirteenAndPreservesVaultData() = runBlocking {
+    fun migratesVersionNineToNineteenAndPreservesVaultData() = runBlocking {
         val database = Room.databaseBuilder(context, VaultDatabase::class.java, databaseName)
-            .addMigrations(VaultDatabase.MIGRATION_9_10, VaultDatabase.MIGRATION_10_11, VaultDatabase.MIGRATION_11_12, VaultDatabase.MIGRATION_12_13)
+            .addMigrations(VaultDatabase.MIGRATION_9_10, VaultDatabase.MIGRATION_10_11, VaultDatabase.MIGRATION_11_12,
+                VaultDatabase.MIGRATION_12_13, VaultDatabase.MIGRATION_13_14, VaultDatabase.MIGRATION_14_15,
+                VaultDatabase.MIGRATION_15_16, VaultDatabase.MIGRATION_16_17,
+                VaultDatabase.MIGRATION_17_18, VaultDatabase.MIGRATION_18_19)
             .allowMainThreadQueries()
             .build()
         migrated = database
 
         assertEquals("Preserved", database.dao().entry("entry-before-migration")?.entry?.title)
         assertTrue(database.syncDao().operations().isEmpty())
+        assertTrue(database.syncDao().archivedOperations().isEmpty())
+        assertTrue(database.syncDao().membershipEvents("vault-a").isEmpty())
         assertEquals(10_000L, database.dao().settings()?.backgroundTimeoutMs)
         assertEquals(60_000L, database.dao().settings()?.inactivityTimeoutMs)
         assertEquals(86_400_000L, database.dao().settings()?.masterPasswordIntervalMs)
+        assertEquals(null, database.syncDao().membership("vault-a", "device-a"))
     }
 }

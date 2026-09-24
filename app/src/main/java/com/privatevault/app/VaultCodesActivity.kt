@@ -36,6 +36,8 @@ import androidx.lifecycle.lifecycleScope
 import com.privatevault.app.data.VaultDatabase
 import com.privatevault.app.data.VaultEntry
 import com.privatevault.app.data.EntryWithDetails
+import com.privatevault.app.sync.AndroidDeviceIdentityStore
+import com.privatevault.app.sync.captureEntryUpserts
 import com.privatevault.app.security.BiometricGate
 import com.privatevault.app.security.Totp
 import com.privatevault.app.security.VaultKeyManager
@@ -413,6 +415,7 @@ class VaultCodesActivity : FragmentActivity() {
                             database,
                             com.privatevault.app.sync.AndroidDeviceIdentityStore(applicationContext),
                         ).save(updated, current.groups.map { it.id }.toSet(), key)
+                        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(applicationContext, database)
                         updated
                     } finally { database.close() }
                 }
@@ -441,8 +444,11 @@ class VaultCodesActivity : FragmentActivity() {
                 withContext(Dispatchers.IO) {
                     val database = VaultDatabase.open(applicationContext, key)
                     try {
-                        if (request.origin != null) database.dao().saveBrowserLogin(request.origin, request.username, secret.concatToString(), expected)
-                        else database.dao().saveNativeLogin(request.packageName, request.identity, saveDestination(request), request.username, secret.concatToString(), expected)
+                        database.captureEntryUpserts(AndroidDeviceIdentityStore(applicationContext), key) {
+                            if (request.origin != null) saveBrowserLogin(request.origin, request.username, secret.concatToString(), expected)
+                            else saveNativeLogin(request.packageName, request.identity, saveDestination(request), request.username, secret.concatToString(), expected)
+                        }
+                        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(applicationContext, database)
                     }
                     finally { database.close() }
                 }
@@ -478,7 +484,9 @@ class VaultCodesActivity : FragmentActivity() {
                         if (operation.create) {
                             check(db.dao().allPasskeys().none { com.privatevault.app.passkeys.PasskeyCrypto.excluded(it, operation.input) })
                             val (created, response) = com.privatevault.app.passkeys.PasskeyCrypto.create(operation.input, operation.origin, operation.clientHash)
-                            db.dao().insertPasskeys(listOf(created))
+                            com.privatevault.app.sync.LocalPasskeyChangeWriter(db,
+                                com.privatevault.app.sync.AndroidDeviceIdentityStore(applicationContext)).save(created, key)
+                            com.privatevault.app.sync.LanSyncService.publishCredentialChanges(applicationContext, db)
                             Intent().also { androidx.credentials.provider.PendingIntentHandler.setCreateCredentialResponse(it, androidx.credentials.CreatePublicKeyCredentialResponse(response)) }
                         } else {
                             val current = db.dao().allPasskeys().single { it.id == requireNotNull(selected).id }
@@ -517,7 +525,12 @@ class VaultCodesActivity : FragmentActivity() {
             try {
                 withContext(Dispatchers.IO) {
                     val db = VaultDatabase.open(applicationContext, key)
-                    try { db.dao().saveGeneratedLogin(origin, username, generated, entry) } finally { db.close() }
+                    try {
+                        db.captureEntryUpserts(AndroidDeviceIdentityStore(applicationContext), key) {
+                            saveGeneratedLogin(origin, username, generated, entry)
+                        }
+                        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(applicationContext, db)
+                    } finally { db.close() }
                 }
                 generating = false
                 fillLogin(entry, generated, username)

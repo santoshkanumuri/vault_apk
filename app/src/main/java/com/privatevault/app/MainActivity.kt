@@ -34,7 +34,9 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        val emulatorDebug = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 &&
+            Build.FINGERPRINT.contains("sdk_gphone")
+        if (!emulatorDebug) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
         viewModel = ViewModelProvider(this)[VaultViewModel::class.java]
         lifecycleScope.launch {

@@ -20,6 +20,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.activity.result.contract.ActivityResultContracts
@@ -406,6 +407,17 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
     val selected = entries.firstOrNull { it.entry.id == selectedId }
     val selectEntry: (String) -> Unit = { id -> selectedId = id; viewModel.markOpened(id) }
     val editorOpen = addType != null || editing != null
+    val homeContent: @Composable (Modifier) -> Unit = { modifier ->
+        if (search.isBlank()) Dashboard(shown, selectEntry, { type ->
+            tabIndex = VaultTab.entries.first { it.type == type }.ordinal
+            selectedId = null
+            selectedFolderId = null
+        }, modifier)
+        else GlobalSearchResults(shown, groups.filter { it.folderType != null &&
+            (it.name.contains(search, true) || it.notes.contains(search, true)) },
+            { folder -> tabIndex = VaultTab.entries.first { it.type == folder.folderType }.ordinal; selectedFolderId = folder.id; search = "" },
+            selectEntry, modifier)
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 840.dp
@@ -425,35 +437,38 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
                     if (tab == VaultTab.MORE) {
                         MoreScreen(groups.count { it.folderType == null }, entries, { showGroups = true }, { tabIndex = VaultTab.QUESTIONS.ordinal }, { tabIndex = VaultTab.NOTES.ordinal }, { showSettings = true })
                     } else if (tab == VaultTab.HOME) {
-                        if (search.isBlank()) Dashboard(shown, selectEntry, { type ->
-                            tabIndex = VaultTab.entries.first { it.type == type }.ordinal
-                            selectedId = null
-                            selectedFolderId = null
-                        }, Modifier.fillMaxSize())
-                        else GlobalSearchResults(shown, groups.filter { it.folderType != null &&
-                            (it.name.contains(search, true) || it.notes.contains(search, true)) },
-                            { folder -> tabIndex = VaultTab.entries.first { it.type == folder.folderType }.ordinal; selectedFolderId = folder.id; search = "" },
-                            selectEntry, Modifier.fillMaxSize())
+                        if (wide) Row(Modifier.fillMaxSize()) {
+                            homeContent(Modifier.weight(.9f).fillMaxHeight())
+                            VerticalDivider(Modifier.fillMaxHeight().width(1.dp))
+                            Box(Modifier.weight(1.1f).fillMaxHeight().testTag("entryDetailPane")) {
+                                if (selected != null) EntryDetail(selected, viewModel, onCopySecret, onBiometricAction,
+                                    { editing = selected.entry }, { selectedId = null }, Modifier.fillMaxSize(), widePane = true)
+                                else EmptyDetail(Modifier.fillMaxSize())
+                            }
+                        } else homeContent(Modifier.fillMaxSize())
                     } else if (wide) {
                         Row(Modifier.fillMaxSize()) {
                             CategoryCollection(tab, shown, categoryFolders, selectedFolder, if (tab == VaultTab.CARDS) "" else search, sortBy,
-                                { sortBy = it }, { selectedFolderId = it },
+                                { sortBy = it }, { selectedFolderId = it; selectedId = null },
                                 { folderToEdit = it; folderName = it?.name.orEmpty(); showFolderEditor = true },
                                 { folderToDelete = it }, selectedId, selectEntry, onCopySecret, onBiometricAction, Modifier.weight(.9f))
                             VerticalDivider(Modifier.fillMaxHeight().width(1.dp))
-                            if (selected != null) EntryDetail(selected, viewModel, onCopySecret, onBiometricAction, { editing = selected.entry }, { selectedId = null }, Modifier.weight(1.1f))
-                            else EmptyDetail(Modifier.weight(1.1f))
+                            Box(Modifier.weight(1.1f).fillMaxHeight().testTag("entryDetailPane")) {
+                                if (selected != null) EntryDetail(selected, viewModel, onCopySecret, onBiometricAction,
+                                    { editing = selected.entry }, { selectedId = null }, Modifier.fillMaxSize(), widePane = true)
+                                else EmptyDetail(Modifier.fillMaxSize())
+                            }
                         }
                     } else {
                         CategoryCollection(tab, shown, categoryFolders, selectedFolder, if (tab == VaultTab.CARDS) "" else search, sortBy,
-                            { sortBy = it }, { selectedFolderId = it },
+                            { sortBy = it }, { selectedFolderId = it; selectedId = null },
                             { folderToEdit = it; folderName = it?.name.orEmpty(); showFolderEditor = true },
                             { folderToDelete = it }, selectedId, selectEntry, onCopySecret, onBiometricAction, Modifier.fillMaxSize())
                     }
                 }
             }
         }
-        if ((!wide || tab == VaultTab.HOME) && selected != null && !editorOpen) {
+        if (!wide && selected != null && !editorOpen) {
             BackHandler { selectedId = null }
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 Box(Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -482,7 +497,7 @@ private fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String) 
         openEntry = { id -> showGroups = false; selectEntry(id) },
         close = { showGroups = false }
     )
-    if (showSettings) SettingsDialog(viewModel, initialImportChoice) { showSettings = false; initialImportChoice = null }
+    if (showSettings) SettingsDialog(viewModel, initialImportChoice, copyPairingLink = { value -> onCopySecret("Pairing link", value) }) { showSettings = false; initialImportChoice = null }
     if (showFolderEditor && tab.type != null && tab.type != EntryType.CARD) AlertDialog(properties = wideDialogProperties,
         onDismissRequest = { showFolderEditor = false },
         title = { Text(if (folderToEdit == null) "New folder" else "Rename folder") },
@@ -1157,7 +1172,7 @@ internal fun CompactEntryRow(
 }
 
 @Composable
-internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy: (String, String) -> Unit, authenticate: (() -> Unit) -> Unit, edit: () -> Unit, close: () -> Unit, modifier: Modifier) {
+internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy: (String, String) -> Unit, authenticate: (() -> Unit) -> Unit, edit: () -> Unit, close: () -> Unit, modifier: Modifier, widePane: Boolean = false) {
     val vaultEntries by viewModel.entries.collectAsStateWithLifecycle()
     var revealed by remember(item.entry.id) { mutableStateOf(setOf<String>()) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -1176,73 +1191,24 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
     }
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) launchCamera() }
     val cameraContext = androidx.compose.ui.platform.LocalContext.current
+    val addPhoto: () -> Unit = {
+        viewModel.externalFlowActive = true
+        pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+    val openCamera: () -> Unit = {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(cameraContext, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) launchCamera()
+        else cameraPermission.launch(android.Manifest.permission.CAMERA)
+    }
     val actionSheet = rememberStandardBottomSheetState(initialValue = SheetValue.PartiallyExpanded, skipHiddenState = true)
     val actionScaffold = rememberBottomSheetScaffoldState(actionSheet)
     val actionScope = rememberCoroutineScope()
     val actionSheetExpanded = actionSheet.currentValue == SheetValue.Expanded
+    var actionsMenuExpanded by remember(item.entry.id) { mutableStateOf(false) }
     val toggleActions: () -> Unit = {
-        actionScope.launch { if (actionSheetExpanded) actionSheet.partialExpand() else actionSheet.expand() }
+        if (widePane) actionsMenuExpanded = !actionsMenuExpanded
+        else actionScope.launch { if (actionSheetExpanded) actionSheet.partialExpand() else actionSheet.expand() }
     }
-    BottomSheetScaffold(
-        modifier = modifier.background(MaterialTheme.colorScheme.background),
-        scaffoldState = actionScaffold,
-        sheetPeekHeight = 64.dp,
-        sheetContainerColor = MaterialTheme.colorScheme.surface,
-        sheetShape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
-        sheetTonalElevation = 8.dp,
-        sheetShadowElevation = 12.dp,
-        sheetDragHandle = {
-            Surface(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                    .clickable(role = Role.Button, onClick = toggleActions),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        Modifier.size(36.dp).clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = .18f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AnimatedContent(actionSheetExpanded, label = "entry action direction") { expanded ->
-                            Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
-                                contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    AnimatedContent(actionSheetExpanded, modifier = Modifier.weight(1f), label = "entry action instruction") { expanded ->
-                        Text(if (expanded) "Pull down to close" else "Pull up to edit",
-                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-            }
-        },
-        sheetContent = {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = { viewModel.externalFlowActive = true; pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Add photo") }
-                        OutlinedButton(onClick = {
-                            if (androidx.core.content.ContextCompat.checkSelfPermission(cameraContext, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) launchCamera()
-                            else cameraPermission.launch(android.Manifest.permission.CAMERA)
-                        }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Camera") }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = edit, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Edit") }
-                        if (item.entry.type != EntryType.AUTHENTICATOR) OutlinedButton(onClick = { viewModel.duplicateEntry(item); close() },
-                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Duplicate") }
-                        DeleteButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
-                    }
-                }
-            }
-        }
-    ) { contentPadding ->
+    val detailContent: @Composable (PaddingValues) -> Unit = { contentPadding ->
     Column(Modifier.fillMaxSize().padding(contentPadding).background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             BackIcon(close)
@@ -1250,10 +1216,20 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 Text(item.entry.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
                 Text(item.entry.type.label().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
-            IconButton(onClick = toggleActions, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Outlined.MoreHoriz,
-                    contentDescription = if (actionSheetExpanded) "Close entry actions" else "Open entry actions",
-                    tint = MaterialTheme.colorScheme.primary)
+            Box {
+                IconButton(onClick = toggleActions, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Outlined.MoreHoriz,
+                        contentDescription = if (if (widePane) actionsMenuExpanded else actionSheetExpanded) "Close entry actions" else "Open entry actions",
+                        tint = MaterialTheme.colorScheme.primary)
+                }
+                if (widePane) DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
+                    DropdownMenuItem(text = { Text("Add photo") }, onClick = { actionsMenuExpanded = false; addPhoto() })
+                    DropdownMenuItem(text = { Text("Camera") }, onClick = { actionsMenuExpanded = false; openCamera() })
+                    DropdownMenuItem(text = { Text("Edit") }, onClick = { actionsMenuExpanded = false; edit() })
+                    if (item.entry.type != EntryType.AUTHENTICATOR) DropdownMenuItem(text = { Text("Duplicate") },
+                        onClick = { actionsMenuExpanded = false; viewModel.duplicateEntry(item); close() })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = { actionsMenuExpanded = false; confirmDelete = true })
+                }
             }
             IconButton(onClick = { viewModel.toggleFavorite(item.entry) }, modifier = Modifier.size(48.dp)) {
                 Icon(if (item.entry.favorite) Icons.Outlined.Star else Icons.Outlined.StarBorder,
@@ -1345,6 +1321,59 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
         }
     }
     }
+    if (widePane) {
+        Box(modifier.background(MaterialTheme.colorScheme.background)) { detailContent(PaddingValues()) }
+    } else BottomSheetScaffold(
+        modifier = modifier.background(MaterialTheme.colorScheme.background),
+        scaffoldState = actionScaffold,
+        sheetPeekHeight = 64.dp,
+        sheetContainerColor = MaterialTheme.colorScheme.surface,
+        sheetShape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+        sheetTonalElevation = 8.dp,
+        sheetShadowElevation = 12.dp,
+        sheetDragHandle = {
+            Surface(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                    .clickable(role = Role.Button, onClick = toggleActions),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(36.dp).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = .18f)), contentAlignment = Alignment.Center) {
+                        AnimatedContent(actionSheetExpanded, label = "entry action direction") { expanded ->
+                            Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
+                                contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    AnimatedContent(actionSheetExpanded, modifier = Modifier.weight(1f), label = "entry action instruction") { expanded ->
+                        Text(if (expanded) "Pull down to close" else "Pull up to edit",
+                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        },
+        sheetContent = {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = addPhoto, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Add photo") }
+                        OutlinedButton(onClick = openCamera, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Camera") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = edit, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Edit") }
+                        if (item.entry.type != EntryType.AUTHENTICATOR) OutlinedButton(onClick = { viewModel.duplicateEntry(item); close() },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Duplicate") }
+                        DeleteButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
+                    }
+                }
+            }
+        }
+    ) { contentPadding -> detailContent(contentPadding) }
     if (confirmDelete) AlertDialog(
         modifier = wideDialogModifier,
         properties = wideDialogProperties,
@@ -1808,7 +1837,8 @@ private fun SecurityChoices(title: String, explanation: String, selected: Long, 
 }
 
 @Composable
-internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: FirstRunChoice? = null, close: () -> Unit) {
+internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: FirstRunChoice? = null,
+    copyPairingLink: (String) -> Unit = {}, close: () -> Unit) {
     val passkeys by viewModel.passkeys.collectAsStateWithLifecycle()
     val savedAuthenticatorEntries by viewModel.entries.collectAsStateWithLifecycle()
     val passkeyTransfer by viewModel.passkeyTransferPreview.collectAsStateWithLifecycle()
@@ -1933,7 +1963,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
           }
           Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().align(Alignment.CenterHorizontally).weight(1f).verticalScroll(pageScroll).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (page == null) {
-                listOf("Security" to "Master password and lock behavior", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Import authenticator codes" to "Transfer TOTP codes from another app", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and password exports", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "About" to "Privacy and security limits").forEach { (name, description) ->
+                listOf("Security" to "Master password and lock behavior", "Android devices" to "Pair another phone on the same Wi-Fi", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Watch codes" to "Sync authenticator codes to a Wear OS watch", "Import authenticator codes" to "Transfer TOTP codes from another app", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and password exports", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "About" to "Privacy and security limits").forEach { (name, description) ->
                     Card(Modifier.fillMaxWidth().clickable { page = name }) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(name, style = MaterialTheme.typography.titleMedium)
@@ -1949,6 +1979,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     modifier = Modifier.semantics { contentDescription = "Light mode" })
             }
             }
+            if (page == "Android devices") DeviceSyncSettings(viewModel, copyPairingLink)
             if (page == "Passkeys") {
                 Text("Create passkeys from a supported website in Chrome or Brave. They are encrypted with your vault and included in backups. Deleting one here does not remove its registration on the website.")
                 if (android.os.Build.VERSION.SDK_INT >= 34) {
@@ -2042,6 +2073,19 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             OutlinedButton(onClick = { requestVaultCodesTile(context) }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Add Vault codes tile") }
             Text("Open authenticator codes from Quick Settings after unlocking. Your password autofill app stays unchanged.", style = MaterialTheme.typography.bodySmall)
             CodeAppDetectionPreference()
+            }
+            if (page == "Watch codes") {
+                Text("Use your codes on a Wear OS watch", style = MaterialTheme.typography.titleMedium)
+                Text("Install Nuvori on the watch and connect it to this phone. The watch keeps an encrypted copy of your authenticator accounts so it can show codes without the phone. The watch must have a screen lock.")
+                Text("Nuvori sends updated accounts after you add, edit, or delete a code. Changes reach the watch when it reconnects. Until then, the watch may show an older list.", style = MaterialTheme.typography.bodySmall)
+                Text("Sync may use Google's encrypted Wear OS relay when Bluetooth is unavailable. Only authenticator accounts are sent.", style = MaterialTheme.typography.bodySmall)
+                Button(onClick = viewModel::connectWatch, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                    Text(if (security.watchSyncEnabled) "Sync codes now" else "Connect watch and sync codes")
+                }
+                if (security.watchSyncEnabled) {
+                    OutlinedButton(onClick = viewModel::removeWatchCodes, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Remove codes from watch") }
+                    Text("A disconnected watch keeps its current codes until it reconnects and receives the removal.", style = MaterialTheme.typography.bodySmall)
+                }
             }
             if (page == "Backup and import") {
             if (initialImportChoice == FirstRunChoice.RESTORE)

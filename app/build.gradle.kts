@@ -19,8 +19,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 29
         targetSdk = 36
-        versionCode = 36
-        versionName = "1.9.10-preview"
+        versionCode = 40
+        versionName = "2.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -54,6 +54,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":watchcommon"))
     implementation("androidx.credentials:credentials:1.5.0")
     implementation("androidx.credentials.providerevents:providerevents:1.0.0-alpha06")
     implementation("androidx.credentials.providerevents:providerevents-play-services:1.0.0-alpha06")
@@ -61,7 +62,6 @@ dependencies {
     implementation("androidx.autofill:autofill:1.1.0")
     implementation("org.apache.commons:commons-csv:1.14.1")
     implementation("com.google.code.gson:gson:2.13.2")
-    implementation("com.eatthepath:java-otp:1.0.0")
     implementation("com.google.zxing:core:3.5.3")
     implementation("androidx.camera:camera-camera2:1.4.2")
     implementation("androidx.camera:camera-lifecycle:1.4.2")
@@ -82,8 +82,8 @@ dependencies {
     implementation("androidx.sqlite:sqlite:2.4.0")
     // This SQLCipher Android line supports 16 KB memory pages; verify native alignment on release.
     implementation("net.zetetic:sqlcipher-android:4.6.1@aar")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.77")
     implementation("com.google.protobuf:protobuf-java:3.25.5")
+    implementation("com.google.android.gms:play-services-wearable:20.0.1")
     implementation("com.google.crypto.tink:tink-android:1.23.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.github.devnied.emvnfccard:library:3.2.0")

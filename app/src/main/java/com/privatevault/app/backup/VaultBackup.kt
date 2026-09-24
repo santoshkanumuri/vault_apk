@@ -188,7 +188,7 @@ class VaultBackupManager(
                 com.privatevault.app.data.VaultSettings(
                     lightMode = parsed.lightMode,
                     nfcEnabled = parsed.nfcEnabled,
-                    vaultId = parsed.vaultId.ifBlank { java.util.UUID.randomUUID().toString() },
+                    vaultId = java.util.UUID.randomUUID().toString(),
                     backgroundTimeoutMs = parsed.backgroundTimeoutMs,
                     inactivityTimeoutMs = parsed.inactivityTimeoutMs,
                     masterPasswordIntervalMs = parsed.masterPasswordIntervalMs,

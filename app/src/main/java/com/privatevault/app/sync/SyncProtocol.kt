@@ -5,8 +5,11 @@ import java.nio.ByteBuffer
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.Base64
+import com.google.gson.JsonParser
 
 const val SYNC_FORMAT_VERSION = 1
+const val SYNC_WIRE_VERSION = 2
+const val MAX_ACTIVE_SYNC_DEVICES = 4
 const val KEY_ENVELOPE_FORMAT_VERSION = 1
 const val PAIRING_CODE_DIGITS = 24
 const val RECOVERY_SECRET_BITS = 256
@@ -86,6 +89,24 @@ data class SyncFrontier(val counters: Map<String, Long>) {
 }
 
 data class RecordVersion(val counters: Map<String, Long>) {
+    fun toJson(): String = com.google.gson.JsonObject().apply {
+        add("counters", com.google.gson.JsonObject().apply {
+            counters.toSortedMap().forEach { (id, counter) -> addProperty(id, counter) }
+        })
+    }.toString()
+    companion object {
+        fun parse(json: String): RecordVersion {
+            val values = JsonParser.parseString(json).asJsonObject.getAsJsonObject("counters")
+            val counters = values.entrySet().associate { (deviceId, value) ->
+                require(value.isJsonPrimitive && value.asJsonPrimitive.isNumber) {
+                    "Invalid record version counter"
+                }
+                deviceId to value.asBigDecimal.longValueExact()
+            }
+            return RecordVersion(counters).also { if (counters.isNotEmpty()) it.validate() }
+        }
+    }
+
     fun relationTo(other: RecordVersion): VersionRelation {
         var less = false
         var greater = false

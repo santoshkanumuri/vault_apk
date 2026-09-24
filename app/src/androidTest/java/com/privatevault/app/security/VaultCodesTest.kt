@@ -22,7 +22,8 @@ class VaultCodesTest {
         assertEquals("android.permission.BIND_QUICK_SETTINGS_TILE", service.permission)
         val permissions = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS).requestedPermissions.orEmpty()
         assertFalse(permissions.contains("android.permission.SYSTEM_ALERT_WINDOW"))
-        assertFalse(permissions.contains("android.permission.INTERNET"))
+        // Local Wi-Fi pairing uses sockets; the private picker remains unexported.
+        assertTrue(permissions.contains("android.permission.INTERNET"))
     }
 
     @Test fun pickerBlocksScreenshotsAndClosesWhenBackgrounded() {

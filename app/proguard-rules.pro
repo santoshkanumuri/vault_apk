@@ -3,3 +3,7 @@
 -dontwarn org.bouncycastle.**
 -dontwarn java.beans.ConstructorProperties
 -dontwarn java.beans.Transient
+-keep class com.privatevault.app.watch.WatchAccount { *; }
+-keep class com.privatevault.app.watch.WatchSnapshot { *; }
+-keep class com.privatevault.app.data.Sync*Entity { *; }
+-keepattributes Signature

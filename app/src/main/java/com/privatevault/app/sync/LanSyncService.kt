@@ -97,6 +97,7 @@ class LanSyncService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "Device sync", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
@@ -277,6 +278,10 @@ class LanSyncService : Service() {
                     stopSelf()
                 }
             }
+        } catch (_: PhotoStorageFullException) {
+            mutableStatus.value = "Photo sync needs more free storage. Free space, then tap Sync now."
+        } catch (_: SyncQueueFullException) {
+            mutableStatus.value = "Encrypted sync queue is full. Unlock this device to apply changes, then sync again."
         } catch (_: Exception) { mutableStatus.value = "Sync interrupted. Retrying on Wi-Fi." }
         finally { connections.remove(socket) }
     }
@@ -340,7 +345,14 @@ class LanSyncService : Service() {
         scope.cancel()
         server?.close()
         connections.forEach { runCatching { it.close() } }
+        if (activeInstance === this) activeInstance = null
         super.onDestroy()
+    }
+
+    private fun abortTransport() {
+        scope.cancel()
+        connections.forEach { runCatching { it.close() } }
+        runCatching { server?.close() }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -364,6 +376,7 @@ class LanSyncService : Service() {
         private val mutableStatus = MutableStateFlow("Automatic sync is not running")
         val status = mutableStatus.asStateFlow()
         @Volatile private var sharedStore: LockedSyncStore? = null
+        @Volatile private var activeInstance: LanSyncService? = null
         internal fun store(context: Context): LockedSyncStore = sharedStore ?: synchronized(this) {
             sharedStore ?: LockedSyncStore(context.applicationContext).also { sharedStore = it }
         }
@@ -382,7 +395,15 @@ class LanSyncService : Service() {
         fun pause(context: Context) {
             context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putBoolean("paused", true).apply()
             mutableStatus.value = "Automatic sync paused"
+            activeInstance?.abortTransport()
             context.stopService(Intent(context, LanSyncService::class.java))
+        }
+
+        fun isPaused(context: Context): Boolean =
+            context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).getBoolean("paused", false)
+
+        fun allowFutureSync(context: Context) {
+            context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putBoolean("paused", false).apply()
         }
 
         fun syncNow(context: Context) {

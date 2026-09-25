@@ -15,6 +15,7 @@ import javax.crypto.spec.SecretKeySpec
 
 internal data class PhotoBlobRef(val hash: String, val size: Long)
 internal class MissingPhotoBlobException(val hash: String) : Exception("Photo data is still transferring")
+internal class PhotoStorageFullException : Exception("Free space is too low to receive this photo")
 
 /** The files here are encrypted with the shared content key, never a phone's local vault key. */
 internal class PhotoSyncBlobs(private val directory: File) {
@@ -101,6 +102,23 @@ internal class PhotoSyncBlobs(private val directory: File) {
         if (partial.exists()) check(partial.delete()) { "Could not reset photo transfer" }
     }
 
+    fun pruneAbandonedPartials(pendingHashes: Set<String>) {
+        val oldStageCutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
+        directory.listFiles().orEmpty().filter { file ->
+            val hash = file.name.removeSuffix(".part")
+            file.isFile && file.name.endsWith(".part") &&
+                (hashPattern.matches(hash) && hash !in pendingHashes ||
+                    file.name.startsWith("stage-") && file.lastModified() < oldStageCutoff)
+        }.forEach { check(it.delete()) { "Could not remove abandoned photo transfer" } }
+    }
+
+    fun pruneCompleted(retainHashes: Set<String>, olderThan: Long) {
+        directory.listFiles().orEmpty().filter { file ->
+            file.isFile && hashPattern.matches(file.name) && file.name !in retainHashes &&
+                file.lastModified() < olderThan
+        }.forEach { check(it.delete()) { "Could not prune acknowledged photo data" } }
+    }
+
     fun file(hash: String): File? {
         require(hashPattern.matches(hash))
         return File(directory, hash).takeIf { it.isFile && it.length() in 28..MAX_PHOTO_BYTES + 28 &&
@@ -112,6 +130,7 @@ internal class PhotoSyncBlobs(private val directory: File) {
         directory.mkdirs()
         val partial = File(directory, "${ref.hash}.part")
         require(partial.length() == offset) { "Photo transfer offset changed" }
+        if (directory.usableSpace < ref.size - offset) throw PhotoStorageFullException()
         FileOutputStream(partial, true).use { output ->
             var remaining = ref.size - offset
             while (remaining > 0) {

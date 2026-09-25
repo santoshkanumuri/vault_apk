@@ -1,6 +1,9 @@
 package com.privatevault.app.sync
 
 import android.database.sqlite.SQLiteConstraintException
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
 import com.privatevault.app.data.EntryType
@@ -36,6 +39,57 @@ class SyncTransactionTest {
 
     @After
     fun closeDatabase() = database.close()
+
+    @Test
+    fun entryWaitsForGroupFromAnotherAuthor() = runBlocking {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        val otherContext = object : ContextWrapper(base) {
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
+                base.getSharedPreferences("dependency-test-$name", mode)
+        }
+        val firstIdentity = AndroidDeviceIdentityStore(base)
+        val secondIdentity = AndroidDeviceIdentityStore(otherContext)
+        firstIdentity.clear(); secondIdentity.clear()
+        val second = Room.inMemoryDatabaseBuilder(otherContext, VaultDatabase::class.java).build()
+        val receiver = Room.inMemoryDatabaseBuilder(base, VaultDatabase::class.java).build()
+        try {
+            val firstDevice = firstIdentity.getOrCreate()
+            val secondDevice = secondIdentity.getOrCreate()
+            val content = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(ByteArray(32) { 3 })
+            val transport = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(ByteArray(32) { 4 })
+            listOf(database, second, receiver).forEach { db ->
+                db.dao().saveSettings(VaultSettings(vaultId = "vault"))
+                db.syncDao().saveVaultState(SyncVaultStateEntity(vaultId = "vault",
+                    contentKey = content, transportSecret = transport))
+                listOf(firstDevice, secondDevice).forEachIndexed { index, member ->
+                    db.syncDao().upsertMembership(SyncMembershipEntity("vault", member.deviceId,
+                        "Device", member.publicKeyBase64Url, MemberStatus.ACTIVE.name,
+                        firstDevice.deviceId, index + 1L, 1))
+                }
+            }
+            val group = VaultGroup(id = "late-group", name = "Late")
+            second.dao().insertGroup(group)
+            val vaultKey = ByteArray(32) { 9 }
+            LocalGroupChangeWriter(database, firstIdentity).save(group, vaultKey)
+            LocalEntryChangeWriter(second, secondIdentity).save(
+                VaultEntry(id = "linked", type = EntryType.NOTE, title = "Linked"),
+                setOf(group.id), vaultKey)
+            val entryChange = second.syncDao().operations().single()
+            val groupChange = database.syncDao().operations().single()
+            assertTrue(runCatching {
+                IncomingEntryChangeApplier(receiver).apply(entryChange, vaultKey)
+            }.exceptionOrNull() is MissingRecordDependencyException)
+            assertEquals(IncomingResult.APPLIED,
+                IncomingEntryChangeApplier(receiver).apply(groupChange, vaultKey))
+            assertEquals(IncomingResult.APPLIED,
+                IncomingEntryChangeApplier(receiver).apply(entryChange, vaultKey))
+            assertEquals(listOf(group.id), receiver.dao().entry("linked")?.groups?.map { it.id })
+        } finally {
+            second.close(); receiver.close(); firstIdentity.clear(); secondIdentity.clear()
+        }
+    }
 
     @Test
     fun commitsVaultEditOperationAndHeadTogether() = runBlocking {

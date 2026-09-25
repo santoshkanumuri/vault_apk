@@ -29,6 +29,8 @@ internal data class TransportMirror(val vaultId: String, val localDeviceId: Stri
     val peerAddresses: Map<String, String> = emptyMap(),
     val pendingPhotoHashes: Set<String> = emptySet())
 
+internal class SyncQueueFullException : Exception("Unlock this device to apply queued changes")
+
 /** Contains transport secrets and encrypted operations only. It never stores a vault content key. */
 internal class LockedSyncStore(private val context: Context,
     private val directory: File = File(context.noBackupFilesDir, "sync-transport")) {
@@ -44,20 +46,27 @@ internal class LockedSyncStore(private val context: Context,
 
     suspend fun publish(database: VaultDatabase) {
         val identity = AndroidDeviceIdentityStore(context).getOrCreate()
-        val (mirror, operations) = database.withTransaction {
+        val (mirror, operations, photoHashes, hasConflicts) = database.withTransaction {
             val vaultId = requireNotNull(database.dao().settings()).vaultId
             val group = requireNotNull(database.syncDao().vaultState()) { "Sync group is not ready" }
             require(group.vaultId == vaultId && Base64.getUrlDecoder().decode(group.transportSecret).size == 32)
-            TransportMirror(vaultId, identity.deviceId, identity.publicKeyBase64Url,
+            val mirror = TransportMirror(vaultId, identity.deviceId, identity.publicKeyBase64Url,
                 group.transportSecret, group.keyEpoch,
                 database.syncDao().peers(vaultId), database.syncDao().memberships(vaultId),
                 database.syncDao().membershipEvents(vaultId),
-                database.syncDao().deviceHeads(vaultId)) to database.syncDao().operations()
+                database.syncDao().deviceHeads(vaultId))
+            PublishedState(mirror, database.syncDao().operations(),
+                database.syncDao().attachments().mapTo(hashSetOf()) { it.ciphertextHash },
+                database.syncDao().conflicts().any { it.resolvedAtUtc.isEmpty() })
         }
-        publishState(mirror, operations)
+        publishState(mirror, operations, photoHashes, hasConflicts)
     }
 
-    @Synchronized private fun publishState(mirror: TransportMirror, operations: List<SyncOperationEntity>) {
+    private data class PublishedState(val mirror: TransportMirror, val operations: List<SyncOperationEntity>,
+        val photoHashes: Set<String>, val hasConflicts: Boolean)
+
+    @Synchronized private fun publishState(mirror: TransportMirror, operations: List<SyncOperationEntity>,
+        photoHashes: Set<String>, hasConflicts: Boolean) {
         val previous = snapshot()
         if (previous != null && previous.vaultId != mirror.vaultId) clear()
         val selected = if (previous != null && previous.vaultId == mirror.vaultId) {
@@ -76,13 +85,33 @@ internal class LockedSyncStore(private val context: Context,
             else mirror.copy(peerProgress = previous.peerProgress, peerAddresses = previous.peerAddresses,
                 pendingPhotoHashes = previous.pendingPhotoHashes)
         } else mirror
+        val activePeers = selected.members.filter {
+            it.status == MemberStatus.ACTIVE.name && it.deviceId != selected.localDeviceId
+        }
+        val retained = operations.filter { operation ->
+            operation.deviceId != selected.localDeviceId || activePeers.isEmpty() || activePeers.any { peer ->
+                (selected.peerProgress[peer.deviceId]?.applied?.get(operation.deviceId)?.sequence ?: 0L) < operation.sequence
+            }
+        }
         outgoing.mkdirs(); incoming.mkdirs()
-        operations.forEach { operation ->
+        val retainedHashes = retained.mapTo(hashSetOf()) { it.hash }
+        outgoing.listFiles().orEmpty().filter { it.name.matches(Regex("[a-f0-9]{64}")) && it.name !in retainedHashes }
+            .forEach { check(it.delete()) { "Could not prune acknowledged sync change" } }
+        retained.forEach { operation ->
             val file = File(outgoing, operation.hash)
             if (!file.exists()) writeProtected(file, gson.toJson(operation).toByteArray(Charsets.UTF_8))
         }
         writeProtected(File(directory, "peers"), gson.toJson(selected).toByteArray(Charsets.UTF_8))
-        outgoingIndex = operations.map { OperationPointer(it.vaultId, it.deviceId, it.sequence, it.hash) }
+        photoBlobs.pruneAbandonedPartials(selected.pendingPhotoHashes)
+        val allApplied = activePeers.isNotEmpty() && selected.heads.all { head ->
+            activePeers.all { peer ->
+                (selected.peerProgress[peer.deviceId]?.applied?.get(head.deviceId)?.sequence ?: 0L) >= head.sequence
+            }
+        }
+        if (allApplied && !hasConflicts && selected.pendingPhotoHashes.isEmpty() &&
+            incoming.listFiles().isNullOrEmpty() && rejected.listFiles().isNullOrEmpty())
+            photoBlobs.pruneCompleted(photoHashes, System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000)
+        outgoingIndex = retained.map { OperationPointer(it.vaultId, it.deviceId, it.sequence, it.hash) }
             .sortedWith(compareBy({ it.deviceId }, { it.sequence }))
     }
 
@@ -171,9 +200,16 @@ internal class LockedSyncStore(private val context: Context,
             .map { OperationPointer(it.vaultId, it.deviceId, it.sequence, it.hash) }
             .sortedWith(compareBy({ it.deviceId }, { it.sequence }))
             .also { outgoingIndex = it }
+        val receivedLocally = progress().received
+        val queuedLocally = readOperations(incoming)
         (progress.received.entries + progress.applied.entries).forEach { (author, head) ->
+            val latest = mirror.heads.firstOrNull { it.deviceId == author }
+            if (author == mirror.localDeviceId) require(head.sequence <= (receivedLocally[author]?.sequence ?: 0L)) {
+                "Peer reported an unknown change head"
+            }
             val localHash = known.firstOrNull { it.deviceId == author && it.sequence == head.sequence }?.hash
-                ?: mirror.heads.firstOrNull { it.deviceId == author && it.sequence == head.sequence }?.hash
+                ?: queuedLocally.firstOrNull { it.deviceId == author && it.sequence == head.sequence }?.hash
+                ?: latest?.takeIf { it.sequence == head.sequence }?.hash
             require(localHash == null || localHash == head.hash) { "Peer reported a conflicting change head" }
         }
         val previous = mirror.peerProgress[deviceId]
@@ -232,9 +268,8 @@ internal class LockedSyncStore(private val context: Context,
         val bytes = gson.toJson(operation).toByteArray(Charsets.UTF_8)
         try {
             val files = incoming.listFiles().orEmpty().filter { it.isFile }
-            require(files.size < 2048 && files.sumOf { it.length() } + bytes.size + 28 <= 32L * 1024 * 1024) {
-                "Unlock this phone to apply queued changes"
-            }
+            if (files.size >= 2048 || files.sumOf { it.length() } + bytes.size + 28 > 32L * 1024 * 1024)
+                throw SyncQueueFullException()
             incoming.mkdirs()
             writeProtected(file, bytes)
         } finally { bytes.fill(0) }
@@ -269,7 +304,8 @@ internal class LockedSyncStore(private val context: Context,
                 catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                 catch (missing: MissingPhotoBlobException) { requestPhoto(missing.hash); continue }
                 catch (_: MissingPhotoDependencyException) { continue }
-                catch (_: SQLiteConstraintException) { continue }
+                catch (_: MissingRecordDependencyException) { continue }
+                catch (_: SQLiteConstraintException) { quarantine(operation.hash); continue }
                 catch (_: IllegalArgumentException) { quarantine(operation.hash); continue }
                 catch (_: JSONException) { quarantine(operation.hash); continue }
                 catch (_: javax.crypto.AEADBadTagException) { quarantine(operation.hash); continue }
@@ -316,6 +352,9 @@ internal class LockedSyncStore(private val context: Context,
         listOf(outgoing, incoming, rejected).forEach { folder -> folder.listFiles().orEmpty().forEach { check(it.delete()) } }
         File(directory, "blobs").listFiles().orEmpty().forEach { check(it.delete()) }
         File(directory, "peers").let { if (it.exists()) check(it.delete()) }
+        listOf("peers.bak", "peers.new").forEach { name ->
+            File(directory, name).let { if (it.exists()) check(it.delete()) }
+        }
         outgoingIndex = null
     }
 

@@ -143,9 +143,14 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                     error("Pairing attempts exhausted")
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) { mutableState.value = PairingUiState("failed", message =
-                if (committedHost) "This phone enrolled the device. If the other phone is still empty, reconnect that same phone."
-                else pairingFailure(failure, mutableState.value.stage)) }
+            catch (failure: Exception) {
+                if (committedHost) {
+                    runCatching { LanSyncService.store(context).publish(database) }
+                    mutableState.value = PairingUiState("enrolled_pending", message =
+                        "Enrollment was saved, but final confirmation was lost. If the other device has the vault, use Sync now. If it is still empty, pair that same device again.")
+                } else mutableState.value = PairingUiState("failed", message =
+                    pairingFailure(failure, mutableState.value.stage))
+            }
             finally { listener?.close(); listener = null; key.fill(0) }
         }
     }

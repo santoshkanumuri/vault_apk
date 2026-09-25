@@ -129,7 +129,17 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
                     if (groupsDiffer) add("Different: Groups")
                 }.joinToString("\n")
             }
-            "group" -> payload.getJSONObject("group").getString("name")
+            "group" -> payload.getJSONObject("group").let { group ->
+                val otherGroup = if (other.kind == "delete") null else
+                    IncomingEntryChangeApplier(database).decrypt(other.toSyncChange(), key).getJSONObject("group")
+                val changed = listOf("name" to "Name", "notes" to "Notes", "folderType" to "Folder type")
+                    .filter { (field, _) -> otherGroup != null && group.optString(field) != otherGroup.optString(field) }
+                    .map { it.second }
+                buildList {
+                    add(group.getString("name"))
+                    if (changed.isNotEmpty()) add("Different: ${changed.joinToString()}")
+                }.joinToString("\n")
+            }
             "photo" -> payload.getJSONObject("photo").let {
                 "Photo ${operation.entityId.take(8)}${if (it.getBoolean("isCover")) " · cover" else ""}\nImage version differs"
             }

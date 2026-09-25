@@ -29,6 +29,7 @@ import javax.crypto.spec.SecretKeySpec
 
 enum class IncomingResult { APPLIED, REPLAY, CONFLICT, OBSOLETE }
 internal class MissingPhotoDependencyException : Exception("Cover photo is still waiting for its image")
+internal class MissingRecordDependencyException : Exception("A linked item is still waiting to sync")
 
 internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
     private val photoBlobs: PhotoSyncBlobs? = null, private val context: Context? = null) {
@@ -97,7 +98,13 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             val relation = if (state == null) VersionRelation.AFTER else change.recordVersion.relationTo(localVersion)
             val result = when (relation) {
                 VersionRelation.AFTER -> {
-                    if (entry != null) database.dao().saveEntryExact(entry, groupIds)
+                    if (entry != null) {
+                        val availableGroups = database.dao().allGroupsWithEntries().mapTo(hashSetOf()) { it.group.id }
+                        if (!availableGroups.containsAll(groupIds) || entry.linkedAuthenticatorId.isNotBlank() &&
+                            database.dao().entry(entry.linkedAuthenticatorId) == null)
+                            throw MissingRecordDependencyException()
+                        database.dao().saveEntryExact(entry, groupIds)
+                    }
                     else if (group != null) database.dao().insertGroup(group)
                     else if (passkey != null) {
                         val saved = database.dao().allPasskeys().firstOrNull { it.id == passkey.id }

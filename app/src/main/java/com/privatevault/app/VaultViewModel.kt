@@ -1,5 +1,7 @@
 package com.privatevault.app
 
+import com.privatevault.app.sync.removeOnlyPairedDevice
+
 import androidx.room.withTransaction
 import com.privatevault.app.sync.captureEntryUpserts
 
@@ -119,6 +121,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val rejectedSyncChanges = _rejectedSyncChanges.asStateFlow()
     private val _pairedDevices = MutableStateFlow<List<com.privatevault.app.data.SyncMembershipEntity>>(emptyList())
     val pairedDevices = _pairedDevices.asStateFlow()
+    private val _canRemoveOnlyPeer = MutableStateFlow(false)
+    val canRemoveOnlyPeer = _canRemoveOnlyPeer.asStateFlow()
     fun deviceSyncProgress(deviceId: String): String {
         val mirror = lockedSyncStore.snapshot() ?: return "No sync status yet"
         val progress = mirror.peerProgress[deviceId] ?: return "No sync status yet"
@@ -672,6 +676,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _passkeys.value = emptyList()
         _groups.value = emptyList()
         _pairedDevices.value = emptyList()
+        _canRemoveOnlyPeer.value = false
         _syncConflicts.value = emptyList()
         _rejectedSyncChanges.value = 0
         sessionKey?.fill(0)
@@ -1012,6 +1017,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val vaultId = syncDao.settings()?.vaultId.orEmpty()
         val self = deviceIdentityStore.getOrCreate().deviceId
         val paired = syncDatabase.syncDao().memberships(vaultId).filter { it.deviceId != self }
+        val membershipEvents = syncDatabase.syncDao().membershipEvents(vaultId)
+        val canRemoveOnlyPeer = paired.count { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name } == 1 &&
+            membershipEvents.isNotEmpty() &&
+            com.privatevault.app.sync.SyncMembershipManager.verify(membershipEvents.map { it.toEvent() }).members.any {
+                it.deviceId == self && it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name
+            }
         val conflicts = com.privatevault.app.sync.SyncConflictResolver(syncDatabase, deviceIdentityStore,
             lockedSyncStore.photoBlobs, getApplication())
             .reviews(requireNotNull(sessionKey))
@@ -1020,6 +1031,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _entries.value = entries
         _groups.value = groups
         _pairedDevices.value = paired
+        _canRemoveOnlyPeer.value = canRemoveOnlyPeer
         _syncConflicts.value = conflicts
         _rejectedSyncChanges.value = lockedSyncStore.rejectedCount()
         if (syncDatabase.syncDao().activeMembershipCount(vaultId) > 1 &&
@@ -1099,6 +1111,32 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
+    fun removeOnlyPairedDevice(deviceId: String) = securedLaunch {
+        require(_canRemoveOnlyPeer.value && _pairedDevices.value.any {
+            it.deviceId == deviceId && it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name
+        }) { "This device cannot be removed from the current sync group" }
+        require(_syncConflicts.value.isEmpty()) { "Resolve sync conflicts before removing the device" }
+        require(lockedSyncStore.queuedCount() == 0 && lockedSyncStore.rejectedCount() == 0 &&
+            lockedSyncStore.missingPhotos().isEmpty()) {
+            "Apply or retry waiting changes and photos before removing this device"
+        }
+        val wasPaused = com.privatevault.app.sync.LanSyncService.isPaused(getApplication())
+        com.privatevault.app.sync.LanSyncService.pause(getApplication())
+        require(lockedSyncStore.queuedCount() == 0 && lockedSyncStore.rejectedCount() == 0 &&
+            lockedSyncStore.missingPhotos().isEmpty()) {
+            "A sync was still finishing. Review it, then retry removal"
+        }
+        requireNotNull(database).let {
+            it.removeOnlyPairedDevice(deviceIdentityStore, deviceId)
+            lockedSyncStore.clear()
+            lockedSyncStore.publish(it)
+        }
+        _securitySettings.value = requireNotNull(dao().settings())
+        refresh()
+        if (!wasPaused) com.privatevault.app.sync.LanSyncService.allowFutureSync(getApplication())
+        _message.value = "Device removed. This vault now has new sync keys. Pair a new empty device when ready; pair the watch again for codes."
+    }
+
     fun resolveSyncConflict(id: String, useIncoming: Boolean, expectedVersion: String) = securedLaunch {
         com.privatevault.app.sync.SyncConflictResolver(requireNotNull(database), deviceIdentityStore,
             lockedSyncStore.photoBlobs, getApplication())
@@ -1109,7 +1147,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             devicePairingState.collect { state ->
-                if (state.stage == "paired" && _status.value is VaultStatus.Unlocked) {
+                if (state.stage in setOf("paired", "enrolled_pending") && _status.value is VaultStatus.Unlocked) {
                     _securitySettings.value = requireNotNull(dao().settings())
                     refresh()
                 }

@@ -349,6 +349,7 @@ interface VaultDao {
     @Query("DELETE FROM sync_membership_events") suspend fun clearSyncMembershipEvents()
     @Query("DELETE FROM sync_vault_state") suspend fun clearSyncVaultState()
     @Query("DELETE FROM sync_peers") suspend fun clearSyncPeers()
+    @Query("DELETE FROM sync_legacy_operations") suspend fun clearSyncLegacyOperations()
     @Query("SELECT * FROM passkeys ORDER BY rpId, username") suspend fun allPasskeys(): List<VaultPasskey>
     @Query("SELECT id, rpId, username, createdAt FROM passkeys ORDER BY rpId, username") suspend fun passkeySummaries(): List<PasskeySummary>
     @Insert suspend fun insertPasskeys(passkeys: List<VaultPasskey>)

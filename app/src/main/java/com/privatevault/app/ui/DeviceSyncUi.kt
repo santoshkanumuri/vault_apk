@@ -27,6 +27,7 @@ import com.privatevault.app.sync.MemberStatus
 internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) -> Unit) {
     val state by viewModel.devicePairingState.collectAsStateWithLifecycle()
     val devices by viewModel.pairedDevices.collectAsStateWithLifecycle()
+    val canRemoveOnlyPeer by viewModel.canRemoveOnlyPeer.collectAsStateWithLifecycle()
     val syncStatus by viewModel.deviceSyncStatus.collectAsStateWithLifecycle()
     val conflicts by viewModel.syncConflicts.collectAsStateWithLifecycle()
     val rejected by viewModel.rejectedSyncChanges.collectAsStateWithLifecycle()
@@ -37,6 +38,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     var scanner by remember { mutableStateOf(false) }
     var permissionDenied by remember { mutableStateOf(false) }
     var notificationDenied by remember { mutableStateOf(false) }
+    var removeDeviceId by remember { mutableStateOf<String?>(null) }
     var interval by remember { mutableLongStateOf(LanSyncService.syncInterval(context)) }
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         scanner = allowed
@@ -168,6 +170,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             }
         }
         Text("Paired devices", style = MaterialTheme.typography.titleMedium)
+        if (activeDeviceCount > 2) Text(
+            "Secure removal from a group of three or four devices is not available yet. Keep each device trusted until key rotation can reach the others.",
+            style = MaterialTheme.typography.bodySmall)
         devices.forEach { device ->
             var address by rememberSaveable(device.deviceId) { mutableStateOf("") }
             var showAddress by rememberSaveable(device.deviceId) { mutableStateOf(false) }
@@ -189,6 +194,10 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                             Text("Connect using this address")
                         }
                     }
+                    if (canRemoveOnlyPeer && device.status == MemberStatus.ACTIVE.name)
+                        TextButton(onClick = { removeDeviceId = device.deviceId }) {
+                            Text("Remove this device", color = MaterialTheme.colorScheme.error)
+                        }
                 }
             }
         }
@@ -249,4 +258,16 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     if (scanner) QrScanner(onResult = { value -> scanner = false; viewModel.joinDevicePairing(value) },
         close = { scanner = false }, title = "Scan Nuvori pairing QR",
         help = "Scan the QR shown on the other device. Keep both devices unlocked on the same Wi-Fi.")
+    removeDeviceId?.let { deviceId ->
+        AlertDialog(onDismissRequest = { removeDeviceId = null },
+            title = { Text("Remove paired device?") },
+            text = { Text("This device keeps its old vault copy. Your vault will get new sync keys and stop sharing future edits with it. Finish any waiting sync first. You will also need to pair your watch again.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    removeDeviceId = null
+                    viewModel.removeOnlyPairedDevice(deviceId)
+                }) { Text("Remove device") }
+            },
+            dismissButton = { TextButton(onClick = { removeDeviceId = null }) { Text("Cancel") } })
+    }
 }

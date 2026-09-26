@@ -1,10 +1,22 @@
 # Android sync implementation steps
 
-Updated: September 24, 2026.
+Updated: September 25, 2026.
 
 Status: implementation plan. The remaining work described here has not been completed by writing this document.
 
+Product decision, September 25, 2026: Nuvori serves one owner with personal phones, tablets, Windows computers, and a watch companion. Keep the four-active-Android-device limit. One managing device controls enrollment and membership; every enrolled device can edit offline and exchange signed changes directly. Keep per-device history and conflict preservation. See [Personal device sync](docs/PERSONAL-DEVICE-SYNC.md) for the agreed direction, password requirements, and ordered work still needed.
+
+First implementation slice: Android devices settings identifies the managing device and disables hosting on secondary devices. Hosting requires local master-password verification before creating the QR invitation; the protocol also checks management authority before opening the pairing listener. The two-device split is labeled "Stop sharing" to distinguish it from revoking a member while preserving a larger group. Tablet creation and editing use the right detail pane, with draft preservation during window resizing and confirmation before navigation discards a draft. These changes do not complete transfer, recovery, or multi-device key rotation.
+
 Implementation update, September 24, 2026: The Android implementation now limits active membership to four devices, uses a separate group content key and transport credential, carries a signed membership history, and has an emulator test for direct sync between a second and third phone. The LAN exchange now persists separate received and applied heads. Locked receivers acknowledge ciphertext only after protected storage, and the device page shows the peer's reported progress for this phone's changes. Password-only conflicts are visible in review without displaying the secret. Automatic sync has Pause, Resume, Sync now, and retries after Wi-Fi address or NSD failures. These are implementation and emulator results, not completion of the release checklist below.
+
+September 26, 2026: The Android devices page now shows local changes as waiting, received, or applied using the peer's authenticated progress, shows a waiting ciphertext or photo state, and prefills a saved peer address for connection help. A 32-batch transfer reports that more changes remain and schedules another automatic check instead of reporting a clean check. This does not satisfy the Step 9 complete-sync or physical-device checks.
+
+Connection follow-up, September 26, 2026: Discovery now takes priority over saved IP addresses, either device can initiate after a short stagger, failed resolved endpoints are refreshed, and an authenticated peer updates its saved address. Committed local changes signal an active service to check promptly. The Android devices page shows waiting, discovery, connection, transfer, received, checked, and failure states with distinct theme colors. The focused socket exchange tests pass on phone and Wear emulators. Repeat intermittent Wi-Fi, process restart, and partial-transfer checks on two physical devices before marking Step 9 complete.
+
+After the 2.0.5 artifact: the Android devices page now shows the number of authenticated connections, each paired device's current attempt status, and protected timestamps for last authenticated contact and last completed exchange. The foreground notification shows connected and paired counts without exposing device names. A one-shot manual sync now waits for transfer activity to finish before stopping; the previous fixed timer could cut off a long exchange. These source changes are not in the 2.0.5 downloads. Physical Wi-Fi and release-build verification remain pending.
+
+2.0.6 preview artifact: the phone APK and AAB include the connected-device status and manual-transfer timer changes. The signed, minified release build, vital lint, package/version check, signature check, and checksums passed. The two-device physical Wi-Fi matrix, longer background soak, interrupted transfer, and release installation checks remain open.
 
 Pairing test update, September 24, 2026: A tablet and phone reached matching-code confirmation, then stalled at "copying vault." The host did not close `SyncChannelOutput` after streaming its staged snapshot, so the receiver never saw the end marker. The host now closes that stream before waiting for `ready`. A bounded encrypted socket stream test and a complete snapshot enrollment socket test pass. Repeat the physical test with the corrected debug APK on both devices.
 
@@ -50,7 +62,7 @@ The release is ready when three Android devices can join one logical vault, edit
 
 - Initial enrollment into an empty local vault, with explicit confirmation on both phones.
 - At most four active Android devices per vault, including the current device. Revoked devices do not occupy a slot.
-- Independent local master passwords, biometric settings, and lock settings.
+- Separate local vault keys, biometric settings, and lock settings. Current passwords remain local. The target is one user-facing master password, with explicit verification during enrollment and an offline-device update flow before claiming that the password is synchronized.
 - Two-way sync of entries, authenticators, passkeys, groups, relationships, favorites, ordering, photos, photo edits, and deletions.
 - Automatic same-Wi-Fi sync with an ongoing notification, Pause, Resume, and an explicit Sync now action.
 - Durable encrypted queues while locked, bounded storage, and recovery from interrupted transfers.
@@ -200,17 +212,17 @@ Do not expand into Windows or a relay while these Android release gates remain o
 5. Decide who may enroll and revoke devices before implementing signed membership.
 6. Decide how a member introduced through another phone proves possession of its own private transport identity.
 
-#### Proposed membership policy
+#### Accepted membership policy
 
 Use one designated managing device for membership changes in the first Android release. Ordinary record editing and direct data sync remain available on every active device. The managing device is needed to add/remove devices and transfer that management role.
 
-This is a proposed product decision, not an existing user requirement. It gives membership changes one signed order and avoids inventing distributed consensus. The cost is that management operations need that device. Make this visible in the device list.
+This product direction was accepted on September 25, 2026. It gives membership changes one signed order. Management operations need that device; ordinary edits and peer sync remain available without it. Show the managing role in the device list. Require local master-password verification before the manager hosts enrollment. Do not use that password as a shared network credential.
 
 Provide an explicit role-transfer flow while the old managing device is available. If it is lost, a surviving unlocked device can start a new sync group with a new vault identity and fresh keys, retaining its local records and requiring remaining phones to enroll again. Clearly explain that unsynced data on the lost device cannot be recovered this way. Do not silently elect a new manager for the old group.
 
 Before replacing a remaining phone's old group, preserve its local vault and unsynced changes in an encrypted backup. The new-group flow must include an explicit data-preservation/reconciliation step before the empty-destination enrollment requirement can be satisfied. Do not automatically clear populated phones to make re-enrollment pass.
 
-If management from any offline phone is required instead, design and test concurrent membership and rotation rules before Step 1. Do not choose a winner using timestamps or device IDs.
+Do not automatically elect a manager or expire membership after 30 or 45 days. Inactivity may trigger a review reminder. Emergency recovery starts a fresh sync identity and keys, with explicit re-enrollment and reconciliation of surviving devices. Do not add a global sequence for ordinary edits or require the managing device to relay all data.
 
 #### Proposed transport direction
 

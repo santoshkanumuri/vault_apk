@@ -21,8 +21,12 @@ internal suspend fun VaultDatabase.prepareSyncGroup(identityStore: AndroidDevice
     if (existing != null) {
         require(existing.vaultId == vaultId && existing.keyEpoch == 1L &&
             existing.transportSecret.isNotBlank()) { "Invalid sync key state" }
-        require(sync.membershipEvents(vaultId).isNotEmpty()) {
+        val events = sync.membershipEvents(vaultId)
+        require(events.isNotEmpty()) {
             "Existing device sync needs recovery before another phone can join"
+        }
+        require(SyncMembershipManager.verify(events.map { it.toEvent() }).managerDeviceId == localDeviceId) {
+            "Add devices from the managing device"
         }
         return@withTransaction
     }

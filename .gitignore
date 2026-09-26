@@ -24,7 +24,9 @@ signing.properties
 .env.*
 !.env.example
 captures/
+/explanntions/
 *.md
 !README.md
 !THIRD_PARTY_NOTICES.md
 !docs/RELEASE-*.md
+!docs/PERSONAL-DEVICE-SYNC.md

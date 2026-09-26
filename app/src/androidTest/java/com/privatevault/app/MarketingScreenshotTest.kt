@@ -46,7 +46,7 @@ class MarketingScreenshotTest {
                 ScreenshotCanvas {
                     Column(Modifier.fillMaxSize()) {
                         DemoHeader("Home")
-                        Dashboard(entries, {}, {}, Modifier.weight(1f))
+                        Dashboard(entries, {}, {}, Modifier.weight(1f), passkeyCount = 2)
                     }
                 }
             }
@@ -146,7 +146,7 @@ class MarketingScreenshotTest {
                 ScreenshotCanvas {
                     Column(Modifier.fillMaxSize()) {
                         DemoHeader("More")
-                        MoreScreen(3, entries, {}, {}, {}, {})
+                        MoreScreen(3, entries, {}, {}, {}, {}, {})
                     }
                 }
             }
@@ -185,7 +185,8 @@ class MarketingScreenshotTest {
             VaultEntry(type = EntryType.PASSWORD, title = "Mail", primaryValue = "alex@example.com", secondaryValue = "demo", favorite = true, lastOpenedAt = now - 1),
             VaultEntry(type = EntryType.QUESTION, title = "Recovery question", primaryValue = "First concert?", secondaryValue = "demo", lastOpenedAt = now - 2),
             VaultEntry(type = EntryType.NOTE, title = "Travel checklist", notes = "Passport, tickets, and reservations", lastOpenedAt = now - 3),
-            VaultEntry(type = EntryType.AUTHENTICATOR, title = "Developer account", secondaryValue = "JBSWY3DPEHPK3PXP", lastOpenedAt = now - 4)
+            VaultEntry(type = EntryType.AUTHENTICATOR, title = "Developer account", secondaryValue = "JBSWY3DPEHPK3PXP", lastOpenedAt = now - 4),
+            VaultEntry(type = EntryType.AUTOFILL, title = "Personal details")
         ).map { EntryWithDetails(it, emptyList(), emptyList()) }
     }
 

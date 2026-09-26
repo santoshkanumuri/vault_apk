@@ -6,6 +6,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LoginSecurityTest {
+    @Test fun embeddedAppNeedsItsOwnCertificateLinkEvenWhenWebsiteMatches() {
+        val entry = VaultEntry(type = EntryType.PASSWORD, title = "Website login", secondaryValue = "secret",
+            tertiaryValue = "https://fill.dev/login", autofillOrigins = "https://fill.dev")
+        assertFalse(loginAuthorizedForDestination(entry, "com.example.embedded", "certificate", null))
+        val linked = linkLoginToDestination(entry, "com.example.embedded", "certificate", null)
+        assertTrue(loginAuthorizedForDestination(linked, "com.example.embedded", "certificate", null))
+        assertFalse(loginAuthorizedForDestination(linked, "com.example.embedded", "replacement-certificate", null))
+        assertEquals(entry.tertiaryValue, linked.tertiaryValue)
+        assertEquals(entry.autofillOrigins, linked.autofillOrigins)
+    }
     @Test fun requiresExactPackageAndSigningIdentityAndLoginType() {
         val entry = VaultEntry(type = EntryType.PASSWORD, title = "Bank", autofillSignatures = "com.example.bank=certificate")
         assertTrue(loginAuthorized(entry, "com.example.bank", "certificate"))

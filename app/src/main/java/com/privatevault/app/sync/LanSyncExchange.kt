@@ -11,11 +11,13 @@ import javax.crypto.spec.SecretKeySpec
 
 /** The random probe identifies a paired peer without advertising vault or device IDs. */
 internal object LanSyncExchange {
+    class BatchLimitReached : Exception("More changes remain after this sync pass")
     private data class PhotoRequest(val hash: String, val offset: Long)
     private val gson = Gson()
     private val encoder = Base64.getUrlEncoder().withoutPadding()
 
-    fun run(frames: SyncFrames, store: LockedSyncStore, server: Boolean) {
+    fun run(frames: SyncFrames, store: LockedSyncStore, server: Boolean,
+        onAuthenticated: (String) -> Unit = {}) {
         val mirror = requireNotNull(store.snapshot())
         require(mirror.members.count { it.status == MemberStatus.ACTIVE.name } in 2..MAX_ACTIVE_SYNC_DEVICES)
         val secret = mirror.transportSecret
@@ -65,6 +67,7 @@ internal object LanSyncExchange {
                 require(DeviceIdentityCrypto.verify(session.peer.publicKey,
                     identityProof(session.key, accepted.vaultId, session.peer.deviceId, identity.deviceId),
                     remoteSignature)) { "Peer identity proof failed" }
+                onAuthenticated(member.deviceId)
                 val membershipHead = accepted.membershipEvents.last().hash
                 // Alternate bounded batches so neither socket waits for the other to drain a large write.
                 var finished = false
@@ -86,6 +89,7 @@ internal object LanSyncExchange {
                     requestPhotos(channel, store)
                     servePhotos(channel, store)
                 }
+                if (!finished) throw BatchLimitReached()
             }
         } finally { session.key.fill(0) }
     }

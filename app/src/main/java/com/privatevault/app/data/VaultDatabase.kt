@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.Flow
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import java.util.UUID
 
-enum class EntryType { CARD, QUESTION, PASSWORD, NOTE, AUTHENTICATOR }
+enum class EntryType { CARD, QUESTION, PASSWORD, NOTE, AUTHENTICATOR, AUTOFILL }
 enum class CardKind { CREDIT, DEBIT }
 
 @Entity(tableName = "vault_settings")

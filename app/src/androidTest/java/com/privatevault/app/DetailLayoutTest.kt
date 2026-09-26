@@ -26,14 +26,19 @@ class DetailLayoutTest {
     @Test fun dashboardSummaryUsesCompactTargetsAndOpensCategories() {
         val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
         val opened = mutableStateOf<EntryType?>(null)
+        val passkeysOpened = mutableStateOf(false)
         val entries = listOf(
             EntryWithDetails(VaultEntry(type = EntryType.CARD, title = "Card"), emptyList(), emptyList()),
-            EntryWithDetails(VaultEntry(type = EntryType.PASSWORD, title = "Login"), emptyList(), emptyList())
+            EntryWithDetails(VaultEntry(type = EntryType.PASSWORD, title = "Login"), emptyList(), emptyList()),
+            EntryWithDetails(VaultEntry(type = EntryType.AUTHENTICATOR, title = "Code"), emptyList(), emptyList()),
+            EntryWithDetails(VaultEntry(type = EntryType.QUESTION, title = "Question"), emptyList(), emptyList()),
+            EntryWithDetails(VaultEntry(type = EntryType.AUTOFILL, title = "Profile"), emptyList(), emptyList())
         )
         compose.setContent {
             MaterialTheme {
                 Box(Modifier.requiredSize(320.dp, 420.dp)) {
-                    Dashboard(entries, {}, { opened.value = it }, Modifier.fillMaxSize())
+                    Dashboard(entries, {}, { opened.value = it }, Modifier.fillMaxSize(), 2,
+                        { passkeysOpened.value = true })
                 }
             }
         }
@@ -42,6 +47,12 @@ class DetailLayoutTest {
         assertTrue("Summary target must remain compact and touchable: $bounds", bounds.height in (48f * density)..(80f * density))
         cards.performClick()
         compose.runOnIdle { assertEquals(EntryType.CARD, opened.value) }
+        compose.onNodeWithContentDescription("Codes, 1").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(EntryType.AUTHENTICATOR, opened.value) }
+        compose.onNodeWithContentDescription("Questions, 1").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Autofill, 1").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Passkeys, 2").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertTrue(passkeysOpened.value) }
         compose.onNodeWithText("Quick add").assertDoesNotExist()
     }
 
@@ -51,7 +62,7 @@ class DetailLayoutTest {
         compose.setContent {
             MaterialTheme {
                 Box(Modifier.requiredSize(width.intValue.dp, 600.dp).testTag("moreViewport")) {
-                    MoreScreen(0, emptyList(), {}, {}, {}, {})
+                    MoreScreen(0, emptyList(), {}, {}, {}, {}, {})
                 }
             }
         }

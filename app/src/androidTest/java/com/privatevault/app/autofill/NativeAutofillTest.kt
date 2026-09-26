@@ -41,7 +41,7 @@ class NativeAutofillTest {
         val deadline = SystemClock.elapsedRealtime() + 10_000
         while (SystemClock.elapsedRealtime() < deadline) {
             var node = find { it.text?.toString()?.equals(text, ignoreCase = true) == true ||
-                (text == "Private Vault" && it.contentDescription?.toString()?.startsWith("Unlock Private Vault") == true) }
+                (text == "Nuvori" && it.contentDescription?.toString()?.startsWith("Unlock Nuvori") == true) }
             while (node != null && !node.isClickable && node.parent != null) node = node.parent
             if (node?.isEnabled == true && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return
             SystemClock.sleep(100)
@@ -63,6 +63,41 @@ class NativeAutofillTest {
         error("Could not scroll to: $text")
     }
 
+    private suspend fun saveNativeForm(password: CharArray, key: ByteArray, testPackage: String, passwordDescription: String) {
+        val nativeUsername = waitNode("Native username") { it.contentDescription?.toString() == "Test username" }
+        val nativePassword = waitNode("Native password") { it.contentDescription?.toString() == passwordDescription }
+        check(nativeUsername.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "new-native-user")
+        }))
+        check(nativePassword.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "native-manual-password")
+        }))
+        if (passwordDescription == "Test password") SystemClock.sleep(300)
+        click("Login")
+        val saveAction = waitNode("Android native-app save prompt") {
+            it.packageName?.toString() == "android" && it.text?.toString()?.lowercase() in setOf("save", "update")
+        }
+        click(saveAction.text.toString())
+        waitNode("Native save review") { it.text?.toString() == "Save login" }
+        val unlock = waitNode("Native save master password") { it.isEditable && it.packageName?.toString() == context.packageName }
+        check(unlock.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
+        }))
+        click("Unlock")
+        scrollAndClick("Save as new login")
+        val deadline = SystemClock.elapsedRealtime() + 10_000
+        var saved = false
+        while (!saved && SystemClock.elapsedRealtime() < deadline) {
+            val db = VaultDatabase.open(context, key)
+            try {
+                saved = db.dao().loginAndCodeEntries().any { it.primaryValue == "new-native-user" &&
+                    it.secondaryValue == "native-manual-password" && loginAuthorized(it, testPackage, requireNotNull(appSigningIdentity(context, testPackage))) }
+            } finally { db.close() }
+            if (!saved) SystemClock.sleep(100)
+        }
+        assertTrue("Confirmed native-app save must be persisted and authorized only for that app identity", saved)
+    }
+
     @Test fun frameworkAuthenticatesAndFillsOnlyAuthorizedLoginAndLinkedCode() = runBlocking {
         // Never modify a pre-existing vault, even if this test is run outside a clean install.
         check(context.packageName.endsWith(".debug"))
@@ -75,6 +110,13 @@ class NativeAutofillTest {
         val testPackage = instrumentation.context.packageName
         // Optional live-browser check: use an installed official release with third-party autofill enabled.
         val browser = InstrumentationRegistry.getArguments().getString("browserPackage")
+        val manualSave = InstrumentationRegistry.getArguments().getString("manualSave") == "true"
+        val webview = InstrumentationRegistry.getArguments().getString("webview") == "true"
+        val picker = InstrumentationRegistry.getArguments().getString("picker") == "true"
+        val choosePicker = InstrumentationRegistry.getArguments().getString("choosePicker") == "true"
+        val preferences = context.getSharedPreferences("vault_preferences", android.content.Context.MODE_PRIVATE)
+        val previousKeyboard = preferences.getBoolean("autofill_keyboard_suggestions", true)
+        preferences.edit().putBoolean("autofill_keyboard_suggestions", !picker).commit()
         val usernameFirst = InstrumentationRegistry.getArguments().getString("usernameFirst") == "true"
         val generatedFlow = InstrumentationRegistry.getArguments().getString("generatedFlow")
         val newAccount = InstrumentationRegistry.getArguments().getString("newAccount") == "true"
@@ -85,19 +127,30 @@ class NativeAutofillTest {
         try {
             val database = VaultDatabase.open(context, key)
             try {
+                database.dao().saveSettings(VaultSettings(vaultId = java.util.UUID.randomUUID().toString()))
                 val code = VaultEntry(type = EntryType.AUTHENTICATOR, title = "Test authenticator", secondaryValue = "JBSWY3DPEHPK3PXP")
                 val identity = requireNotNull(appSigningIdentity(context, testPackage))
                 database.dao().saveEntry(code, emptySet())
                 database.dao().saveEntry(VaultEntry(type = EntryType.PASSWORD, title = "Authorized test login", primaryValue = testUsername, secondaryValue = "test-password-123", tertiaryValue = "https://fill.dev/login", linkedAuthenticatorId = code.id, autofillSignatures = "$testPackage=$identity"), emptySet())
-                database.dao().saveEntry(VaultEntry(type = EntryType.PASSWORD, title = "Unauthorized login", secondaryValue = "never-fill"), emptySet())
+                database.dao().saveEntry(VaultEntry(type = EntryType.PASSWORD, title = "Unauthorized login", secondaryValue = "never-fill",
+                    tertiaryValue = if (webview) "https://fill.dev/login" else ""), emptySet())
             } finally { database.close() }
             shell("settings put secure autofill_service ${context.packageName}/com.privatevault.app.autofill.VaultAutofillService")
-            for (otp in if (browser == null) listOf(false, true) else listOf(false)) {
-                if (browser == null) {
+            for (otp in if (browser == null && !webview && !manualSave) listOf(false, true) else listOf(false)) {
+                if (webview) {
                     context.startActivity(Intent().setComponent(ComponentName(testPackage, NativeLoginTestActivity::class.java.name))
-                        .putExtra("otp", otp).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+                        .putExtra("webview", true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+                    val field = waitNode("WebView password") { it.viewIdResourceName == "password" && it.isVisibleToUser }
+                    val bounds = android.graphics.Rect().also(field::getBoundsInScreen)
+                    shell("input tap ${bounds.centerX()} ${bounds.centerY()}")
+                } else if (browser == null) {
+                    context.startActivity(Intent().setComponent(ComponentName(testPackage, NativeLoginTestActivity::class.java.name))
+                        .putExtra("otp", otp).putExtra("retainForm", manualSave).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
                     waitNode("Test form") { it.contentDescription?.toString() == (if (otp) "Test code" else "Test password") }
                     click("Request fill")
+                    val focusedField = waitNode("Native input") { it.contentDescription?.toString() == (if (otp) "Test code" else "Test password") }
+                    val inputBounds = android.graphics.Rect().also(focusedField::getBoundsInScreen)
+                    shell("input tap ${inputBounds.centerX()} ${inputBounds.centerY()}")
                 } else {
                     context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(if (generatedFlow != null) "https://fill.dev/$generatedFlow" else if (usernameFirst) "https://fill.dev/login?flow=multistep" else "https://fill.dev/login"))
                         .setPackage(browser).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -109,8 +162,12 @@ class NativeAutofillTest {
                         try { check(automation.injectInputEvent(event, true)) } finally { event.recycle() }
                     }
                 }
-                click("Private Vault")
-                waitNode("Autofill") { it.text?.toString() == "Autofill" }
+                if (manualSave) {
+                    saveNativeForm(password, key, testPackage, "Test password")
+                    continue
+                }
+                click("Nuvori")
+                waitNode("Nuvori passwords") { it.text?.toString() == "Nuvori passwords" }
                 if (!otp) {
                     val wrongPasswordField = waitNode("Master password") { it.isEditable && it.packageName?.toString() == context.packageName }
                     check(wrongPasswordField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
@@ -166,13 +223,38 @@ class NativeAutofillTest {
                     assertTrue("Generated password must be saved, not the current password", saved)
                     continue
                 }
+                if (choosePicker && !otp) {
+                    waitNode("Optional account picker") { it.text?.toString() == "Choose another login" }
+                    click("Choose another login")
+                    val pickerPassword = waitNode("Picker master password") { it.isEditable && it.packageName?.toString() == context.packageName }
+                    check(pickerPassword.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
+                    }))
+                    click("Unlock")
+                }
                 if (otp) {
                     waitNode("Authorized test login") { it.text?.toString() == "Authorized test login" }
                     assertNull(find { it.text?.toString() == "Unauthorized login" })
                     click("Fill code")
-                } else {
-                    waitNode("Authenticated account suggestion") { it.text?.toString() == testUsername }
+                } else if (webview) {
+                    waitNode("Authorized app login") { it.text?.toString() == testUsername }
                     assertNull(find { it.text?.toString() == "Unauthorized login" })
+                    if (picker || choosePicker) click("Fill login") else {
+                        waitNode("Optional picker suggestion") { it.text?.toString() == "Choose another login" }
+                        assertNull(find { it.text?.toString() == "Nuvori passwords" })
+                        click(testUsername)
+                    }
+                    waitNode("WebView password received") { it.viewIdResourceName == "password" && it.text?.length == "test-password-123".length }
+                    click("Check fill")
+                    waitNode("WebView filled") { it.text?.toString() == "Verified WebView password" }
+                    continue
+                } else {
+                    waitNode("Authenticated account picker") { it.text?.toString() == testUsername }
+                    assertNull(find { it.text?.toString() == "Unauthorized login" })
+                    if (!picker && !choosePicker) {
+                        waitNode("Optional picker suggestion") { it.text?.toString() == "Choose another login" }
+                        assertNull(find { it.text?.toString() == "Nuvori passwords" })
+                    }
                     click(testUsername)
                 }
                 val filled = waitNode("Filled field") {
@@ -187,39 +269,7 @@ class NativeAutofillTest {
                     if (browser == null) waitNode("Password verified") { it.contentDescription?.toString() == "Verified test password" }
                     else if (!usernameFirst) waitNode("Browser password filled") { it.viewIdResourceName == "password" && it.text?.length == "test-password-123".length }
                 }
-                if (browser == null && !otp) {
-                    val nativeUsername = waitNode("Native username") { it.contentDescription?.toString() == "Test username" }
-                    val nativePassword = waitNode("Native password") { it.contentDescription?.toString() == "Verified test password" }
-                    check(nativeUsername.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "new-native-user")
-                    }))
-                    check(nativePassword.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "native-manual-password")
-                    }))
-                    click("Login")
-                    val saveAction = waitNode("Android native-app save prompt") {
-                        it.packageName?.toString() == "android" && it.text?.toString()?.lowercase() in setOf("save", "update")
-                    }
-                    click(saveAction.text.toString())
-                    waitNode("Native save review") { it.text?.toString() == "Save login" }
-                    val unlock = waitNode("Native save master password") { it.isEditable && it.packageName?.toString() == context.packageName }
-                    check(unlock.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
-                    }))
-                    click("Unlock")
-                    scrollAndClick("Save as new login")
-                    val deadline = SystemClock.elapsedRealtime() + 10_000
-                    var saved = false
-                    while (!saved && SystemClock.elapsedRealtime() < deadline) {
-                        val db = VaultDatabase.open(context, key)
-                        try {
-                            saved = db.dao().loginAndCodeEntries().any { it.primaryValue == "new-native-user" &&
-                                it.secondaryValue == "native-manual-password" && loginAuthorized(it, testPackage, requireNotNull(appSigningIdentity(context, testPackage))) }
-                        } finally { db.close() }
-                        if (!saved) SystemClock.sleep(100)
-                    }
-                    assertTrue("Confirmed native-app save must be persisted and authorized only for that app identity", saved)
-                }
+                if (browser == null && !otp) saveNativeForm(password, key, testPackage, "Verified test password")
                 if (browser != null && usernameFirst) {
                     val next = waitNode("Next login step") { it.text?.toString() == "Next" && it.className?.toString() == "android.widget.Button" }
                     val nextBounds = android.graphics.Rect().also(next::getBoundsInScreen)
@@ -228,7 +278,7 @@ class NativeAutofillTest {
                     assertTrue("Password must not follow automatically", nextPassword.text.isNullOrEmpty())
                     val nextFieldBounds = android.graphics.Rect().also(nextPassword::getBoundsInScreen)
                     shell("input tap ${nextFieldBounds.centerX()} ${nextFieldBounds.centerY()}")
-                    click("Private Vault")
+                    click("Nuvori")
                     val unlock = waitNode("Second page authentication") { it.isEditable && it.packageName?.toString() == context.packageName }
                     check(unlock.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, password.concatToString())
@@ -282,6 +332,7 @@ class NativeAutofillTest {
                 }
             }
         } finally {
+            preferences.edit().putBoolean("autofill_keyboard_suggestions", previousKeyboard).commit()
             shell("am force-stop $testPackage")
             if (browser != null) shell("am force-stop $browser")
             if (oldProvider == "null" || oldProvider.isBlank()) shell("settings delete secure autofill_service")

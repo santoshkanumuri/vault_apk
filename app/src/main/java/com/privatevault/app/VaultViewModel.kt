@@ -114,7 +114,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val lockedSyncStore = com.privatevault.app.sync.LanSyncService.store(application)
     private var incomingSyncJob: kotlinx.coroutines.Job? = null
     val devicePairingState = devicePairing.state
-    val deviceSyncStatus = com.privatevault.app.sync.LanSyncService.status
+    val deviceSyncStatus: kotlinx.coroutines.flow.StateFlow<com.privatevault.app.sync.DeviceSyncStatus> =
+        com.privatevault.app.sync.LanSyncService.status
+    val devicePeerStatus = com.privatevault.app.sync.LanSyncService.peerStatus
     private val _syncConflicts = kotlinx.coroutines.flow.MutableStateFlow<List<com.privatevault.app.sync.SyncConflictReview>>(emptyList())
     val syncConflicts = _syncConflicts.asStateFlow()
     private val _rejectedSyncChanges = MutableStateFlow(0)
@@ -123,12 +125,39 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val pairedDevices = _pairedDevices.asStateFlow()
     private val _canRemoveOnlyPeer = MutableStateFlow(false)
     val canRemoveOnlyPeer = _canRemoveOnlyPeer.asStateFlow()
+    private val _syncManagerDeviceId = MutableStateFlow<String?>(null)
+    val syncManagerDeviceId = _syncManagerDeviceId.asStateFlow()
+    private val _canHostDevicePairing = MutableStateFlow(false)
+    val canHostDevicePairing = _canHostDevicePairing.asStateFlow()
     fun deviceSyncProgress(deviceId: String): String {
         val mirror = lockedSyncStore.snapshot() ?: return "No sync status yet"
-        val progress = mirror.peerProgress[deviceId] ?: return "No sync status yet"
+        val local = mirror.heads.firstOrNull { it.deviceId == mirror.localDeviceId }?.sequence ?: 0L
+        if (local == 0L) return "No changes made here since pairing"
+        val progress = mirror.peerProgress[deviceId] ?: return "Waiting to check this device"
         val received = progress.received[mirror.localDeviceId]?.sequence ?: 0L
         val applied = progress.applied[mirror.localDeviceId]?.sequence ?: 0L
-        return "Your changes: received through $received, applied through $applied"
+        return when {
+            applied >= local -> "All your changes applied on this device"
+            received >= local -> "All your changes received by this device; waiting to apply"
+            else -> "Changes from this device: $received of $local received, $applied applied"
+        }
+    }
+
+    fun deviceSyncAddress(deviceId: String): String =
+        lockedSyncStore.snapshot()?.peerAddresses?.get(deviceId).orEmpty()
+    fun deviceSyncContact(deviceId: String): Pair<Long, Long> {
+        val mirror = lockedSyncStore.snapshot()
+        return (mirror?.lastContactAt?.get(deviceId) ?: 0L) to
+            (mirror?.lastExchangeAt?.get(deviceId) ?: 0L)
+    }
+    fun deviceSyncQueueStatus(): String? {
+        val photos = lockedSyncStore.missingPhotos().size
+        val waiting = lockedSyncStore.queuedCount()
+        return when {
+            photos > 0 -> "Photo data waiting for transfer"
+            waiting > 0 -> "$waiting encrypted changes waiting to apply"
+            else -> null
+        }
     }
     private val watchSyncPublisher = com.privatevault.app.watch.WatchSyncPublisher(application)
     private var lastWatchAccounts: List<com.privatevault.app.watch.WatchAccount>? = null
@@ -677,6 +706,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _groups.value = emptyList()
         _pairedDevices.value = emptyList()
         _canRemoveOnlyPeer.value = false
+        _syncManagerDeviceId.value = null
+        _canHostDevicePairing.value = false
         _syncConflicts.value = emptyList()
         _rejectedSyncChanges.value = 0
         sessionKey?.fill(0)
@@ -748,6 +779,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         saveLocalEntry(entry, groupIds)
         refresh()
     }
+
+    fun refreshAutofillCopy() = securedLaunch { refresh() }
 
     fun importAuthenticatorAccounts(accounts: List<com.privatevault.app.security.TotpSetup>) = securedLaunch {
         require(accounts.isNotEmpty() && accounts.size <= 100)
@@ -1018,9 +1051,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val self = deviceIdentityStore.getOrCreate().deviceId
         val paired = syncDatabase.syncDao().memberships(vaultId).filter { it.deviceId != self }
         val membershipEvents = syncDatabase.syncDao().membershipEvents(vaultId)
+        val membership = membershipEvents.takeIf { it.isNotEmpty() }?.let {
+            com.privatevault.app.sync.SyncMembershipManager.verify(it.map { event -> event.toEvent() })
+        }
+        val canHostPairing = if (membership != null) membership.managerDeviceId == self
+            else paired.isEmpty() && syncDatabase.syncDao().vaultState() == null
         val canRemoveOnlyPeer = paired.count { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name } == 1 &&
-            membershipEvents.isNotEmpty() &&
-            com.privatevault.app.sync.SyncMembershipManager.verify(membershipEvents.map { it.toEvent() }).members.any {
+            membership != null && membership.members.any {
                 it.deviceId == self && it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name
             }
         val conflicts = com.privatevault.app.sync.SyncConflictResolver(syncDatabase, deviceIdentityStore,
@@ -1029,9 +1066,15 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         if (database !== syncDatabase || _status.value !is VaultStatus.Unlocked) return
         _passkeys.value = passkeys
         _entries.value = entries
+        runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.privatevault.app.autofill.UnlockedProfileStore(getApplication()).publish(vaultId, entries.map { it.entry })
+        } }
+            .onFailure { _message.value = "Autofill details could not be updated on this device." }
         _groups.value = groups
         _pairedDevices.value = paired
         _canRemoveOnlyPeer.value = canRemoveOnlyPeer
+        _syncManagerDeviceId.value = membership?.managerDeviceId
+        _canHostDevicePairing.value = canHostPairing
         _syncConflicts.value = conflicts
         _rejectedSyncChanges.value = lockedSyncStore.rejectedCount()
         if (syncDatabase.syncDao().activeMembershipCount(vaultId) > 1 &&
@@ -1069,8 +1112,26 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun Throwable.userMessage(fallback: String): String = message?.takeIf { it.length < 160 } ?: fallback
 
-    fun hostDevicePairing() = securedLaunch {
-        devicePairing.host(requireNotNull(database), requireNotNull(sessionKey))
+    suspend fun hostDevicePairing(password: CharArray) {
+        touch()
+        try {
+            val activeDatabase = requireNotNull(database) { "Unlock your vault before pairing" }
+            val activeKey = requireNotNull(sessionKey) { "Unlock your vault before pairing" }
+            require(_canHostDevicePairing.value) { "Add devices from the managing device" }
+            val matches = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                val verifiedKey = try { keyManager.unlock(password) }
+                catch (_: java.security.GeneralSecurityException) {
+                    throw IllegalArgumentException("Incorrect master password")
+                }
+                try { java.security.MessageDigest.isEqual(verifiedKey, activeKey) }
+                finally { verifiedKey.fill(0) }
+            }
+            require(matches) { "Incorrect master password" }
+            check(database === activeDatabase && sessionKey === activeKey && _status.value is VaultStatus.Unlocked) {
+                "Vault locked during verification. Unlock and try again."
+            }
+            devicePairing.host(activeDatabase, activeKey)
+        } finally { password.fill('\u0000') }
     }
 
     fun joinDevicePairing(link: String) = securedLaunch {

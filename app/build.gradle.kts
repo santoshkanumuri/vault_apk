@@ -19,8 +19,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 29
         targetSdk = 36
-        versionCode = 41
-        versionName = "2.0.1"
+        versionCode = 46
+        versionName = "2.0.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -46,6 +46,8 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            // Collect native symbols when dependencies supply them; stripped AARs cannot recover them.
+            ndk.debugSymbolLevel = "FULL"
             if (privateSigningFile.exists()) signingConfig = signingConfigs.getByName("privateRelease")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

@@ -278,8 +278,14 @@ class LockedSyncExchangeTest {
             val stores = contexts.indices.map { LockedSyncStore(contexts[it], File(root, "store-$it")) }
             stores.indices.forEach { stores[it].publish(databases[it]) }
             stores[1].recordPeerAddress(devices[0].deviceId, "192.168.1.20")
+            stores[1].recordPeerContact(devices[0].deviceId, completed = false)
+            val contact = requireNotNull(stores[1].snapshot()?.lastContactAt?.get(devices[0].deviceId))
+            assertTrue(contact > 0)
+            assertNull(stores[1].snapshot()?.lastExchangeAt?.get(devices[0].deviceId))
+            stores[1].recordPeerContact(devices[0].deviceId, completed = true)
             stores[1].publish(databases[1])
             assertEquals("192.168.1.20", stores[1].snapshot()?.peerAddresses?.get(devices[0].deviceId))
+            assertTrue((stores[1].snapshot()?.lastExchangeAt?.get(devices[0].deviceId) ?: 0L) >= contact)
             fun exchange(first: Int, second: Int) {
                 ServerSocket(0).use { listener ->
                     val server = pool.submit {
@@ -322,6 +328,7 @@ class LockedSyncExchangeTest {
         val db = Room.inMemoryDatabaseBuilder(context, VaultDatabase::class.java).build()
         val identity = AndroidDeviceIdentityStore(context)
         try {
+            identity.clear()
             val device = identity.getOrCreate()
             db.dao().saveSettings(VaultSettings(vaultId = "indexed-vault"))
             db.syncDao().saveVaultState(SyncVaultStateEntity(vaultId = "indexed-vault",
@@ -392,22 +399,30 @@ class LockedSyncExchangeTest {
             val storeA = LockedSyncStore(a, File(root, "a"))
             var storeB = LockedSyncStore(b, File(root, "b"))
             storeA.publish(dbA); storeB.publish(dbB)
+            var serverPeer: String? = null
+            var clientPeer: String? = null
             fun exchange() {
                 ServerSocket(0).use { listener ->
                     val server = pool.submit {
                         listener.accept().use { socket ->
                             socket.soTimeout = 15_000
-                            LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()), storeA, true)
+                            LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()), storeA, true) {
+                                serverPeer = it
+                            }
                         }
                     }
                     Socket("127.0.0.1", listener.localPort).use { socket ->
                         socket.soTimeout = 15_000
-                        LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()), storeB, false)
+                        LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()), storeB, false) {
+                            clientPeer = it
+                        }
                     }
                     server.get(20, TimeUnit.SECONDS)
                 }
             }
             exchange()
+            assertEquals(second.deviceId, serverPeer)
+            assertEquals(first.deviceId, clientPeer)
             assertNull(dbA.dao().entry("from-b"))
             assertNull(dbB.dao().entry("from-a"))
             assertEquals(1, storeA.queuedCount())

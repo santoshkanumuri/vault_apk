@@ -27,6 +27,8 @@ internal data class TransportMirror(val vaultId: String, val localDeviceId: Stri
     val membershipEvents: List<SyncMembershipEventEntity>, val heads: List<SyncDeviceHeadEntity>,
     val peerProgress: Map<String, SyncProgress> = emptyMap(),
     val peerAddresses: Map<String, String> = emptyMap(),
+    val lastContactAt: Map<String, Long> = emptyMap(),
+    val lastExchangeAt: Map<String, Long> = emptyMap(),
     val pendingPhotoHashes: Set<String> = emptySet())
 
 internal class SyncQueueFullException : Exception("Unlock this device to apply queued changes")
@@ -81,8 +83,10 @@ internal class LockedSyncStore(private val context: Context,
             if (storedEvents.size > databaseEvents.size) mirror.copy(
                 membershipEvents = previous.membershipEvents, members = previous.members,
                 peerProgress = previous.peerProgress, peerAddresses = previous.peerAddresses,
+                lastContactAt = previous.lastContactAt, lastExchangeAt = previous.lastExchangeAt,
                 pendingPhotoHashes = previous.pendingPhotoHashes)
             else mirror.copy(peerProgress = previous.peerProgress, peerAddresses = previous.peerAddresses,
+                lastContactAt = previous.lastContactAt, lastExchangeAt = previous.lastExchangeAt,
                 pendingPhotoHashes = previous.pendingPhotoHashes)
         } else mirror
         val activePeers = selected.members.filter {
@@ -123,6 +127,8 @@ internal class LockedSyncStore(private val context: Context,
             val mirror = gson.fromJson(bytes.toString(Charsets.UTF_8), TransportMirror::class.java)
             mirror.copy(peerProgress = mirror.peerProgress ?: emptyMap(),
                 peerAddresses = mirror.peerAddresses ?: emptyMap(),
+                lastContactAt = mirror.lastContactAt ?: emptyMap(),
+                lastExchangeAt = mirror.lastExchangeAt ?: emptyMap(),
                 pendingPhotoHashes = mirror.pendingPhotoHashes ?: emptySet())
         }
         finally { bytes.fill(0) }
@@ -165,11 +171,22 @@ internal class LockedSyncStore(private val context: Context,
 
     @Synchronized fun peerProgress(deviceId: String): SyncProgress? = snapshot()?.peerProgress?.get(deviceId)
 
+    @Synchronized fun recordPeerContact(deviceId: String, completed: Boolean) {
+        val mirror = requireNotNull(snapshot())
+        require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })
+        val now = System.currentTimeMillis()
+        writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
+            lastContactAt = mirror.lastContactAt + (deviceId to now),
+            lastExchangeAt = if (completed) mirror.lastExchangeAt + (deviceId to now)
+                else mirror.lastExchangeAt)).toByteArray(Charsets.UTF_8))
+    }
+
     @Synchronized fun recordPeerAddress(deviceId: String, address: String) {
         val numeric = InetAddresses.parseNumericAddress(address)
         require(isPrivateAddress(numeric) && !numeric.isLinkLocalAddress)
         val mirror = requireNotNull(snapshot())
         require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })
+        if (mirror.peerAddresses[deviceId] == address) return
         writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
             peerAddresses = mirror.peerAddresses + (deviceId to address))).toByteArray(Charsets.UTF_8))
     }

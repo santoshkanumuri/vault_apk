@@ -1,14 +1,20 @@
 package com.privatevault.app.sync
 
+import androidx.annotation.Keep
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.google.gson.annotations.SerializedName
 
-internal data class SyncChainHead(val sequence: Long, val hash: String)
+@Keep
+internal data class SyncChainHead(@SerializedName(value = "sequence", alternate = ["a"]) val sequence: Long,
+    @SerializedName(value = "hash", alternate = ["b"]) val hash: String)
 
 /** Peer progress is advisory until its source hashes are checked against local history. */
-internal data class SyncProgress(val received: Map<String, SyncChainHead>,
-    val applied: Map<String, SyncChainHead>) {
+@Keep
+internal data class SyncProgress(
+    @SerializedName(value = "received", alternate = ["a"]) val received: Map<String, SyncChainHead>,
+    @SerializedName(value = "applied", alternate = ["b"]) val applied: Map<String, SyncChainHead>) {
     fun encode(): ByteArray = JsonObject().apply {
         add("received", headsJson(received))
         add("applied", headsJson(applied))

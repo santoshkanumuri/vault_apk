@@ -43,6 +43,16 @@ class ProfileAutofillFlowTest {
         check(node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) { "Could not select $text" }
     }
 
+    private fun waitForValue(label: String, value: String) {
+        val end = SystemClock.elapsedRealtime() + 5_000
+        while (SystemClock.elapsedRealtime() < end) {
+            if (find(label)?.text?.toString() == value) return
+            SystemClock.sleep(100)
+        }
+        shell("screencap -p /sdcard/profile-autofill.png")
+        assertEquals(value, find(label)?.text?.toString())
+    }
+
     @Test fun phoneAutofillFillsRecognizedContactAndAddressFieldsWithoutVaultUnlock() {
         check(context.packageName.endsWith(".debug"))
         val keyManager = VaultKeyManager(context)
@@ -72,10 +82,10 @@ class ProfileAutofillFlowTest {
             val bounds = android.graphics.Rect().also(email::getBoundsInScreen)
             shell("input tap ${bounds.centerX()} ${bounds.centerY()}")
             click("Home details")
-            assertEquals("home@example.invalid", waitFor("Profile email").text?.toString())
-            assertEquals("5551230000", waitFor("Profile phone").text?.toString())
-            assertEquals("Test City", waitFor("Profile city").text?.toString())
-            assertEquals("12345", waitFor("Profile postcode").text?.toString())
+            waitForValue("Profile email", "home@example.invalid")
+            waitForValue("Profile phone", "5551230000")
+            waitForValue("Profile city", "Test City")
+            waitForValue("Profile postcode", "12345")
         } finally {
             key.fill(0)
             store.clear()

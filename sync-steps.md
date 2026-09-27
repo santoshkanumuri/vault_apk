@@ -1,6 +1,6 @@
 # Android sync implementation steps
 
-Updated: September 25, 2026.
+Updated: September 26, 2026.
 
 Status: implementation plan. The remaining work described here has not been completed by writing this document.
 
@@ -16,7 +16,7 @@ Connection follow-up, September 26, 2026: Discovery now takes priority over save
 
 After the 2.0.5 artifact: the Android devices page now shows the number of authenticated connections, each paired device's current attempt status, and protected timestamps for last authenticated contact and last completed exchange. The foreground notification shows connected and paired counts without exposing device names. A one-shot manual sync now waits for transfer activity to finish before stopping; the previous fixed timer could cut off a long exchange. These source changes are not in the 2.0.5 downloads. Physical Wi-Fi and release-build verification remain pending.
 
-2.0.6 preview artifact: the phone APK and AAB include the connected-device status and manual-transfer timer changes. The signed, minified release build, vital lint, package/version check, signature check, and checksums passed. The two-device physical Wi-Fi matrix, longer background soak, interrupted transfer, and release installation checks remain open.
+Refreshed 2.0.6 preview artifact, September 26, 2026: the phone APK and AAB include a compact device page with per-device connection stages, conflict choice confirmation, and two-device removal. The page and notification count authenticated connections and nearby discovery separately. Each device can choose its own signed name, shared with paired devices. Failed discovery, stale addresses, and transfer failures retry sooner. Saved Wi-Fi addresses fill the optional connection-help field. The signed, minified release build, vital lint, package/version check, signature check, checksums, and focused phone-emulator tests passed. The two-device physical Wi-Fi matrix, longer background soak, interrupted transfer, and release installation checks remain open.
 
 Pairing test update, September 24, 2026: A tablet and phone reached matching-code confirmation, then stalled at "copying vault." The host did not close `SyncChannelOutput` after streaming its staged snapshot, so the receiver never saw the end marker. The host now closes that stream before waiting for `ready`. A bounded encrypted socket stream test and a complete snapshot enrollment socket test pass. Repeat the physical test with the corrected debug APK on both devices.
 
@@ -97,7 +97,7 @@ The following describes source inspected for this plan. Previous test results ar
 | Membership | Stored member identities and active-state checks | Signed membership history and propagation to every existing peer |
 | Keys | Shared content-key state and pairwise secrets | Separate content keys from local database keys, multiple key epochs, recipient-specific key delivery, revocation |
 | Storage cleanup | Tombstone, acknowledgement, and attachment tables | Safe checkpointing, acknowledgement policy, history compaction, blob garbage collection |
-| UI | Pairing page, generic status, paired-device list, conflict cards | Sync now, per-peer progress, last success, removal, queue/storage state, useful error distinctions |
+| UI | Pairing page, compact sync status, per-device stages and progress, two-device removal, conflict review sheet | Three-device removal and key rotation, complete conflict previews, storage actions, physical-device checks |
 
 ### Concrete issues to address
 

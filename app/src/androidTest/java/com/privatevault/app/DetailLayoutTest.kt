@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import android.app.Application
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
@@ -15,6 +16,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import com.privatevault.app.data.*
+import com.privatevault.app.autofill.AutofillProfile
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
@@ -27,6 +29,7 @@ class DetailLayoutTest {
         val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
         val opened = mutableStateOf<EntryType?>(null)
         val passkeysOpened = mutableStateOf(false)
+        val groupsOpened = mutableStateOf(false)
         val entries = listOf(
             EntryWithDetails(VaultEntry(type = EntryType.CARD, title = "Card"), emptyList(), emptyList()),
             EntryWithDetails(VaultEntry(type = EntryType.PASSWORD, title = "Login"), emptyList(), emptyList()),
@@ -38,7 +41,7 @@ class DetailLayoutTest {
             MaterialTheme {
                 Box(Modifier.requiredSize(320.dp, 420.dp)) {
                     Dashboard(entries, {}, { opened.value = it }, Modifier.fillMaxSize(), 2,
-                        { passkeysOpened.value = true })
+                        { passkeysOpened.value = true }, 3, { groupsOpened.value = true })
                 }
             }
         }
@@ -53,7 +56,28 @@ class DetailLayoutTest {
         compose.onNodeWithContentDescription("Autofill, 1").assertIsDisplayed()
         compose.onNodeWithContentDescription("Passkeys, 2").assertIsDisplayed().performClick()
         compose.runOnIdle { assertTrue(passkeysOpened.value) }
+        compose.onNodeWithContentDescription("Groups, 3").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertTrue(groupsOpened.value) }
         compose.onNodeWithText("Quick add").assertDoesNotExist()
+    }
+
+    @Test fun autofillEntryShowsSavedDetailsInsteadOfEmptyNote() {
+        val application = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
+        val model = VaultViewModel(application)
+        val entry = VaultEntry(type = EntryType.AUTOFILL, title = "Home details",
+            primaryValue = AutofillProfile(name = "Alex", email = "alex@example.invalid").encode())
+        compose.setContent {
+            MaterialTheme(colorScheme = VaultLightColors) {
+                Box(Modifier.requiredSize(320.dp, 700.dp)) {
+                    EntryDetail(EntryWithDetails(entry, emptyList(), emptyList()), model,
+                        { _, _ -> }, { it() }, {}, {}, Modifier.fillMaxSize(), widePane = true)
+                }
+            }
+        }
+        compose.onNodeWithText("CONTACT DETAILS").assertExists()
+        compose.onNodeWithText("Full name").assertExists()
+        compose.onNodeWithText("Alex").assertExists()
+        compose.onNodeWithText("Contents").assertDoesNotExist()
     }
 
     @Test fun moreScreenUsesReadableWidthOnTablets() {

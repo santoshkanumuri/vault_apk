@@ -108,6 +108,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Contactless
+import androidx.compose.material.icons.outlined.ContactPage
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Add
@@ -448,7 +449,7 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
             selectedFolderId = null
         } }, modifier, passkeys.size, { navigate {
             settingsPage = "Passkeys"; showSettings = true
-        } })
+        } }, groups.count { it.folderType == null }, { showGroups = true })
         else GlobalSearchResults(shown, groups.filter { it.folderType != null &&
             (it.name.contains(search, true) || it.notes.contains(search, true)) },
             { folder -> navigate { tabIndex = VaultTab.entries.first { it.type == folder.folderType }.ordinal; selectedFolderId = folder.id; search = "" } },
@@ -713,7 +714,7 @@ private fun VaultToolbar(title: String, search: String, onSearch: (String) -> Un
 @Composable
 internal fun Dashboard(entries: List<EntryWithDetails>, select: (String) -> Unit,
     openCategory: (EntryType) -> Unit, modifier: Modifier, passkeyCount: Int = 0,
-    openPasskeys: () -> Unit = {}) {
+    openPasskeys: () -> Unit = {}, groupCount: Int = 0, openGroups: () -> Unit = {}) {
     val cards = entries.filter { it.entry.type == EntryType.CARD }
     val passwords = entries.count { it.entry.type == EntryType.PASSWORD }
     val codes = entries.count { it.entry.type == EntryType.AUTHENTICATOR }
@@ -731,8 +732,9 @@ internal fun Dashboard(entries: List<EntryWithDetails>, select: (String) -> Unit
             SummaryItem("Passkeys", passkeyCount, null, Color(0xFF72D0BC)),
             SummaryItem("Questions", questions, EntryType.QUESTION, Color(0xFFF2C778)),
             SummaryItem("Notes", notes, EntryType.NOTE, Color(0xFFC8B2F2)),
-            SummaryItem("Autofill", autofill, EntryType.AUTOFILL, Color(0xFFEE9BC8))
-        ), openCategory, openPasskeys) }
+            SummaryItem("Autofill", autofill, EntryType.AUTOFILL, Color(0xFFEE9BC8)),
+            SummaryItem("Groups", groupCount, null, Color(0xFF9CAFE8), isGroup = true)
+        ), openCategory, openPasskeys, openGroups) }
         if (favorites.isNotEmpty()) item { DashboardSection("Favorites", favorites, select) }
         if (expiring.isNotEmpty()) item { DashboardSection("Needs attention", expiring, select, showExpiry = true) }
         if (recent.isNotEmpty()) item { DashboardSection("Recently opened", recent, select) }
@@ -747,10 +749,12 @@ internal fun Dashboard(entries: List<EntryWithDetails>, select: (String) -> Unit
     }
 }
 
-private data class SummaryItem(val label: String, val count: Int, val type: EntryType?, val accent: Color)
+private data class SummaryItem(val label: String, val count: Int, val type: EntryType?, val accent: Color,
+    val isGroup: Boolean = false)
 
 @Composable
-private fun VaultSummary(items: List<SummaryItem>, openCategory: (EntryType) -> Unit, openPasskeys: () -> Unit) {
+private fun VaultSummary(items: List<SummaryItem>, openCategory: (EntryType) -> Unit,
+    openPasskeys: () -> Unit, openGroups: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val columns = when {
@@ -763,7 +767,7 @@ private fun VaultSummary(items: List<SummaryItem>, openCategory: (EntryType) -> 
                     Row(Modifier.fillMaxWidth()) {
                         if (row.size < columns) Spacer(Modifier.weight((columns - row.size) / 2f))
                         row.forEach { item ->
-                            SummaryCell(item, openCategory, openPasskeys, Modifier.weight(1f))
+                            SummaryCell(item, openCategory, openPasskeys, openGroups, Modifier.weight(1f))
                         }
                         if (row.size < columns) Spacer(Modifier.weight((columns - row.size) / 2f))
                     }
@@ -806,11 +810,17 @@ private fun PasswordColumnPicker(
 
 @Composable
 private fun SummaryCell(item: SummaryItem, openCategory: (EntryType) -> Unit,
-    openPasskeys: () -> Unit, modifier: Modifier) {
+    openPasskeys: () -> Unit, openGroups: () -> Unit, modifier: Modifier) {
     Column(
         modifier
             .heightIn(min = 64.dp)
-            .clickable(role = Role.Button) { item.type?.let(openCategory) ?: openPasskeys() }
+            .clickable(role = Role.Button) {
+                when {
+                    item.isGroup -> openGroups()
+                    item.type != null -> openCategory(item.type)
+                    else -> openPasskeys()
+                }
+            }
             .semantics { contentDescription = "${item.label}, ${item.count}" }
             .padding(horizontal = 6.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -821,11 +831,11 @@ private fun SummaryCell(item: SummaryItem, openCategory: (EntryType) -> Unit,
                 .background(item.accent.copy(alpha = .15f)), contentAlignment = Alignment.Center) {
                 Icon(when (item.type) {
                     EntryType.CARD -> Icons.Outlined.CreditCard
-                    EntryType.PASSWORD, null -> Icons.Outlined.Key
+                    EntryType.PASSWORD, null -> if (item.isGroup) Icons.Outlined.Folder else Icons.Outlined.Key
                     EntryType.QUESTION -> Icons.Outlined.QuestionAnswer
                     EntryType.NOTE -> Icons.AutoMirrored.Outlined.Notes
                     EntryType.AUTHENTICATOR -> Icons.Outlined.Timer
-                    EntryType.AUTOFILL -> Icons.Outlined.Contactless
+                    EntryType.AUTOFILL -> Icons.Outlined.ContactPage
                 }, contentDescription = null, tint = item.accent, modifier = Modifier.size(16.dp))
             }
             Text(item.count.toString(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -881,7 +891,7 @@ private fun VaultRail(selected: Int, onSelect: (Int) -> Unit, openSettings: (Str
             icon = { Icon(Icons.Outlined.Key, null) }, label = "Passkeys")
         VaultRailDestination(selected = selected == VaultTab.AUTOFILL.ordinal,
             onClick = { onSelect(VaultTab.AUTOFILL.ordinal) },
-            icon = { Icon(Icons.Outlined.Contactless, null) }, label = "Autofill details")
+            icon = { Icon(Icons.Outlined.ContactPage, null) }, label = "Autofill details")
         VaultRailDestination(selected = selected == VaultTab.MORE.ordinal, onClick = { onSelect(VaultTab.MORE.ordinal) },
             icon = { VaultTabIcon(VaultTab.MORE) }, label = "More")
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
@@ -909,7 +919,7 @@ private fun VaultTabIcon(tab: VaultTab) {
         VaultTab.NOTES -> Icons.AutoMirrored.Outlined.Notes
         VaultTab.AUTHENTICATOR -> Icons.Outlined.Timer
         VaultTab.MORE -> Icons.Outlined.MoreHoriz
-        VaultTab.AUTOFILL -> Icons.Outlined.Contactless
+        VaultTab.AUTOFILL -> Icons.Outlined.ContactPage
     }
     Icon(icon, contentDescription = null)
 }
@@ -1205,7 +1215,10 @@ internal fun CompactEntryRow(
             EntryType.QUESTION -> item.entry.primaryValue
             EntryType.NOTE -> item.entry.notes
             EntryType.CARD -> maskCard(item.entry.primaryValue)
-            EntryType.AUTOFILL -> item.entry.autofillProfile()?.email.orEmpty()
+            EntryType.AUTOFILL -> item.entry.autofillProfile()?.let { profile ->
+                listOf(profile.name, profile.email, profile.phone, profile.address1, profile.city)
+                    .firstOrNull { it.isNotBlank() }.orEmpty()
+            }.orEmpty()
         })
         if (!folder.isNullOrBlank()) add(folder)
     }.filter { it.isNotBlank() }.joinToString(" · ")
@@ -1224,7 +1237,7 @@ internal fun CompactEntryRow(
                     EntryType.QUESTION -> Icons.Outlined.QuestionAnswer
                     EntryType.NOTE -> Icons.AutoMirrored.Outlined.Notes
                     EntryType.AUTHENTICATOR -> Icons.Outlined.Timer
-                    EntryType.AUTOFILL -> Icons.Outlined.Contactless
+                    EntryType.AUTOFILL -> Icons.Outlined.ContactPage
                 }, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
             }
             Spacer(Modifier.width(10.dp))
@@ -1360,6 +1373,20 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 item { SectionTitle("Security question") }
                 item { PlainRow("Question", item.entry.primaryValue) }
                 item { SecretRow("Answer", item.entry.secondaryValue, revealed.contains("secondary"), { revealed = toggle(revealed, "secondary") }, copy) }
+            } else if (item.entry.type == EntryType.AUTOFILL) {
+                val profile = item.entry.autofillProfile()
+                item { SectionTitle("Contact details") }
+                if (profile != null) {
+                    listOf("Full name" to profile.name, "Email" to profile.email,
+                        "Mobile number" to profile.phone, "Address line 1" to profile.address1,
+                        "Address line 2" to profile.address2, "Flat or unit" to profile.unit,
+                        "City" to profile.city, "State or region" to profile.state,
+                        "PIN or postal code" to profile.postalCode, "Country" to profile.country)
+                        .filter { it.second.isNotBlank() }.forEach { (label, value) ->
+                            item { PlainRow(label, value, copy) }
+                        }
+                }
+                item { AutofillFormAvailability(viewModel::refreshAutofillCopy) }
             } else {
                 item { SectionTitle("Note") }
                 item { PlainRow("Contents", item.entry.notes) }
@@ -1561,6 +1588,31 @@ private fun SecretRow(label: String, value: String, revealed: Boolean, toggle: (
             TextButton(onClick = toggle, modifier = Modifier.height(44.dp)) { Text(if (revealed) "Hide" else "Reveal") }
             if (value.isNotBlank()) TextButton(onClick = { copy(label, value) }, modifier = Modifier.height(44.dp)) { Text("Copy") }
         }
+    }
+}
+
+@Composable
+private fun AutofillFormAvailability(refreshCopy: () -> Unit) {
+    val context = LocalContext.current
+    val preferences = remember(context) { context.getSharedPreferences("vault_preferences", android.content.Context.MODE_PRIVATE) }
+    var enabled by remember { mutableStateOf(preferences.getBoolean("autofill_unlocked_profiles", false)) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionTitle("Form filling")
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Offer saved details in forms", Modifier.weight(1f))
+            Switch(checked = enabled, onCheckedChange = { selected ->
+                enabled = selected
+                preferences.edit().putBoolean("autofill_unlocked_profiles", selected).apply()
+                if (selected) refreshCopy()
+                else com.privatevault.app.autofill.UnlockedProfileStore(context).clear()
+            })
+        }
+        Text("Uses an encrypted device copy without vault unlock. Applies to all saved profiles.",
+            style = MaterialTheme.typography.bodySmall)
+        TextButton(onClick = {
+            context.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE,
+                android.net.Uri.parse("package:${context.packageName}")))
+        }) { Text("Choose Nuvori for Autofill") }
     }
 }
 

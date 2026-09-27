@@ -117,12 +117,15 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val deviceSyncStatus: kotlinx.coroutines.flow.StateFlow<com.privatevault.app.sync.DeviceSyncStatus> =
         com.privatevault.app.sync.LanSyncService.status
     val devicePeerStatus = com.privatevault.app.sync.LanSyncService.peerStatus
+    val nearbySyncServices = com.privatevault.app.sync.LanSyncService.nearbyCount
     private val _syncConflicts = kotlinx.coroutines.flow.MutableStateFlow<List<com.privatevault.app.sync.SyncConflictReview>>(emptyList())
     val syncConflicts = _syncConflicts.asStateFlow()
     private val _rejectedSyncChanges = MutableStateFlow(0)
     val rejectedSyncChanges = _rejectedSyncChanges.asStateFlow()
     private val _pairedDevices = MutableStateFlow<List<com.privatevault.app.data.SyncMembershipEntity>>(emptyList())
     val pairedDevices = _pairedDevices.asStateFlow()
+    private val _localSyncDevice = MutableStateFlow<com.privatevault.app.data.SyncMembershipEntity?>(null)
+    val localSyncDevice = _localSyncDevice.asStateFlow()
     private val _canRemoveOnlyPeer = MutableStateFlow(false)
     val canRemoveOnlyPeer = _canRemoveOnlyPeer.asStateFlow()
     private val _syncManagerDeviceId = MutableStateFlow<String?>(null)
@@ -705,6 +708,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _passkeys.value = emptyList()
         _groups.value = emptyList()
         _pairedDevices.value = emptyList()
+        _localSyncDevice.value = null
         _canRemoveOnlyPeer.value = false
         _syncManagerDeviceId.value = null
         _canHostDevicePairing.value = false
@@ -1049,7 +1053,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val groups = syncDao.allGroupsWithEntries().map { it.group }
         val vaultId = syncDao.settings()?.vaultId.orEmpty()
         val self = deviceIdentityStore.getOrCreate().deviceId
-        val paired = syncDatabase.syncDao().memberships(vaultId).filter { it.deviceId != self }
+        val members = syncDatabase.syncDao().memberships(vaultId)
+        val paired = members.filter { it.deviceId != self }
         val membershipEvents = syncDatabase.syncDao().membershipEvents(vaultId)
         val membership = membershipEvents.takeIf { it.isNotEmpty() }?.let {
             com.privatevault.app.sync.SyncMembershipManager.verify(it.map { event -> event.toEvent() })
@@ -1072,6 +1077,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             .onFailure { _message.value = "Autofill details could not be updated on this device." }
         _groups.value = groups
         _pairedDevices.value = paired
+        _localSyncDevice.value = members.firstOrNull { it.deviceId == self }
         _canRemoveOnlyPeer.value = canRemoveOnlyPeer
         _syncManagerDeviceId.value = membership?.managerDeviceId
         _canHostDevicePairing.value = canHostPairing
@@ -1162,6 +1168,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun setDeviceSyncAddress(deviceId: String, address: String) = securedLaunch {
         lockedSyncStore.recordPeerAddress(deviceId, address.trim())
         com.privatevault.app.sync.LanSyncService.syncNow(getApplication())
+    }
+
+    fun nameThisDevice(name: String) = securedLaunch {
+        val db = requireNotNull(database)
+        com.privatevault.app.sync.LocalDeviceNameChangeWriter(db, deviceIdentityStore)
+            .save(name.trim(), requireNotNull(sessionKey))
+        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
+        refresh()
     }
 
     fun retryRejectedSyncChanges() = securedLaunch {

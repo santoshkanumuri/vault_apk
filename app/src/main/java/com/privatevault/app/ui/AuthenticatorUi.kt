@@ -14,7 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Contactless
+import androidx.compose.material.icons.outlined.ContactPage
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.QuestionAnswer
 import androidx.compose.material.icons.outlined.Notes
@@ -86,7 +86,7 @@ internal fun MoreScreen(groupCount: Int, entries: List<EntryWithDetails>, groups
         item { MoreItem("Groups", "$groupCount groups · linked accounts in one place", Icons.Outlined.Folder, groups) }
         item { MoreItem("Security questions", "${entries.count { it.entry.type == EntryType.QUESTION }} saved questions", Icons.Outlined.QuestionAnswer, questions) }
         item { MoreItem("Notes", "${entries.count { it.entry.type == EntryType.NOTE }} private notes", Icons.Outlined.Notes, notes) }
-        item { MoreItem("Autofill details", "${entries.count { it.entry.type == EntryType.AUTOFILL }} saved profiles", Icons.Outlined.Contactless, autofill) }
+        item { MoreItem("Autofill details", "${entries.count { it.entry.type == EntryType.AUTOFILL }} saved profiles", Icons.Outlined.ContactPage, autofill) }
         item { HorizontalDivider() }
         item { Text("Manage Nuvori", style = MaterialTheme.typography.titleMedium) }
         item { MoreItem("Settings", "Security, autofill, backup, browser import and appearance", Icons.Outlined.Settings, settings) }

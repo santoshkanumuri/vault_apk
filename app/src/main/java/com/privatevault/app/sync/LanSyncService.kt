@@ -34,15 +34,15 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 enum class DeviceSyncPhase(val title: String) {
-    OFF("Automatic sync is off"),
+    OFF("Sync is off"),
     PAUSED("Automatic sync paused"),
     WAITING("Waiting for Wi-Fi"),
-    SEARCHING("Looking for paired devices"),
-    FOUND("Nuvori found on Wi-Fi"),
-    CONNECTING("Connecting securely"),
+    SEARCHING("Looking on Wi-Fi"),
+    FOUND("Nuvori found nearby"),
+    CONNECTING("Verifying connection"),
     TRANSFERRING("Exchanging changes"),
-    RECEIVED("Changes received"),
-    CHECKED("Device checked"),
+    RECEIVED("More to sync"),
+    CHECKED("Exchange complete"),
     ATTENTION("Sync needs attention")
 }
 
@@ -90,6 +90,7 @@ class LanSyncService : Service() {
                 if (activeNetwork == null || activeNetwork == network && activeAddress != address) {
                     activeNetwork = network
                     activeAddress = address
+                    setNearbyCount(0)
                     setStatus(DeviceSyncPhase.SEARCHING, "Wi-Fi changed. Restarting device discovery.")
                     val previous = networkJob
                     previous?.cancel()
@@ -107,6 +108,7 @@ class LanSyncService : Service() {
                 if (activeNetwork == network) {
                     activeNetwork = null
                     activeAddress = null
+                    setNearbyCount(0)
                     setStatus(DeviceSyncPhase.WAITING, "Wi-Fi disconnected. Reconnect both devices to the same network.")
                     clearConnectedPeers("Wi-Fi disconnected.")
                     networkJob?.cancel()
@@ -124,6 +126,7 @@ class LanSyncService : Service() {
         super.onCreate()
         activeInstance = this
         mutablePeerStatus.value = emptyMap()
+        mutableNearbyCount.value = 0
         notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.createNotificationChannel(NotificationChannel(CHANNEL, "Device sync", NotificationManager.IMPORTANCE_LOW))
         startForeground(410, syncNotification())
@@ -136,11 +139,12 @@ class LanSyncService : Service() {
 
     private fun syncNotification(): Notification {
         val connected = mutablePeerStatus.value.values.count { it.phase == DeviceSyncPhase.TRANSFERRING }
+        val nearby = mutableNearbyCount.value
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val pause = PendingIntent.getService(this, 1, Intent(this, LanSyncService::class.java).setAction(PAUSE), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(com.privatevault.app.R.drawable.ic_vault_codes)
-            .setContentTitle("Nuvori sync · $connected connected")
+            .setContentTitle("$connected connected · $nearby nearby")
             .setContentText("$pairedCount paired · ${mutableStatus.value.phase.title}")
             .setContentIntent(open).setOngoing(true).setVisibility(Notification.VISIBILITY_SECRET)
             .addAction(Notification.Action.Builder(null, "Pause", pause).build()).build()
@@ -149,7 +153,7 @@ class LanSyncService : Service() {
     @Synchronized private fun updateNotification() {
         if (activeInstance !== this || !::notificationManager.isInitialized) return
         val connected = mutablePeerStatus.value.values.count { it.phase == DeviceSyncPhase.TRANSFERRING }
-        val text = "$connected|$pairedCount|${mutableStatus.value.phase}"
+        val text = "$connected|${mutableNearbyCount.value}|$pairedCount|${mutableStatus.value.phase}"
         if (text == lastNotificationText) return
         lastNotificationText = text
         notificationManager.notify(410, syncNotification())
@@ -229,24 +233,36 @@ class LanSyncService : Service() {
             setStatus(DeviceSyncPhase.SEARCHING, "Checking nearby Nuvori devices on Wi-Fi.")
             startDiscovery(network, listener.localPort)
             coroutineScope {
+                var retryDelayMs = 5_000L
                 launch {
                     while (isActive) {
                         val socket = try { listener.accept() } catch (_: java.net.SocketTimeoutException) { continue }
                         if (!isPrivateAddress(socket.inetAddress) || !exchange.tryLock()) { socket.close(); continue }
                         launch {
-                            setStatus(DeviceSyncPhase.CONNECTING, "A device connected. Verifying membership.")
+                            setStatus(DeviceSyncPhase.CONNECTING, "A device answered. Checking that it belongs to your vault.")
                             try { transfer(socket, true) } finally { exchange.unlock() }
                         }
                     }
                 }
                 while (isActive) {
+                    var needsRetry = false
                     val passStartedAt = android.os.SystemClock.elapsedRealtime()
                     val current = store(this@LanSyncService).snapshot() ?: mirror
                     require(current.vaultId == mirror.vaultId)
+                    val activePeers = current.members.filter {
+                        it.status == MemberStatus.ACTIVE.name && it.deviceId != current.localDeviceId
+                    }
+                    activePeers.forEach { peer ->
+                        if (mutablePeerStatus.value[peer.deviceId]?.phase !in setOf(
+                                DeviceSyncPhase.ATTENTION, DeviceSyncPhase.TRANSFERRING))
+                            setPeerStatus(peer.deviceId, DeviceSyncPhase.SEARCHING,
+                                "Looking for this device on Wi-Fi.")
+                    }
                     for (info in discovered.values.toList()) {
                         if (!endpoints.containsKey(info.serviceName)) {
                             val resolved = resolve(info)
                             if (resolved == null) {
+                                needsRetry = true
                                 setStatus(DeviceSyncPhase.SEARCHING,
                                     "Found Nuvori, but its Wi-Fi address is still being resolved.")
                                 continue
@@ -258,8 +274,11 @@ class LanSyncService : Service() {
                             val peerAddress = preferredWifiAddress(addresses)
                             if (peerAddress != null && resolved.port in 1024..65535)
                                 endpoints[resolved.serviceName] = Endpoint(peerAddress, resolved.port)
-                            else setStatus(DeviceSyncPhase.SEARCHING,
-                                "Found Nuvori, but its Wi-Fi address is unavailable. Retrying discovery.")
+                            else {
+                                needsRetry = true
+                                setStatus(DeviceSyncPhase.SEARCHING,
+                                    "Found Nuvori, but its Wi-Fi address is unavailable. Retrying discovery.")
+                            }
                         }
                     }
                     for ((name, endpoint) in endpoints.entries.toList()) {
@@ -280,8 +299,12 @@ class LanSyncService : Service() {
                                 setStatus(DeviceSyncPhase.CONNECTING, "Verifying the device found on Wi-Fi.")
                                 network.bindSocket(socket)
                                 socket.connect(InetSocketAddress(endpoint.address, endpoint.port), 5000)
-                                if (!transfer(socket, false)) endpoints.remove(name, endpoint)
+                                if (!transfer(socket, false)) {
+                                    needsRetry = true
+                                    endpoints.remove(name, endpoint)
+                                }
                             } catch (failure: Exception) {
+                                needsRetry = true
                                 endpoints.remove(name, endpoint)
                                 setStatus(DeviceSyncPhase.SEARCHING,
                                     "The Wi-Fi address changed or the connection closed. Looking again.")
@@ -306,11 +329,14 @@ class LanSyncService : Service() {
                                 setPeerStatus(deviceId, DeviceSyncPhase.CONNECTING, "Trying its saved Wi-Fi address.")
                                 network.bindSocket(socket)
                                 socket.connect(InetSocketAddress(peerAddress, syncPort(mirror.vaultId)), 3000)
-                                if (!transfer(socket, false) &&
-                                    mutablePeerStatus.value[deviceId]?.phase == DeviceSyncPhase.CONNECTING)
-                                    setPeerStatus(deviceId, DeviceSyncPhase.SEARCHING,
-                                        "Saved address did not complete a check. Looking on Wi-Fi.")
+                                if (!transfer(socket, false)) {
+                                    needsRetry = true
+                                    if (mutablePeerStatus.value[deviceId]?.phase == DeviceSyncPhase.CONNECTING)
+                                        setPeerStatus(deviceId, DeviceSyncPhase.SEARCHING,
+                                            "Saved address did not complete a check. Looking on Wi-Fi.")
+                                }
                             } catch (_: Exception) {
+                                needsRetry = true
                                 setStatus(DeviceSyncPhase.SEARCHING,
                                     "Saved address did not answer. Looking for this device on Wi-Fi.")
                                 setPeerStatus(deviceId, DeviceSyncPhase.SEARCHING,
@@ -318,7 +344,17 @@ class LanSyncService : Service() {
                             } finally { connections.remove(socket); socket.close() }
                         }
                     }
-                    withTimeoutOrNull(syncInterval(this@LanSyncService) + kotlin.random.Random.nextLong(5000)) { signals.receive() }
+                    activePeers.forEach { peer ->
+                        if ((lastAuthenticated[peer.deviceId] ?: -1L) < passStartedAt &&
+                            mutablePeerStatus.value[peer.deviceId]?.phase in setOf(
+                                DeviceSyncPhase.SEARCHING, DeviceSyncPhase.CONNECTING))
+                            setPeerStatus(peer.deviceId, DeviceSyncPhase.WAITING,
+                                "No reply on this check. Check Wi-Fi and try again.")
+                    }
+                    val interval = syncInterval(this@LanSyncService)
+                    val delayMs = if (needsRetry) retryDelayMs.coerceAtMost(interval) else interval
+                    retryDelayMs = if (needsRetry) (retryDelayMs * 2).coerceAtMost(interval) else 5_000L
+                    withTimeoutOrNull(delayMs + kotlin.random.Random.nextLong(5000)) { signals.receive() }
                 }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -335,6 +371,7 @@ class LanSyncService : Service() {
             multicastLock?.let { if (it.isHeld) it.release() }; multicastLock = null
             endpoints.clear()
             discovered.clear()
+            setNearbyCount(0)
         }
     }
 
@@ -353,7 +390,7 @@ class LanSyncService : Service() {
                     if (!socket.inetAddress.isLinkLocalAddress)
                         runCatching { store(this).recordPeerAddress(authenticatedId, socket.inetAddress.hostAddress!!) }
                     setPeerStatus(authenticatedId, DeviceSyncPhase.TRANSFERRING, "Encrypted changes are being exchanged.")
-                    setStatus(DeviceSyncPhase.TRANSFERRING, "Sending and receiving encrypted changes.")
+                    setStatus(DeviceSyncPhase.TRANSFERRING, "Connected securely. Sending and receiving encrypted changes.")
                 }
                 peerId?.let { store(this).recordPeerContact(it, completed = true) }
                 when {
@@ -368,7 +405,7 @@ class LanSyncService : Service() {
                     else -> {
                         setPeerStatus(requireNotNull(peerId), DeviceSyncPhase.CHECKED, "Encrypted exchange completed.")
                         setStatus(DeviceSyncPhase.CHECKED,
-                            "The device answered. Check its card below for received and applied progress.")
+                            "Encrypted exchange finished. Device cards show what was received and applied.")
                     }
                 }
                 if (manualAttempt) {
@@ -426,6 +463,7 @@ class LanSyncService : Service() {
             override fun onServiceLost(info: NsdServiceInfo) {
                 if (discovery !== this || activeNetwork != network) return
                 endpoints.remove(info.serviceName); discovered.remove(info.serviceName)
+                setNearbyCount(discovered.size)
                 if (discovered.isEmpty() && !exchange.isLocked)
                     setStatus(DeviceSyncPhase.SEARCHING, "The device left Wi-Fi. Looking again.")
             }
@@ -433,7 +471,8 @@ class LanSyncService : Service() {
                 if (discovery !== this || activeNetwork != network) return
                 if (info.serviceName.startsWith(instanceName) || discovered.size >= 64) return
                 discovered[info.serviceName] = info
-                if (!exchange.isLocked) setStatus(DeviceSyncPhase.FOUND, "Checking its address before connecting.")
+                setNearbyCount(discovered.size)
+                if (!exchange.isLocked) setStatus(DeviceSyncPhase.FOUND, "Found Nuvori on Wi-Fi. Verifying it is paired.")
                 signals.trySend(Unit)
             }
         }
@@ -457,6 +496,7 @@ class LanSyncService : Service() {
 
     override fun onDestroy() {
         manualStop?.cancel()
+        setNearbyCount(0)
         clearConnectedPeers("Connection ended.")
         connectivity.unregisterNetworkCallback(callback)
         scope.cancel()
@@ -469,6 +509,7 @@ class LanSyncService : Service() {
     private fun abortTransport() {
         manualAttempt = false
         scope.cancel()
+        setNearbyCount(0)
         clearConnectedPeers("Connection ended.")
         connections.forEach { runCatching { it.close() } }
         runCatching { server?.close() }
@@ -488,10 +529,16 @@ class LanSyncService : Service() {
         updateNotification()
     }
 
+    private fun setNearbyCount(count: Int) {
+        if (activeInstance !== this) return
+        mutableNearbyCount.value = count
+        updateNotification()
+    }
+
     private fun clearConnectedPeers(detail: String) {
         if (activeInstance !== this) return
         mutablePeerStatus.update { states -> states.mapValues { (_, state) ->
-            if (state.phase == DeviceSyncPhase.TRANSFERRING || state.phase == DeviceSyncPhase.CONNECTING)
+            if (state.phase != DeviceSyncPhase.ATTENTION)
                 DevicePeerStatus(DeviceSyncPhase.WAITING, detail) else state
         } }
         updateNotification()
@@ -520,6 +567,8 @@ class LanSyncService : Service() {
         val status = mutableStatus.asStateFlow()
         private val mutablePeerStatus = MutableStateFlow<Map<String, DevicePeerStatus>>(emptyMap())
         val peerStatus = mutablePeerStatus.asStateFlow()
+        private val mutableNearbyCount = MutableStateFlow(0)
+        val nearbyCount = mutableNearbyCount.asStateFlow()
         @Volatile private var sharedStore: LockedSyncStore? = null
         @Volatile private var activeInstance: LanSyncService? = null
         internal fun store(context: Context): LockedSyncStore = sharedStore ?: synchronized(this) {

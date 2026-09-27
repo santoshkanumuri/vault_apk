@@ -7,6 +7,7 @@ import com.privatevault.app.data.EntryType
 import com.privatevault.app.data.SyncConflictEntity
 import com.privatevault.app.data.SyncAttachmentManifestEntity
 import com.privatevault.app.data.SyncDeviceHeadEntity
+import com.privatevault.app.data.SyncMembershipEntity
 import com.privatevault.app.data.SyncOperationEntity
 import com.privatevault.app.data.SyncRecordStateEntity
 import com.privatevault.app.data.SyncTombstoneEntity
@@ -45,7 +46,9 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
         }
         require(operation.entityType == "entry" || operation.entityType == "group" ||
             operation.entityType == "passkey" || operation.entityType == "photo" ||
-            operation.entityType == "photo_cover") { "Unsupported sync entity" }
+            operation.entityType == "photo_cover" || operation.entityType == "device_name") {
+            "Unsupported sync entity"
+        }
         val change = operation.toChangeRecord()
         change.validate()
         val signature = Base64.getUrlDecoder().decode(change.deviceSignature)
@@ -54,6 +57,16 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
         }
         val contentKey = database.syncContentKey(vaultKey)
         val payload = try { decrypt(change, contentKey) } finally { contentKey.fill(0) }
+        val deviceName = if (change.entityType == "device_name") {
+            require(change.kind == ChangeKind.UPSERT && change.entityId == change.deviceId) {
+                "A device can only name itself"
+            }
+            payload.getString("name").also {
+                require(it.isNotBlank() && it.length <= 40 && it.none(Char::isISOControl)) {
+                    "Invalid device name"
+                }
+            }
+        } else null
         val entry = if (change.kind == ChangeKind.UPSERT && change.entityType == "entry")
             parseEntry(payload.getJSONObject("entry"), change.entityId) else null
         val group = if (change.kind == ChangeKind.UPSERT && change.entityType == "group")
@@ -98,7 +111,9 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             val relation = if (state == null) VersionRelation.AFTER else change.recordVersion.relationTo(localVersion)
             val result = when (relation) {
                 VersionRelation.AFTER -> {
-                    if (entry != null) {
+                    if (deviceName != null) syncDao.upsertMembership(
+                        SyncMembershipEntity.from(currentMember.copy(displayName = deviceName)))
+                    else if (entry != null) {
                         val availableGroups = database.dao().allGroupsWithEntries().mapTo(hashSetOf()) { it.group.id }
                         if (!availableGroups.containsAll(groupIds) || entry.linkedAuthenticatorId.isNotBlank() &&
                             database.dao().entry(entry.linkedAuthenticatorId) == null)

@@ -1,6 +1,11 @@
 package com.privatevault.app
 
 import com.privatevault.app.sync.removeOnlyPairedDevice
+import com.privatevault.app.sync.leaveSyncGroup
+import com.privatevault.app.sync.offerAuthorityTransfer
+import com.privatevault.app.sync.acceptAuthorityTransfer
+import com.privatevault.app.sync.completeAuthorityTransfer
+import com.privatevault.app.sync.cancelAuthorityTransfer
 
 import androidx.room.withTransaction
 import com.privatevault.app.sync.captureEntryUpserts
@@ -33,6 +38,10 @@ import javax.crypto.Cipher
 import java.util.UUID
 
 enum class LockReason { STARTUP, BACKGROUND, INACTIVITY, SCREEN_OFF, MANUAL }
+
+data class AuthorityTransferState(val targetDeviceId: String, val accepted: Boolean)
+
+internal data class DraftPhoto(val id: String, val encryptedFileName: String, val encryptedThumbnailFileName: String)
 
 sealed interface VaultStatus {
     data object NeedsSetup : VaultStatus
@@ -130,6 +139,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val canRemoveOnlyPeer = _canRemoveOnlyPeer.asStateFlow()
     private val _syncManagerDeviceId = MutableStateFlow<String?>(null)
     val syncManagerDeviceId = _syncManagerDeviceId.asStateFlow()
+    private val _authorityTransfer = MutableStateFlow<AuthorityTransferState?>(null)
+    val authorityTransfer = _authorityTransfer.asStateFlow()
     private val _canHostDevicePairing = MutableStateFlow(false)
     val canHostDevicePairing = _canHostDevicePairing.asStateFlow()
     fun deviceSyncProgress(deviceId: String): String {
@@ -657,7 +668,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         incomingSyncJob = viewModelScope.launch {
             while (database === db && _status.value is VaultStatus.Unlocked) {
                 kotlinx.coroutines.delay(5_000)
-                if (lockedSyncStore.queuedCount() == 0) continue
+                val membershipWaiting = lockedSyncStore.hasPendingMembership(db)
+                if (lockedSyncStore.queuedCount() == 0 && !membershipWaiting) continue
                 val syncKey = sessionKey?.copyOf() ?: break
                 try {
                     val photoWaiting = lockedSyncStore.missingPhotos().isNotEmpty()
@@ -667,7 +679,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     if (!photoWaiting && lockedSyncStore.missingPhotos().isNotEmpty() && !backgrounded)
                         runCatching { com.privatevault.app.sync.LanSyncService.syncNow(getApplication()) }
                     if (database === db && _status.value is VaultStatus.Unlocked &&
-                        (applied > 0 || lockedSyncStore.rejectedCount() != _rejectedSyncChanges.value)) refresh()
+                        (applied > 0 || membershipWaiting ||
+                            lockedSyncStore.rejectedCount() != _rejectedSyncChanges.value)) refresh()
                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                 catch (_: Exception) {
                     if (database === db && _status.value is VaultStatus.Unlocked)
@@ -717,6 +730,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _localSyncDevice.value = null
         _canRemoveOnlyPeer.value = false
         _syncManagerDeviceId.value = null
+        _authorityTransfer.value = null
         _canHostDevicePairing.value = false
         _syncConflicts.value = emptyList()
         _rejectedSyncChanges.value = 0
@@ -788,6 +802,34 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
         saveLocalEntry(entry, groupIds)
         refresh()
+    }
+
+    internal fun saveEntryWithPhotos(entry: VaultEntry, groupIds: Set<String>, drafts: List<DraftPhoto>) = securedLaunch {
+        val remaining = drafts.toMutableList()
+        val key = requireNotNull(sessionKey).copyOf()
+        try {
+            if (entry.type == com.privatevault.app.data.EntryType.AUTHENTICATOR) {
+                com.privatevault.app.security.Totp.validate(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod)
+            }
+            saveLocalEntry(entry, groupIds)
+            try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val writer = com.privatevault.app.sync.LocalPhotoChangeWriter(requireNotNull(database), deviceIdentityStore,
+                        lockedSyncStore.photoBlobs, photoStore)
+                    for (draft in drafts) {
+                        writer.save(VaultPhoto(draft.id, entry.id, draft.encryptedFileName, draft.encryptedThumbnailFileName), key)
+                        remaining.remove(draft)
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                _message.value = "Entry saved, but some photos could not be added. Open the entry to add them again."
+            }
+        } finally {
+            remaining.forEach(::discardDraftPhoto)
+            key.fill(0)
+            refresh()
+        }
     }
 
     fun refreshAutofillCopy() = securedLaunch { refresh() }
@@ -922,6 +964,41 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         } finally { key.fill(0) }
         refresh()
     }
+
+    internal suspend fun stagePhoto(uri: Uri): DraftPhoto {
+        val key = requireNotNull(sessionKey).copyOf()
+        val id = UUID.randomUUID().toString()
+        val draft = DraftPhoto(id, "draft-$id.vaultphoto", "draft-$id.vaultthumb")
+        try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                getApplication<Application>().contentResolver.openInputStream(uri).use { input ->
+                    requireNotNull(input) { "Could not open that image." }
+                    photoStore.encrypt(input, draft.encryptedFileName, key)
+                }
+                photoStore.createThumbnail(draft.encryptedFileName, draft.encryptedThumbnailFileName, key)
+            }
+            return draft
+        } catch (failure: Throwable) {
+            discardDraftPhoto(draft)
+            throw failure
+        } finally { key.fill(0) }
+    }
+
+    internal suspend fun finishDraftCamera(success: Boolean): DraftPhoto? {
+        externalFlowActive = false
+        return try {
+            if (success && _status.value is VaultStatus.Unlocked) pendingCameraUri?.let { stagePhoto(it) } else null
+        } finally { clearCamera() }
+    }
+
+    internal fun discardDraftPhoto(draft: DraftPhoto) {
+        photoStore.delete(draft.encryptedFileName)
+        photoStore.delete(draft.encryptedThumbnailFileName)
+    }
+
+    internal fun loadDraftThumbnail(draft: DraftPhoto): ByteArray? = runCatching {
+        photoStore.decryptedBytes(draft.encryptedThumbnailFileName, requireNotNull(sessionKey))
+    }.getOrNull()
 
     fun deletePhoto(photo: VaultPhoto) = securedLaunch {
         val key = requireNotNull(sessionKey).copyOf()
@@ -1070,10 +1147,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val membership = membershipEvents.takeIf { it.isNotEmpty() }?.let {
             com.privatevault.app.sync.SyncMembershipManager.verify(it.map { event -> event.toEvent() })
         }
-        val canHostPairing = if (membership != null) membership.managerDeviceId == self
+        val canHostPairing = if (membership != null)
+            membership.managerDeviceId == self && membership.pendingTransferDeviceId == null
             else paired.isEmpty() && syncDatabase.syncDao().vaultState() == null
         val canRemoveOnlyPeer = paired.count { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name } == 1 &&
-            membership != null && membership.members.any {
+            membership != null && membership.pendingTransferDeviceId == null && membership.members.any {
                 it.deviceId == self && it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name
             }
         val conflicts = com.privatevault.app.sync.SyncConflictResolver(syncDatabase, deviceIdentityStore,
@@ -1091,6 +1169,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _localSyncDevice.value = members.firstOrNull { it.deviceId == self }
         _canRemoveOnlyPeer.value = canRemoveOnlyPeer
         _syncManagerDeviceId.value = membership?.managerDeviceId
+        _authorityTransfer.value = membership?.pendingTransferDeviceId?.let {
+            AuthorityTransferState(it, membership.transferAccepted)
+        }
         _canHostDevicePairing.value = canHostPairing
         _syncConflicts.value = conflicts
         _rejectedSyncChanges.value = lockedSyncStore.rejectedCount()
@@ -1226,10 +1307,68 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
-    fun removeOnlyPairedDevice(deviceId: String) = securedLaunch {
-        require(_canRemoveOnlyPeer.value && _pairedDevices.value.any {
+    private suspend fun requireAuthorityTransferReady(peerDeviceId: String) {
+        require(_syncConflicts.value.isEmpty() && lockedSyncStore.queuedCount() == 0 &&
+            lockedSyncStore.rejectedCount() == 0 && lockedSyncStore.missingPhotos().isEmpty()) {
+            "Resolve conflicts and waiting changes before transferring management"
+        }
+        val db = requireNotNull(database)
+        val vaultId = requireNotNull(db.dao().settings()).vaultId
+        val peerApplied = requireNotNull(lockedSyncStore.peerProgress(peerDeviceId)?.applied) {
+            "Sync with the other device before transferring management"
+        }
+        require(db.syncDao().deviceHeads(vaultId).all { head ->
+            peerApplied[head.deviceId]?.let { it.sequence == head.sequence && it.hash == head.hash } == true
+        }) { "Both devices must apply the same changes before transferring management" }
+    }
+
+    fun offerAuthorityTransfer(deviceId: String) = securedLaunch {
+        requireAuthorityTransferReady(deviceId)
+        val db = requireNotNull(database)
+        db.offerAuthorityTransfer(deviceIdentityStore, deviceId)
+        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
+        refresh()
+    }
+
+    fun acceptAuthorityTransfer() = securedLaunch {
+        val manager = requireNotNull(_syncManagerDeviceId.value)
+        requireAuthorityTransferReady(manager)
+        val db = requireNotNull(database)
+        db.acceptAuthorityTransfer(deviceIdentityStore)
+        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
+        refresh()
+    }
+
+    fun completeAuthorityTransfer() = securedLaunch {
+        val target = requireNotNull(_authorityTransfer.value?.takeIf { it.accepted }?.targetDeviceId)
+        requireAuthorityTransferReady(target)
+        val db = requireNotNull(database)
+        db.completeAuthorityTransfer(deviceIdentityStore)
+        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
+        refresh()
+        _message.value = "Management transferred. The other device can add devices after it receives this change."
+    }
+
+    fun cancelAuthorityTransfer() = securedLaunch {
+        val db = requireNotNull(database)
+        db.cancelAuthorityTransfer(deviceIdentityStore)
+        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
+        refresh()
+    }
+
+    fun removeOnlyPairedDevice(deviceId: String) = resetSyncGroup(deviceId)
+
+    fun leaveSyncGroup() = resetSyncGroup(null)
+
+    private fun resetSyncGroup(deviceId: String?) = securedLaunch {
+        if (deviceId != null) require(_canRemoveOnlyPeer.value &&
+            _syncManagerDeviceId.value == deviceIdentityStore.getOrCreate().deviceId &&
+            _pairedDevices.value.any {
             it.deviceId == deviceId && it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name
         }) { "This device cannot be removed from the current sync group" }
+        else require(_pairedDevices.value.any {
+            it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name
+        }) { "This device is not sharing a vault" }
         require(_syncConflicts.value.isEmpty()) { "Resolve sync conflicts before removing the device" }
         require(lockedSyncStore.queuedCount() == 0 && lockedSyncStore.rejectedCount() == 0 &&
             lockedSyncStore.missingPhotos().isEmpty()) {
@@ -1237,19 +1376,24 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
         val wasPaused = com.privatevault.app.sync.LanSyncService.isPaused(getApplication())
         com.privatevault.app.sync.LanSyncService.pause(getApplication())
-        require(lockedSyncStore.queuedCount() == 0 && lockedSyncStore.rejectedCount() == 0 &&
-            lockedSyncStore.missingPhotos().isEmpty()) {
-            "A sync was still finishing. Review it, then retry removal"
-        }
-        requireNotNull(database).let {
-            it.removeOnlyPairedDevice(deviceIdentityStore, deviceId)
-            lockedSyncStore.clear()
-            lockedSyncStore.publish(it)
+        try {
+            require(lockedSyncStore.queuedCount() == 0 && lockedSyncStore.rejectedCount() == 0 &&
+                lockedSyncStore.missingPhotos().isEmpty()) {
+                "A sync was still finishing. Review it, then retry removal"
+            }
+            requireNotNull(database).let {
+                if (deviceId == null) it.leaveSyncGroup(deviceIdentityStore)
+                else it.removeOnlyPairedDevice(deviceIdentityStore, deviceId)
+                lockedSyncStore.clear()
+                lockedSyncStore.publish(it)
+            }
+        } finally {
+            if (!wasPaused) com.privatevault.app.sync.LanSyncService.allowFutureSync(getApplication())
+            else com.privatevault.app.sync.LanSyncService.refreshPausedNotification(getApplication())
         }
         _securitySettings.value = requireNotNull(dao().settings())
         refresh()
-        if (!wasPaused) com.privatevault.app.sync.LanSyncService.allowFutureSync(getApplication())
-        _message.value = "Device removed. This vault now has new sync keys. Pair a new empty device when ready; pair the watch again for codes."
+        _message.value = "This device now has a separate sync group and keeps its vault copy. Pair a new empty device when ready; pair the watch again for codes."
     }
 
     fun resolveSyncConflict(id: String, useIncoming: Boolean, expectedVersion: String) = securedLaunch {

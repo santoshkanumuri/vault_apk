@@ -1,6 +1,8 @@
 package com.privatevault.app
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
@@ -25,10 +27,10 @@ class VaultQuickAccessTest {
         val preferences = context.getSharedPreferences("vault_preferences", android.content.Context.MODE_PRIVATE)
         val previous = preferences.getBoolean("autofill_keyboard_suggestions", true)
         try {
-            compose.setContent { MaterialTheme { Column { AutofillPreference() } } }
-            compose.onNodeWithText("Account picker").performClick().assertIsSelected()
+            compose.setContent { MaterialTheme { Column(Modifier.verticalScroll(rememberScrollState())) { AutofillPreference() } } }
+            compose.onNodeWithText("Account picker").performScrollTo().performClick().assertIsSelected()
             compose.runOnIdle { assertFalse(preferences.getBoolean("autofill_keyboard_suggestions", true)) }
-            compose.onNodeWithText("Keyboard suggestions").performClick().assertIsSelected()
+            compose.onNodeWithText("Keyboard suggestions").performScrollTo().performClick().assertIsSelected()
             compose.runOnIdle { assertTrue(preferences.getBoolean("autofill_keyboard_suggestions", false)) }
         } finally { preferences.edit().putBoolean("autofill_keyboard_suggestions", previous).commit() }
     }

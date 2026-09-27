@@ -129,7 +129,8 @@ class LanSyncService : Service() {
         mutableNearbyCount.value = 0
         notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.createNotificationChannel(NotificationChannel(CHANNEL, "Device sync", NotificationManager.IMPORTANCE_LOW))
-        startForeground(410, syncNotification())
+        notificationManager.cancel(PAUSED_NOTIFICATION_ID)
+        startForeground(NOTIFICATION_ID, syncNotification())
         setStatus(DeviceSyncPhase.WAITING, "Connect both devices to the same Wi-Fi network.")
         connectivity = getSystemService(ConnectivityManager::class.java)
         nsd = getSystemService(NsdManager::class.java)
@@ -140,14 +141,18 @@ class LanSyncService : Service() {
     private fun syncNotification(): Notification {
         val connected = mutablePeerStatus.value.values.count { it.phase == DeviceSyncPhase.TRANSFERRING }
         val nearby = mutableNearbyCount.value
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val pause = PendingIntent.getService(this, 1, Intent(this, LanSyncService::class.java).setAction(PAUSE), PendingIntent.FLAG_IMMUTABLE)
+        val paused = isPaused(this)
+        val action = if (paused) resumePendingIntent(this) else
+            PendingIntent.getService(this, 1, Intent(this, LanSyncService::class.java).setAction(PAUSE),
+                PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(com.privatevault.app.R.drawable.ic_vault_codes)
+            .setSmallIcon(com.privatevault.app.R.drawable.ic_auto_sync)
             .setContentTitle("$connected connected · $nearby nearby")
             .setContentText("$pairedCount paired · ${mutableStatus.value.phase.title}")
-            .setContentIntent(open).setOngoing(true).setVisibility(Notification.VISIBILITY_SECRET)
-            .addAction(Notification.Action.Builder(null, "Pause", pause).build()).build()
+            .setContentIntent(settingsPendingIntent(this)).setOngoing(true)
+            .setVisibility(Notification.VISIBILITY_SECRET)
+            .addAction(Notification.Action.Builder(null, if (paused) "Resume" else "Pause", action).build())
+            .build()
     }
 
     @Synchronized private fun updateNotification() {
@@ -156,15 +161,17 @@ class LanSyncService : Service() {
         val text = "$connected|${mutableNearbyCount.value}|$pairedCount|${mutableStatus.value.phase}"
         if (text == lastNotificationText) return
         lastNotificationText = text
-        notificationManager.notify(410, syncNotification())
+        notificationManager.notify(NOTIFICATION_ID, syncNotification())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == PAUSE) {
-            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putBoolean("paused", true).apply()
-            setStatus(DeviceSyncPhase.PAUSED, "Tap Resume to check paired devices again.")
-            stopSelf()
+            pause(this)
             return START_NOT_STICKY
+        }
+        if (intent?.action == RESUME) {
+            allowFutureSync(this)
+            notificationManager.cancel(PAUSED_NOTIFICATION_ID)
         }
         val paused = getSharedPreferences(PREFERENCES, MODE_PRIVATE).getBoolean("paused", false)
         if (paused && intent?.action != SYNC_NOW) {
@@ -503,6 +510,7 @@ class LanSyncService : Service() {
         server?.close()
         connections.forEach { runCatching { it.close() } }
         if (activeInstance === this) activeInstance = null
+        if (isPaused(this)) postPausedNotification(this)
         super.onDestroy()
     }
 
@@ -551,8 +559,41 @@ class LanSyncService : Service() {
         private const val CHANNEL = "device-sync"
         private const val TYPE = "_nuvori-sync._tcp."
         private const val PAUSE = "com.privatevault.app.PAUSE_SYNC"
+        private const val RESUME = "com.privatevault.app.RESUME_SYNC"
         private const val SYNC_NOW = "com.privatevault.app.SYNC_NOW"
         private const val PREFERENCES = "sync-service"
+        private const val NOTIFICATION_ID = 410
+        private const val PAUSED_NOTIFICATION_ID = 411
+
+        private fun settingsPendingIntent(context: Context): PendingIntent = PendingIntent.getActivity(
+            context, 0, Intent(context, MainActivity::class.java)
+                .setAction(MainActivity.ACTION_OPEN_SYNC_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+        private fun resumePendingIntent(context: Context): PendingIntent = PendingIntent.getForegroundService(
+            context, 2, Intent(context, LanSyncService::class.java).setAction(RESUME),
+            PendingIntent.FLAG_IMMUTABLE)
+
+        private fun postPausedNotification(context: Context) {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            val mirror = runCatching { store(context).snapshot() }.getOrNull()
+            val active = mirror?.members?.filter { it.status == MemberStatus.ACTIVE.name }.orEmpty()
+            if (active.size < 2 || active.none { it.deviceId == mirror?.localDeviceId }) {
+                manager.cancel(PAUSED_NOTIFICATION_ID)
+                return
+            }
+            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Device sync", NotificationManager.IMPORTANCE_LOW))
+            manager.notify(PAUSED_NOTIFICATION_ID, Notification.Builder(context, CHANNEL)
+                .setSmallIcon(com.privatevault.app.R.drawable.ic_auto_sync)
+                .setContentTitle("Device sync paused")
+                .setContentText("Automatic checks are off")
+                .setContentIntent(settingsPendingIntent(context))
+                .setVisibility(Notification.VISIBILITY_SECRET)
+                .addAction(Notification.Action.Builder(null, "Resume", resumePendingIntent(context)).build())
+                .build())
+        }
+
         val SYNC_INTERVALS = listOf(30_000L, 60_000L, 300_000L, 900_000L)
         fun syncInterval(context: Context): Long = context.getSharedPreferences(PREFERENCES, MODE_PRIVATE)
             .getLong("interval_ms", SYNC_INTERVALS.first()).takeIf { it in SYNC_INTERVALS } ?: SYNC_INTERVALS.first()
@@ -589,7 +630,10 @@ class LanSyncService : Service() {
         }
         fun start(context: Context, resume: Boolean = false) {
             val preferences = context.getSharedPreferences(PREFERENCES, MODE_PRIVATE)
-            if (resume) preferences.edit().putBoolean("paused", false).apply()
+            if (resume) {
+                preferences.edit().putBoolean("paused", false).apply()
+                context.getSystemService(NotificationManager::class.java).cancel(PAUSED_NOTIFICATION_ID)
+            }
             if (!preferences.getBoolean("paused", false))
                 context.startForegroundService(Intent(context, LanSyncService::class.java))
         }
@@ -598,8 +642,12 @@ class LanSyncService : Service() {
             context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putBoolean("paused", true).apply()
             mutableStatus.value = DeviceSyncStatus(DeviceSyncPhase.PAUSED,
                 "Tap Resume to check paired devices again.")
-            activeInstance?.abortTransport()
+            activeInstance?.let {
+                it.abortTransport()
+                it.stopForeground(Service.STOP_FOREGROUND_REMOVE)
+            }
             context.stopService(Intent(context, LanSyncService::class.java))
+            postPausedNotification(context)
         }
 
         fun isPaused(context: Context): Boolean =
@@ -607,6 +655,11 @@ class LanSyncService : Service() {
 
         fun allowFutureSync(context: Context) {
             context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putBoolean("paused", false).apply()
+            context.getSystemService(NotificationManager::class.java).cancel(PAUSED_NOTIFICATION_ID)
+        }
+
+        fun refreshPausedNotification(context: Context) {
+            if (isPaused(context)) postPausedNotification(context)
         }
 
         fun syncNow(context: Context) {

@@ -7,7 +7,10 @@ plugins {
 }
 
 val privateSigningProperties = Properties()
-val privateSigningFile = file("${System.getProperty("user.home")}/.private-vault-signing/signing.properties")
+val privateSigningFile = file(
+    System.getenv("NUVORI_SIGNING_PROPERTIES")
+        ?: "${System.getProperty("user.home")}/.private-vault-signing/signing.properties"
+)
 if (privateSigningFile.exists()) privateSigningFile.inputStream().use { privateSigningProperties.load(it) }
 
 android {
@@ -19,8 +22,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 29
         targetSdk = 36
-        versionCode = 48
-        versionName = "2.0.7"
+        versionCode = 50
+        versionName = "2.0.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

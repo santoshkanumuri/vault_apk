@@ -9,20 +9,34 @@ import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
 
-/**
- * Removes the only other active member by creating a fresh sync group around the local vault.
- * A larger group needs key delivery to every survivor and cannot use this reset.
- */
+/** The two-member split creates a fresh group around this device's local vault. */
 internal suspend fun VaultDatabase.removeOnlyPairedDevice(identityStore: AndroidDeviceIdentityStore,
-    peerDeviceId: String): String = withTransaction {
+    peerDeviceId: String): String = startIndependentSyncGroup(identityStore, peerDeviceId)
+
+/** Keeps the local vault while detaching this device from a group of any supported size. */
+internal suspend fun VaultDatabase.leaveSyncGroup(identityStore: AndroidDeviceIdentityStore): String =
+    startIndependentSyncGroup(identityStore, null)
+
+private suspend fun VaultDatabase.startIndependentSyncGroup(identityStore: AndroidDeviceIdentityStore,
+    onlyPeerDeviceId: String?): String = withTransaction {
     val identity = identityStore.getOrCreate()
     val settings = requireNotNull(dao().settings())
     val oldVaultId = settings.vaultId
     val sync = syncDao()
     val verified = SyncMembershipManager.verify(sync.membershipEvents(oldVaultId).map { it.toEvent() })
-    require(verified.members.filter { it.status == MemberStatus.ACTIVE.name }.map { it.deviceId }.toSet() ==
-        setOf(identity.deviceId, peerDeviceId)) {
+    val activeIds = verified.members.filter { it.status == MemberStatus.ACTIVE.name }
+        .mapTo(mutableSetOf()) { it.deviceId }
+    require(identity.deviceId in activeIds && activeIds.size >= 2) {
+        "This device is not in an active shared sync group"
+    }
+    require(onlyPeerDeviceId == null || activeIds == setOf(identity.deviceId, onlyPeerDeviceId)) {
         "Removing one device from a larger group needs key rotation across the remaining devices"
+    }
+    require(onlyPeerDeviceId == null || verified.managerDeviceId == identity.deviceId) {
+        "Only the managing device can remove another device"
+    }
+    require(onlyPeerDeviceId == null || verified.pendingTransferDeviceId == null) {
+        "Finish or cancel the authority transfer before removing a device"
     }
     require(sync.conflicts().none { it.resolvedAtUtc.isEmpty() }) {
         "Resolve sync conflicts before removing the device"

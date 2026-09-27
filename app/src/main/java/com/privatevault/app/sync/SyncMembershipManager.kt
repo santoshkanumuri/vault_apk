@@ -6,7 +6,7 @@ import java.io.DataOutputStream
 import java.security.MessageDigest
 import java.util.Base64
 
-internal enum class MembershipAction { GENESIS, ADD, REMOVE, TRANSFER }
+internal enum class MembershipAction { GENESIS, ADD, REMOVE, OFFER_TRANSFER, ACCEPT_TRANSFER, CANCEL_TRANSFER, TRANSFER }
 
 internal data class SyncMembershipEvent(
     val formatVersion: Int,
@@ -52,7 +52,8 @@ internal data class SyncMembershipEvent(
 }
 
 internal data class VerifiedMembership(val events: List<SyncMembershipEvent>,
-    val members: List<SyncMembershipEntity>, val managerDeviceId: String, val keyEpoch: Long) {
+    val members: List<SyncMembershipEntity>, val managerDeviceId: String, val keyEpoch: Long,
+    val pendingTransferDeviceId: String?, val transferAccepted: Boolean) {
     val head: String get() = events.last().hash
 }
 
@@ -62,6 +63,8 @@ internal object SyncMembershipManager {
         val members = linkedMapOf<String, SyncMembershipEntity>()
         var manager = ""
         var epoch = 1L
+        var pendingTransfer: String? = null
+        var transferAccepted = false
         var previousHash = GENESIS_HASH
         val vaultId = events.first().vaultId
         events.forEachIndexed { index, event ->
@@ -73,6 +76,10 @@ internal object SyncMembershipManager {
                 require(event.action == MembershipAction.GENESIS &&
                     event.issuerDeviceId == event.subjectDeviceId && event.keyEpoch == 1L)
                 event.subjectPublicKey
+            } else if (event.action == MembershipAction.ACCEPT_TRANSFER) {
+                require(event.issuerDeviceId == pendingTransfer && !transferAccepted)
+                requireNotNull(members[event.issuerDeviceId]) { "Transfer recipient is missing" }
+                    .also { require(it.status == MemberStatus.ACTIVE.name) }.identityPublicKey
             } else {
                 require(event.action != MembershipAction.GENESIS && event.issuerDeviceId == manager)
                 requireNotNull(members[manager]) { "Managing device is missing" }.identityPublicKey
@@ -82,6 +89,7 @@ internal object SyncMembershipManager {
                 Base64.getUrlDecoder().decode(event.signature))) { "Invalid membership signature" }
             when (event.action) {
                 MembershipAction.GENESIS, MembershipAction.ADD -> {
+                    require(pendingTransfer == null)
                     require(event.keyEpoch == epoch && event.subjectDeviceId !in members)
                     require(members.values.count { it.status == MemberStatus.ACTIVE.name } < MAX_ACTIVE_SYNC_DEVICES)
                     require(Base64.getUrlDecoder().decode(event.subjectPublicKey).size == DeviceIdentityCrypto.PUBLIC_KEY_BYTES)
@@ -94,6 +102,7 @@ internal object SyncMembershipManager {
                     if (index == 0) manager = event.subjectDeviceId
                 }
                 MembershipAction.REMOVE -> {
+                    require(pendingTransfer == null)
                     require(event.subjectDeviceId != manager && event.subjectPublicKey.isEmpty() &&
                         event.keyEpoch == epoch + 1L)
                     val subject = requireNotNull(members[event.subjectDeviceId])
@@ -102,15 +111,35 @@ internal object SyncMembershipManager {
                     members[event.subjectDeviceId] = subject.copy(status = MemberStatus.REVOKED.name,
                         membershipSequence = event.sequence, keyEpoch = epoch)
                 }
+                MembershipAction.OFFER_TRANSFER -> {
+                    require(event.subjectPublicKey.isEmpty() && event.keyEpoch == epoch &&
+                        pendingTransfer == null && event.subjectDeviceId != manager &&
+                        members[event.subjectDeviceId]?.status == MemberStatus.ACTIVE.name)
+                    pendingTransfer = event.subjectDeviceId
+                }
+                MembershipAction.ACCEPT_TRANSFER -> {
+                    require(event.subjectPublicKey.isEmpty() && event.keyEpoch == epoch &&
+                        event.subjectDeviceId == pendingTransfer)
+                    transferAccepted = true
+                }
+                MembershipAction.CANCEL_TRANSFER -> {
+                    require(event.subjectPublicKey.isEmpty() && event.keyEpoch == epoch &&
+                        event.subjectDeviceId == pendingTransfer)
+                    pendingTransfer = null
+                    transferAccepted = false
+                }
                 MembershipAction.TRANSFER -> {
                     require(event.subjectPublicKey.isEmpty() && event.keyEpoch == epoch &&
-                        members[event.subjectDeviceId]?.status == MemberStatus.ACTIVE.name)
+                        event.subjectDeviceId == pendingTransfer && transferAccepted)
                     manager = event.subjectDeviceId
+                    pendingTransfer = null
+                    transferAccepted = false
                 }
             }
             previousHash = event.hash
         }
-        return VerifiedMembership(events, members.values.toList(), manager, epoch)
+        return VerifiedMembership(events, members.values.toList(), manager, epoch,
+            pendingTransfer, transferAccepted)
     }
 }
 

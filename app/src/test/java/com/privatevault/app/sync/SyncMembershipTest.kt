@@ -18,14 +18,30 @@ class SyncMembershipTest {
             "manager", "manager", managerKey, 1) { DeviceIdentityCrypto.sign(managerSeed, it) }
         val add = SyncMembershipEvent.sign("vault", 2, genesis.hash, MembershipAction.ADD,
             "manager", "member", memberKey, 1) { DeviceIdentityCrypto.sign(managerSeed, it) }
-        val transfer = SyncMembershipEvent.sign("vault", 3, add.hash, MembershipAction.TRANSFER,
+        val offer = SyncMembershipEvent.sign("vault", 3, add.hash, MembershipAction.OFFER_TRANSFER,
             "manager", "member", "", 1) { DeviceIdentityCrypto.sign(managerSeed, it) }
-        val accepted = SyncMembershipManager.verify(listOf(genesis, add, transfer))
+        val acceptance = SyncMembershipEvent.sign("vault", 4, offer.hash, MembershipAction.ACCEPT_TRANSFER,
+            "member", "member", "", 1) { DeviceIdentityCrypto.sign(memberSeed, it) }
+        val forgedAcceptance = SyncMembershipEvent.sign("vault", 4, offer.hash,
+            MembershipAction.ACCEPT_TRANSFER, "member", "member", "", 1) {
+            DeviceIdentityCrypto.sign(managerSeed, it)
+        }
+        val transfer = SyncMembershipEvent.sign("vault", 5, acceptance.hash, MembershipAction.TRANSFER,
+            "manager", "member", "", 1) { DeviceIdentityCrypto.sign(managerSeed, it) }
+        assertTrue(runCatching { SyncMembershipManager.verify(listOf(genesis, add, transfer)) }.isFailure)
+        assertTrue(runCatching { SyncMembershipManager.verify(listOf(genesis, add, offer,
+            forgedAcceptance)) }.isFailure)
+        val pending = SyncMembershipManager.verify(listOf(genesis, add, offer, acceptance))
+        assertEquals("manager", pending.managerDeviceId)
+        assertTrue(pending.transferAccepted)
+        val accepted = SyncMembershipManager.verify(listOf(genesis, add, offer, acceptance, transfer))
         assertEquals("member", accepted.managerDeviceId)
+        assertEquals(null, accepted.pendingTransferDeviceId)
         assertEquals(2, accepted.members.count { it.status == MemberStatus.ACTIVE.name })
-        val forged = SyncMembershipEvent.sign("vault", 4, transfer.hash, MembershipAction.ADD,
+        val forged = SyncMembershipEvent.sign("vault", 6, transfer.hash, MembershipAction.ADD,
             "manager", "forged", memberKey, 1) { DeviceIdentityCrypto.sign(managerSeed, it) }
-        assertTrue(runCatching { SyncMembershipManager.verify(listOf(genesis, add, transfer, forged)) }.isFailure)
+        assertTrue(runCatching { SyncMembershipManager.verify(listOf(genesis, add, offer,
+            acceptance, transfer, forged)) }.isFailure)
         assertTrue(runCatching { SyncMembershipManager.verify(listOf(genesis, add.copy(subjectPublicKey = managerKey))) }.isFailure)
     }
 
@@ -56,5 +72,21 @@ class SyncMembershipTest {
         }
         assertEquals(4, SyncMembershipManager.verify(events + removal + replacement).members
             .count { it.status == MemberStatus.ACTIVE.name })
+    }
+
+    @Test fun managerCanCancelAnUnacceptedTransfer() {
+        val genesis = SyncMembershipEvent.sign("vault", 1, GENESIS_HASH, MembershipAction.GENESIS,
+            "manager", "manager", managerKey, 1) { DeviceIdentityCrypto.sign(managerSeed, it) }
+        val add = SyncMembershipEvent.sign("vault", 2, genesis.hash, MembershipAction.ADD,
+            "manager", "member", memberKey, 1) { DeviceIdentityCrypto.sign(managerSeed, it) }
+        val offer = SyncMembershipEvent.sign("vault", 3, add.hash, MembershipAction.OFFER_TRANSFER,
+            "manager", "member", "", 1) { DeviceIdentityCrypto.sign(managerSeed, it) }
+        val cancelled = SyncMembershipEvent.sign("vault", 4, offer.hash,
+            MembershipAction.CANCEL_TRANSFER, "manager", "member", "", 1) {
+            DeviceIdentityCrypto.sign(managerSeed, it)
+        }
+        val accepted = SyncMembershipManager.verify(listOf(genesis, add, offer, cancelled))
+        assertEquals("manager", accepted.managerDeviceId)
+        assertEquals(null, accepted.pendingTransferDeviceId)
     }
 }

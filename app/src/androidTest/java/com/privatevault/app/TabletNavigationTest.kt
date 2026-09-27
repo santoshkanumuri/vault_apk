@@ -20,6 +20,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.espresso.Espresso
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -95,5 +96,34 @@ class TabletNavigationTest {
         compose.onNodeWithText("Passkeys").performScrollTo().performClick()
         compose.onNodeWithText("Create passkeys from a supported website in Chrome or Brave. They are encrypted with your vault and included in backups. Deleting one here does not remove its registration on the website.")
             .assertExists()
+    }
+
+    @Test fun backFromTabletSidebarReturnsHomeWithoutSettingsDetour() {
+        val model = VaultViewModel(InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application)
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                MaterialTheme {
+                    Box(Modifier.requiredSize(1000.dp, 800.dp)) {
+                        VaultHome(model, { _, _ -> }, { it() }, FirstRunChoice.NEW, {})
+                    }
+                }
+            }
+        }
+        listOf("Notes", "Security questions").forEach { label ->
+            compose.onNode(hasText(label) and hasAnyAncestor(hasTestTag("vaultSidebar")))
+                .performScrollTo().performClick()
+            compose.onNodeWithText("Folders").assertExists()
+            Espresso.pressBack()
+            compose.onNode(hasText("Home") and !hasAnyAncestor(hasTestTag("vaultSidebar")))
+                .assertExists()
+            compose.onNodeWithText("Folders").assertDoesNotExist()
+        }
+
+        compose.onNode(hasText("Passkeys") and hasAnyAncestor(hasTestTag("vaultSidebar")))
+            .performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNode(hasText("Home") and !hasAnyAncestor(hasTestTag("vaultSidebar")))
+            .assertExists()
+        compose.onNodeWithText("Appearance").assertDoesNotExist()
     }
 }

@@ -3,14 +3,19 @@ package com.privatevault.app
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.os.PersistableBundle
+import android.service.quicksettings.TileService
 import android.view.WindowManager
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
@@ -27,13 +32,19 @@ import com.privatevault.app.security.BiometricGate
 import com.privatevault.app.security.BiometricActionGate
 
 class MainActivity : FragmentActivity() {
+    companion object {
+        const val ACTION_OPEN_SYNC_SETTINGS = "com.privatevault.app.OPEN_SYNC_SETTINGS"
+    }
+
     private lateinit var viewModel: VaultViewModel
+    private var syncSettingsRequested by mutableStateOf(false)
     private var screenOffReceiver: BroadcastReceiver? = null
     private val biometricGate by lazy { BiometricGate(applicationContext) }
     private val nfcReader by lazy { NfcCardReader(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        syncSettingsRequested = opensSyncSettings(intent)
         val emulatorDebug = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 &&
             Build.FINGERPRINT.contains("sdk_gphone")
         if (!emulatorDebug) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -61,9 +72,25 @@ class MainActivity : FragmentActivity() {
                 onBiometricUnlock = ::showBiometricPrompt,
                 onEnableDailyBiometric = ::enableDailyBiometric,
                 onBiometricAction = ::showBiometricAction,
-                onCopySecret = ::copySecret
+                onCopySecret = ::copySecret,
+                openSyncSettings = syncSettingsRequested,
+                onSyncSettingsOpened = { syncSettingsRequested = false }
             )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (opensSyncSettings(intent)) syncSettingsRequested = true
+    }
+
+    @Suppress("DEPRECATION")
+    private fun opensSyncSettings(intent: Intent?): Boolean {
+        if (intent?.action == ACTION_OPEN_SYNC_SETTINGS) return true
+        if (intent?.action != TileService.ACTION_QS_TILE_PREFERENCES) return false
+        val source = intent.getParcelableExtra<ComponentName>(Intent.EXTRA_COMPONENT_NAME)
+        return source == null || source.className == AutoSyncTileService::class.java.name
     }
 
     override fun onStop() {

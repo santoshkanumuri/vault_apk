@@ -89,7 +89,9 @@ class EncryptedPhotoStore(context: Context) {
 
     fun delete(fileName: String) { File(directory, fileName).delete() }
     fun cleanupAbandonedRestore(retained: Set<String>) {
-        directory.listFiles()?.filter { it.name.startsWith("restore-") && it.name !in retained }?.forEach { it.delete() }
+        directory.listFiles()?.filter {
+            (it.name.startsWith("restore-") || it.name.startsWith("draft-")) && it.name !in retained
+        }?.forEach { it.delete() }
     }
     fun encryptedFile(fileName: String): File = File(directory, fileName)
 }

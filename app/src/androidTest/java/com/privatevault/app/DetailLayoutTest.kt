@@ -292,8 +292,8 @@ class DetailLayoutTest {
                 MaterialTheme {
                     Box(Modifier.requiredSize(320.dp, 420.dp).testTag("editorViewport")) {
                         if (type.value == EntryType.AUTHENTICATOR)
-                            AuthenticatorEditor(null, emptyList(), emptySet(), model, {}, { _, _ -> })
-                        else EntryEditor(null, type.value, emptyList(), emptySet(), model, {}, { _, _ -> })
+                            AuthenticatorEditor(null, emptyList(), emptySet(), model, {}, { _, _, _ -> })
+                        else EntryEditor(null, type.value, emptyList(), emptySet(), model, {}, { _, _, _ -> })
                     }
                 }
             }
@@ -320,7 +320,7 @@ class DetailLayoutTest {
         compose.setContent {
             val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
             SideEffect { keyboardHeight.intValue = imeBottom }
-            MaterialTheme { EntryEditor(null, EntryType.NOTE, emptyList(), emptySet(), model, {}, { _, _ -> }) }
+            MaterialTheme { EntryEditor(null, EntryType.NOTE, emptyList(), emptySet(), model, {}, { _, _, _ -> }) }
         }
         compose.onNodeWithText("Note title").performClick()
         compose.waitUntil(5_000) { keyboardHeight.intValue > 0 }
@@ -336,7 +336,7 @@ class DetailLayoutTest {
             CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
                 MaterialTheme {
                     Box(Modifier.fillMaxSize().testTag("wideViewport")) {
-                        EntryEditor(null, EntryType.NOTE, emptyList(), emptySet(), model, {}, { _, _ -> })
+                        EntryEditor(null, EntryType.NOTE, emptyList(), emptySet(), model, {}, { _, _, _ -> })
                     }
                 }
             }

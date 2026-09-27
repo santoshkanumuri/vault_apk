@@ -32,9 +32,14 @@ class SyncEnrollmentPolicyTest {
             val genesis = database.syncDao().membershipEvents(vaultId).single().toEvent()
             val admission = SyncMembershipEvent.sign(vaultId, 2, genesis.hash, MembershipAction.ADD,
                 local.deviceId, "tablet", remoteKey, 1, identities::sign)
-            val transfer = SyncMembershipEvent.sign(vaultId, 3, admission.hash, MembershipAction.TRANSFER,
+            val offer = SyncMembershipEvent.sign(vaultId, 3, admission.hash, MembershipAction.OFFER_TRANSFER,
                 local.deviceId, "tablet", "", 1, identities::sign)
-            for (event in listOf(admission, transfer)) database.syncDao().insertMembershipEvent(SyncMembershipEventEntity.from(event))
+            val acceptance = SyncMembershipEvent.sign(vaultId, 4, offer.hash, MembershipAction.ACCEPT_TRANSFER,
+                "tablet", "tablet", "", 1) { DeviceIdentityCrypto.sign(remoteSecret, it) }
+            val transfer = SyncMembershipEvent.sign(vaultId, 5, acceptance.hash, MembershipAction.TRANSFER,
+                local.deviceId, "tablet", "", 1, identities::sign)
+            for (event in listOf(admission, offer, acceptance, transfer))
+                database.syncDao().insertMembershipEvent(SyncMembershipEventEntity.from(event))
             val stateBefore = database.syncDao().vaultState()
             try {
                 database.prepareSyncGroup(identities)
@@ -43,13 +48,18 @@ class SyncEnrollmentPolicyTest {
                 assertEquals("Add devices from the managing device", expected.message)
             }
             assertEquals(stateBefore, database.syncDao().vaultState())
-            assertEquals(3, database.syncDao().membershipEvents(vaultId).size)
+            assertEquals(5, database.syncDao().membershipEvents(vaultId).size)
             LocalEntryChangeWriter(database, identities).save(VaultEntry(id = "offline-note",
                 type = EntryType.NOTE, title = "Secondary offline edit"), emptySet(), ByteArray(32) { 9 })
             assertEquals("Secondary offline edit", database.dao().entry("offline-note")?.entry?.title)
-            val transferBack = SyncMembershipEvent.sign(vaultId, 4, transfer.hash, MembershipAction.TRANSFER,
+            val offerBack = SyncMembershipEvent.sign(vaultId, 6, transfer.hash, MembershipAction.OFFER_TRANSFER,
                 "tablet", local.deviceId, "", 1) { DeviceIdentityCrypto.sign(remoteSecret, it) }
-            database.syncDao().insertMembershipEvent(SyncMembershipEventEntity.from(transferBack))
+            val acceptBack = SyncMembershipEvent.sign(vaultId, 7, offerBack.hash, MembershipAction.ACCEPT_TRANSFER,
+                local.deviceId, local.deviceId, "", 1, identities::sign)
+            val transferBack = SyncMembershipEvent.sign(vaultId, 8, acceptBack.hash, MembershipAction.TRANSFER,
+                "tablet", local.deviceId, "", 1) { DeviceIdentityCrypto.sign(remoteSecret, it) }
+            for (event in listOf(offerBack, acceptBack, transferBack))
+                database.syncDao().insertMembershipEvent(SyncMembershipEventEntity.from(event))
             database.prepareSyncGroup(identities)
             assertEquals(stateBefore, database.syncDao().vaultState())
         } finally { database.close(); identities.clear() }

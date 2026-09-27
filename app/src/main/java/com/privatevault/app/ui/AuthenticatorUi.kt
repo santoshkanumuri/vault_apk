@@ -109,7 +109,8 @@ private fun MoreItem(title: String, subtitle: String, icon: ImageVector, open: (
 }
 
 @Composable
-internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>, initialGroups: Set<String>, viewModel: VaultViewModel, onDismiss: () -> Unit, onSave: (VaultEntry, Set<String>) -> Unit) {
+internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>, initialGroups: Set<String>, viewModel: VaultViewModel, onDismiss: () -> Unit, onSave: (VaultEntry, Set<String>, List<DraftPhoto>) -> Unit) {
+    val photoDraft = rememberPhotoDraftEditor(viewModel)
     var issuer by remember { mutableStateOf(existing?.title.orEmpty()) }
     var account by remember { mutableStateOf(existing?.primaryValue.orEmpty()) }
     var secret by remember { mutableStateOf(existing?.secondaryValue.orEmpty()) }
@@ -151,8 +152,8 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                     Text(if (existing == null) "Add authenticator" else "Edit authenticator",
                         Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    IconButton(enabled = valid, onClick = {
-                        onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes, linkedApps = linkedApps), selectedGroups)
+                    IconButton(enabled = valid && !photoDraft.busy, onClick = {
+                        onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes, linkedApps = linkedApps), selectedGroups, photoDraft.takeForSave())
                         secret = ""
                     }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Check, contentDescription = "Save authenticator") }
                 }
@@ -175,6 +176,7 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                     item { OutlinedTextField(period, { period = it }, label = { Text("Interval in seconds") }, modifier = Modifier.fillMaxWidth()) }
                 }
                 item { OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth()) }
+                item { PhotoDraftControls(photoDraft, viewModel) }
                 item { OutlinedButton(onClick = { linkApps = true }, modifier = Modifier.fillMaxWidth()) {
                     Text("Linked apps (${com.privatevault.app.security.linkedAppPackages(linkedApps).size})")
                 } }

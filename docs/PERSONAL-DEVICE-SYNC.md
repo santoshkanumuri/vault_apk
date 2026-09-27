@@ -1,14 +1,16 @@
 # Personal device sync
 
-Decision recorded September 25, 2026.
+Decision revised September 27, 2026.
 
-Nuvori is a private vault for one owner using personal devices. The usual setup is a primary phone, perhaps a second phone and tablet, a Windows computer, and a watch for codes. Android membership remains limited to four active devices, including the managing device. Windows integration remains separate implementation work; the watch is a companion rather than an Android vault member.
+Nuvori is a private vault for one owner using personal devices. The usual setup is a primary phone, perhaps a second phone and tablet, a Windows computer, and a watch for codes. Android membership remains limited to four active devices. Windows integration remains separate implementation work; the watch is a companion rather than an Android vault member.
 
 ## Daily behavior
 
-One device manages membership. It approves enrollment, removal, key rotation, and planned transfer of management. Every enrolled device can read and edit its local vault offline and exchange signed changes directly with another enrolled device. A change does not need a global number assigned by the managing phone. Concurrent changes must retain enough history for conflict review.
+One device manages enrollment and removal. It can transfer that role to another paired device while both are reachable and the recipient accepts. Every enrolled device can read and edit its local vault offline and exchange signed changes directly with another enrolled device. A change does not need a global number assigned by the managing phone. Concurrent changes must retain enough history for conflict review.
 
-The interface must distinguish saved locally, received by a peer, and applied by a peer. A missing managing phone blocks membership changes but does not block ordinary edits or peer sync. A notification and Android's background restrictions still affect automatic delivery.
+The vault ID identifies a sync group. Each installation has its own device ID and signed author chain inside that group. If a device stops sharing, it keeps its local records and photos, creates a new vault ID, and starts a new chain with fresh content and transport keys. Its old chain belongs to the old group and is not reused. Other members remain on the old vault ID and can continue exchanging ordinary changes.
+
+The interface must distinguish saved locally, received by a peer, and applied by a peer. A missing managing phone blocks membership changes and transfer, but does not block ordinary edits or peer sync. A notification and Android's background restrictions still affect automatic delivery.
 
 ## Passwords and pairing
 
@@ -16,17 +18,21 @@ The product target is one user-facing master password across the owner's devices
 
 Before showing a pairing QR, the managing device asks for its current master password and verifies it locally. It retains the existing temporary invitation, J-PAKE exchange, and matching-code confirmation. A secondary cannot host enrollment, even if the UI is bypassed. The protocol checks authority before opening the listener and again when authorizing admission.
 
-To complete the common-password experience:
+Pairing now checks password equality with a password-based handshake before the vault copy. Each device first verifies the entered password against its own local vault. To complete the common-password experience:
 
-1. Define and review a proof that the joining device entered the intended password. Merely asking for it does not prove equality. Keep the password out of invitations, logs, and persistent sync operations.
+1. Review and test the pairing proof against incorrect passwords and interrupted handshakes. Keep the password out of invitations, logs, and persistent sync operations.
 2. Design password changes for offline devices. Show which devices still need a local password update; do not claim that disconnected devices can immediately unlock with the replacement.
 3. Keep password changes separate from device revocation. A lost device may already hold decrypted data or usable old keys. Updating a password does not remove its membership.
 
 ## Transfer and recovery
 
-A planned transfer needs a signed handoff from the current manager to an enrolled device. Verify that the two participants have applied the agreed state, including photos. Persist a recoverable handoff and acknowledgement. A crash or missing acknowledgement must not make the UI report success prematurely. Other offline members catch up later.
+A planned authority transfer needs a signed handoff from the current manager and explicit acceptance from the paired recipient while they can connect. Verify that the two participants have applied the agreed state, including photos. Persist a recoverable handoff and acknowledgement. A crash or missing acknowledgement must not make the UI report success prematurely. Other offline members catch up later.
+
+The Android source now records a signed offer, recipient acceptance, and manager commit in the membership chain. Each participant checks the peer's reported applied heads and local waiting work before its action. A recipient can manage enrollment after it receives and applies the final event. A final receipt acknowledgement, physical interruption tests, and recovery after a missing final event remain open release checks.
 
 Emergency recovery uses a surviving unlocked device's contents to start a fresh sync identity and fresh group keys. The current implementation binds encrypted changes, transport state, and history to `vaultId`; create a new value for the new group. Keep the local records and photos. Do not reuse the old trust history under the new identity.
+
+For a lost primary phone with one surviving tablet, the tablet stops sharing, becomes manager of its new group, and keeps its local vault copy. The replacement phone starts with an empty vault and pairs with the tablet using the same master password. Changes that reached the tablet before the split are available to the new phone. Changes only on the lost phone are not recoverable from the tablet. The lost phone keeps its old copy; the new group ID and keys prevent it from joining the tablet's new chain without a new enrollment.
 
 Each remaining device must explicitly rejoin. Before replacing its old sync state, preserve and reconcile its local changes, including deletions and incomplete photo transfers. The current empty-destination enrollment flow is not sufficient for this recovery experience. A recovery wizard must never clear a populated device just to make pairing pass.
 
@@ -34,9 +40,9 @@ The lost phone retains its old contents. Devices that still belong to the old gr
 
 ## Leaving and removal
 
-With two members, "Stop sharing" currently keeps this device's contents and creates a fresh independent group. It also disables the old watch relationship, so the user must pair the watch again. This is a local split, not a general revocation implementation.
+Any active Android member can choose "Stop sharing on this device". It keeps its contents and creates a fresh independent group, and disables the old watch relationship. The old group does not learn a signed removal from this local action. Its manager must remove the departed identity later when group removal is implemented. If the manager leaves without transferring first, the others can still edit and sync but cannot manage membership in the old group. A survivor can also start a fresh group from its local copy and enroll a new empty phone. With two members, the existing peer-removal button uses the same local split.
 
-For three or four members, removing a device while keeping the others together requires a signed removal, fresh random group keys, authenticated delivery only to survivors, and rejection of removed identities. Updated peers must apply membership changes before exchanging more record data. Offline survivors need a defined path for publishing legitimate edits made under an older key epoch.
+For groups with three or four members, the manager must be able to remove another device while keeping the survivors together. This requires a signed removal, fresh random group keys, authenticated delivery only to survivors, and rejection of removed identities. Updated peers must apply membership changes before exchanging more record data. Offline survivors need a defined path for publishing legitimate edits made under an older key epoch. The manager should transfer authority before leaving if the old group must continue accepting membership changes.
 
 Self-detach and committed group removal are different states. If the user erases local data before a leave request reaches the manager, the app cannot promise to send it later using credentials it has erased. Either acknowledge removal first or explain that the owner must remove the device on the manager. Retaining a signed leave request requires an explicit bounded outbox design.
 
@@ -49,10 +55,10 @@ Use inactivity as a review reminder. Do not automatically remove a tablet after 
 | Show managing role and require local password before hosting | Implemented in this slice | Wrong password creates no invitation; secondary hosting fails before listening; secondary editing remains available |
 | Tablet create/edit pane and direct sidebar destinations | Implemented in this slice | Editor stays in right pane; draft survives resizing; navigation asks before discarding; narrow layout remains usable |
 | Vault codes tile with Passwords and TOTP tabs | Implemented in this slice | Search each category; never render or search password contents; copy only the selected field; retain private authenticated activity and sensitive clipboard marking |
-| Safe planned management transfer | Pending | Interrupted handoff and old-manager restart cannot create competing membership changes |
-| Recovery into a fresh group | Pending beyond existing two-device split | Keep records, photos, and unsynced surviving-device changes; reject old-group traffic after migration |
-| Removal while retaining three or four members | Pending | Removed device gets no new keys; offline survivors catch up without losing edits |
-| Common-password enrollment and update flow | Pending | Equality verification, incorrect-password handling, offline update, and rollback behavior reviewed and tested |
+| Safe planned management transfer | Signed offer, acceptance, and commit implemented in source; release checks pending | Final receipt, interruption, old-manager restart, and physical peer tests |
+| Recovery into a fresh group | Local split available on any active Android member; populated survivor rejoining pending | Keep records and photos; reconcile another surviving device's unsynced changes before it joins |
+| Manager removes another while survivors stay together | Pending | Removed device gets no new keys; offline survivors keep edits |
+| Common-password enrollment and update flow | Pairing equality check implemented; update flow pending | Incorrect-password and interruption tests, offline update, and rollback behavior reviewed and tested |
 | Verified checkpoints and cleanup | Pending | Preserve conflicts, deletion knowledge, photo references, and offline edits through compaction |
 | Physical-device release matrix | Pending | Pairing interruption, locked sync, photo interruption, storage pressure, and three-device convergence |
 

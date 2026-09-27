@@ -13,6 +13,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.privatevault.app.data.VaultEntry
@@ -24,51 +27,79 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
     val preferences = remember { context.getSharedPreferences("vault_preferences", android.content.Context.MODE_PRIVATE) }
     var keyboardSuggestions by remember { mutableStateOf(preferences.getBoolean("autofill_keyboard_suggestions", true)) }
     var unlockedProfiles by remember { mutableStateOf(preferences.getBoolean("autofill_unlocked_profiles", false)) }
-    Text("Password autofill", style = MaterialTheme.typography.titleSmall)
-    Text("Show accounts after unlocking", style = MaterialTheme.typography.titleSmall)
-    Column(Modifier.selectableGroup()) {
-        listOf(true to "Keyboard suggestions", false to "Account picker").forEach { (keyboard, label) ->
-            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(
-                selected = keyboardSuggestions == keyboard, role = Role.RadioButton,
-                onClick = {
-                    keyboardSuggestions = keyboard
-                    preferences.edit().putBoolean("autofill_keyboard_suggestions", keyboard).apply()
-                }), verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(selected = keyboardSuggestions == keyboard, onClick = null)
-                Text(label, Modifier.padding(start = 12.dp))
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Set up Autofill", modifier = Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium)
+            Text("Choose Nuvori in Android to fill saved logins in supported apps and websites.")
+            Button(onClick = {
+                context.startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE, Uri.parse("package:${context.packageName}")))
+            }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Choose Nuvori autofill") }
+            Text("Choosing Nuvori replaces your current Autofill provider. Linked native apps and exact HTTPS sites in verified Chrome and Brave releases can offer logins. Supported browser forms can offer Save after you unlock and confirm. The Vault codes tile still works with another provider.",
+                style = MaterialTheme.typography.bodySmall)
+            if (android.os.Build.VERSION.SDK_INT >= 34) {
+                Text("Modern Android apps use Credential Manager. Enable Nuvori there for passwords and passkeys as well.",
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = {
+                    runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
+                }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Enable passwords and passkeys") }
             }
         }
     }
-    Text(if (keyboardSuggestions) "Choose linked accounts in your keyboard. Choose another login opens the account picker and requires unlock again. Keyboards without inline support show an Android suggestion menu. Codes and password generation use the picker."
-        else "After unlocking, Nuvori opens the full account picker for search, selection and linking.", style = MaterialTheme.typography.bodySmall)
-    Text("Everyday details", style = MaterialTheme.typography.titleSmall)
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Offer saved details without vault unlock", Modifier.weight(1f))
-        Switch(checked = unlockedProfiles, onCheckedChange = { enabled ->
-            unlockedProfiles = enabled
-            preferences.edit().putBoolean("autofill_unlocked_profiles", enabled).apply()
-            if (enabled) refreshCopy()
-            else com.privatevault.app.autofill.UnlockedProfileStore(context).clear()
-        })
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Browsers and in-app pages", modifier = Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium)
+            Text("In Chrome or Brave, enable autofill using another service in the browser's settings. The browser must expose Android autofill fields. HTTP pages, mismatched subdomains, ambiguous forms and unverified browsers are rejected.",
+                style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = {
+                val intent = Intent(Intent.ACTION_APPLICATION_PREFERENCES).addCategory(Intent.CATEGORY_DEFAULT)
+                    .addCategory(Intent.CATEGORY_APP_BROWSER).addCategory(Intent.CATEGORY_PREFERENCE)
+                runCatching { context.startActivity(Intent.createChooser(intent, "Browser autofill settings")) }
+            }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Open browser autofill settings") }
+            Text("Embedded app pages", style = MaterialTheme.typography.titleSmall)
+            Text("In-app WebViews require you to choose a login after unlocking. The containing app can read filled credentials; approve only apps you trust. A website link does not authorize an embedded app. If nothing appears, open the page in Chrome or Brave, or copy from the Vault codes tile.",
+                style = MaterialTheme.typography.bodyMedium)
+        }
     }
-    Text("Off by default. When on, email, phone, name and address profiles get a separate device-encrypted copy for Autofill. They sync through the vault, then refresh here after this device unlocks. Anyone using your unlocked phone can choose these details without the vault password. Passwords and authenticator codes still require unlock.", style = MaterialTheme.typography.bodySmall)
-    Text("Selecting Nuvori replaces your current Autofill provider. Supports linked native apps and exact HTTPS websites in verified Chrome and Brave releases. Supported browser login forms can offer Save; unlock and confirm before creating or updating a login. The code tile still works if you keep another provider.", style = MaterialTheme.typography.bodySmall)
-    OutlinedButton(onClick = {
-        context.startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE, Uri.parse("package:${context.packageName}")))
-    }, modifier = Modifier.fillMaxWidth()) { Text("Choose Nuvori autofill") }
-    if (android.os.Build.VERSION.SDK_INT >= 34) {
-        Text("Modern Android apps use Credential Manager instead of the Autofill service. Enable Nuvori there for passwords and passkeys as well.", style = MaterialTheme.typography.bodySmall)
-        OutlinedButton(onClick = {
-            runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
-        }, modifier = Modifier.fillMaxWidth()) { Text("Enable passwords and passkeys") }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("How logins appear", modifier = Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium)
+            Text("Choose what you see after unlocking a login suggestion.", style = MaterialTheme.typography.bodySmall)
+            Column(Modifier.selectableGroup()) {
+                listOf(true to "Keyboard suggestions", false to "Account picker").forEach { (keyboard, label) ->
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(
+                        selected = keyboardSuggestions == keyboard, role = Role.RadioButton,
+                        onClick = {
+                            keyboardSuggestions = keyboard
+                            preferences.edit().putBoolean("autofill_keyboard_suggestions", keyboard).apply()
+                        }), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = keyboardSuggestions == keyboard, onClick = null)
+                        Text(label, Modifier.padding(start = 12.dp))
+                    }
+                }
+            }
+            Text(if (keyboardSuggestions) "Choose linked accounts in your keyboard. Choose another login opens the account picker and requires unlock again. Keyboards without inline support show an Android suggestion menu. Codes and password generation use the picker."
+                else "After unlocking, Nuvori opens the full account picker for search, selection and linking.",
+                style = MaterialTheme.typography.bodySmall)
+        }
     }
-    Text("In Chrome or Brave, enable autofill using another service in the browser's settings. Support depends on the browser exposing Android autofill fields. HTTP pages, mismatched subdomains, ambiguous forms and unverified browsers are rejected.", style = MaterialTheme.typography.bodySmall)
-    Text("In-app WebViews require you to choose a login after unlocking. The containing app can read filled credentials; approve only apps you trust. A website link does not authorize an embedded app. If nothing appears, open the page in Chrome or Brave, or copy from the Vault codes tile.", style = MaterialTheme.typography.bodySmall)
-    OutlinedButton(onClick = {
-        val intent = Intent(Intent.ACTION_APPLICATION_PREFERENCES).addCategory(Intent.CATEGORY_DEFAULT)
-            .addCategory(Intent.CATEGORY_APP_BROWSER).addCategory(Intent.CATEGORY_PREFERENCE)
-        runCatching { context.startActivity(Intent.createChooser(intent, "Browser autofill settings")) }
-    }, modifier = Modifier.fillMaxWidth()) { Text("Open browser autofill settings") }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Everyday details", modifier = Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Offer saved details without vault unlock", Modifier.weight(1f))
+                Switch(checked = unlockedProfiles, onCheckedChange = { enabled ->
+                    unlockedProfiles = enabled
+                    preferences.edit().putBoolean("autofill_unlocked_profiles", enabled).apply()
+                    if (enabled) refreshCopy()
+                    else com.privatevault.app.autofill.UnlockedProfileStore(context).clear()
+                }, modifier = Modifier.semantics { contentDescription = "Offer saved details without vault unlock" })
+            }
+            Text("Off by default. When on, email, phone, name and address profiles get a separate device-encrypted copy for Autofill. They sync through the vault, then refresh here after this device unlocks.",
+                style = MaterialTheme.typography.bodySmall)
+            Text("Anyone using your unlocked phone can choose these details without the vault password. Passwords and authenticator codes still require unlock.",
+                style = MaterialTheme.typography.bodyMedium)
+        }
+    }
 }
 
 @Composable

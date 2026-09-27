@@ -25,8 +25,12 @@ internal suspend fun VaultDatabase.prepareSyncGroup(identityStore: AndroidDevice
         require(events.isNotEmpty()) {
             "Existing device sync needs recovery before another phone can join"
         }
-        require(SyncMembershipManager.verify(events.map { it.toEvent() }).managerDeviceId == localDeviceId) {
+        val membership = SyncMembershipManager.verify(events.map { it.toEvent() })
+        require(membership.managerDeviceId == localDeviceId) {
             "Add devices from the managing device"
+        }
+        require(membership.pendingTransferDeviceId == null) {
+            "Finish the authority transfer before adding a device"
         }
         return@withTransaction
     }

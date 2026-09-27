@@ -105,13 +105,14 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                     EncryptedSyncChannel(frames, result.key, true).use { channel ->
                                         confirm(channel, result.confirmation)
                                         require(android.os.SystemClock.elapsedRealtime() < deadline) { "Pairing expired" }
+                                        socket.soTimeout = 300_000
                                         val existing = database.syncDao().membership(vaultId, result.peer.deviceId)
                                         require(existing != null || database.syncDao().activeMembershipCount(vaultId) < MAX_ACTIVE_SYNC_DEVICES) {
                                             "This vault already has $MAX_ACTIVE_SYNC_DEVICES active Android devices"
                                         }
                                         val member = SyncMembershipEntity.from(DeviceMembership(vaultId, result.peer.deviceId,
                                             "Android device", result.peer.publicKeyBase64Url, MemberStatus.ACTIVE, identity.deviceId,
-                                            (database.syncDao().memberships(vaultId).maxOfOrNull { it.membershipSequence } ?: 0L) + 1, 1))
+                                            database.syncDao().membershipEvents(vaultId).size + 1L, 1))
                                         mutableState.value = PairingUiState("transferring", message = "Sending the encrypted vault copy…")
                                         val admission = SyncChannelOutput(channel).use { output ->
                                             SyncSnapshot(context, database, EncryptedPhotoStore(context))
@@ -190,6 +191,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                             invitation.vault, false, result.peer)
                         EncryptedSyncChannel(frames, result.key, false).use { channel ->
                             confirm(channel, result.confirmation)
+                            socket.soTimeout = 300_000
                             mutableState.value = PairingUiState("transferring", message = "Receiving the encrypted vault copy…")
                             val snapshot = SyncSnapshot(context, database, EncryptedPhotoStore(context))
                             snapshot.prepare(SyncChannelInput(channel), key, result.key, invitation.vault, identity.deviceId,

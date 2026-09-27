@@ -266,4 +266,72 @@ class SyncSnapshotTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun thirdDeviceCanJoinAfterFirstPairExchangesChanges() = runBlocking {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        val root = File(base.cacheDir, "sync-third-${UUID.randomUUID()}").apply { mkdirs() }
+        val contexts = (1..3).map { TestContext(base, File(root, "device-$it"), UUID.randomUUID().toString()) }
+        val databases = contexts.map { Room.inMemoryDatabaseBuilder(it, VaultDatabase::class.java).build() }
+        val identities = contexts.map(::AndroidDeviceIdentityStore)
+        val keys = (1..3).map { ByteArray(32) { byte -> (it + byte).toByte() } }
+        val pairingKey = ByteArray(32) { 7 }
+        try {
+            val devices = identities.map { it.getOrCreate() }
+            databases[0].dao().saveSettings(VaultSettings(vaultId = "three-device-vault"))
+            databases[1].dao().saveSettings(VaultSettings(vaultId = "empty-b"))
+            databases[2].dao().saveSettings(VaultSettings(vaultId = "empty-c"))
+            databases[0].syncDao().upsertMembership(SyncMembershipEntity.from(DeviceMembership(
+                "three-device-vault", devices[0].deviceId, "Manager", devices[0].publicKeyBase64Url,
+                MemberStatus.ACTIVE, devices[0].deviceId, 1, 1)))
+            databases[0].prepareSyncGroup(identities[0])
+            suspend fun enroll(index: Int) {
+                val member = SyncMembershipEntity.from(DeviceMembership("three-device-vault",
+                    devices[index].deviceId, "Joining", devices[index].publicKeyBase64Url,
+                    MemberStatus.ACTIVE, devices[0].deviceId,
+                    databases[0].syncDao().membershipEvents("three-device-vault").size + 1L, 1))
+                val bytes = ByteArrayOutputStream()
+                val admission = SyncSnapshot(contexts[0], databases[0], EncryptedPhotoStore(contexts[0]))
+                    .export(bytes, keys[0], pairingKey, member)
+                SyncSnapshot(contexts[index], databases[index], EncryptedPhotoStore(contexts[index]))
+                    .also { snapshot ->
+                        snapshot.prepare(bytes.toByteArray().inputStream(), keys[index], pairingKey,
+                            "three-device-vault", devices[index].deviceId, devices[0]).use { snapshot.commit(it) }
+                    }
+                databases[0].syncDao().insertMembershipEvent(requireNotNull(admission))
+                databases[0].syncDao().upsertMembership(member)
+            }
+            enroll(1)
+            LocalEntryChangeWriter(databases[1], identities[1]).save(VaultEntry(id = "from-b",
+                type = EntryType.NOTE, title = "Edit after first pairing"), emptySet(), keys[1])
+            val change = databases[1].syncDao().operations().single()
+            assertEquals(IncomingResult.APPLIED,
+                IncomingEntryChangeApplier(databases[0]).apply(change, keys[0]))
+            val history = databases[0].syncDao().membershipEvents("three-device-vault")
+                .map { it.toEvent() }.toMutableList()
+            suspend fun append(action: MembershipAction, issuer: Int, subject: Int) {
+                val event = SyncMembershipEvent.sign("three-device-vault", history.size + 1L,
+                    history.last().hash, action, devices[issuer].deviceId, devices[subject].deviceId,
+                    "", 1, identities[issuer]::sign)
+                databases[0].syncDao().insertMembershipEvent(SyncMembershipEventEntity.from(event))
+                history += event
+            }
+            append(MembershipAction.OFFER_TRANSFER, 0, 1)
+            append(MembershipAction.ACCEPT_TRANSFER, 1, 1)
+            append(MembershipAction.TRANSFER, 0, 1)
+            append(MembershipAction.OFFER_TRANSFER, 1, 0)
+            append(MembershipAction.ACCEPT_TRANSFER, 0, 0)
+            append(MembershipAction.TRANSFER, 1, 0)
+            assertEquals(devices[0].deviceId, SyncMembershipManager.verify(history).managerDeviceId)
+            assertEquals(2L, databases[0].syncDao().memberships("three-device-vault")
+                .maxOf { it.membershipSequence })
+            enroll(2)
+            assertEquals("Edit after first pairing", databases[2].dao().entry("from-b")?.entry?.title)
+            assertEquals(9, databases[2].syncDao().membershipEvents("three-device-vault").size)
+        } finally {
+            databases.forEach { it.close() }
+            identities.forEach { it.clear() }
+            root.deleteRecursively()
+        }
+    }
 }

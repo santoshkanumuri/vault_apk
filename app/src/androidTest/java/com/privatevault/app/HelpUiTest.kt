@@ -24,8 +24,8 @@ class HelpUiTest {
                 }
             }
         }
-        compose.onNodeWithText("Which device shows the pairing QR?").performClick()
-        compose.onNodeWithText("It shows the QR.", substring = true).assertExists()
+        compose.onNodeWithText("Which device creates the pairing QR?").performScrollTo().performClick()
+        compose.onNodeWithText("The managing device creates the QR.", substring = true).assertExists()
         compose.onNodeWithText("Open Android devices").performScrollTo().performClick()
         compose.runOnIdle { assertEquals("Android devices", destination.value) }
         compose.onNodeWithText("How do I change the theme?").performScrollTo().performClick()

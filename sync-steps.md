@@ -1,12 +1,16 @@
 # Android sync implementation steps
 
-Updated: September 26, 2026.
+Updated: September 27, 2026.
 
 Status: implementation plan. The remaining work described here has not been completed by writing this document.
 
-Product decision, September 25, 2026: Nuvori serves one owner with personal phones, tablets, Windows computers, and a watch companion. Keep the four-active-Android-device limit. One managing device controls enrollment and membership; every enrolled device can edit offline and exchange signed changes directly. Keep per-device history and conflict preservation. See [Personal device sync](docs/PERSONAL-DEVICE-SYNC.md) for the agreed direction, password requirements, and ordered work still needed.
+2.0.9 pairing follow-up, September 27, 2026: A third device could fail immediately after matching-code confirmation when management had been transferred away and back. Pairing assigned the new member a sequence based on member rows, while the signed membership chain also contains transfer events. Enrollment now uses the next signed-event sequence. A three-device emulator test covers first pairing, an exchanged edit, transfer away and back, and the next snapshot. The Android devices page keeps setup status and actions together near the top. Physical three-device pairing and interruption checks remain open.
+
+Product decision, confirmed September 27, 2026: Nuvori serves one owner with personal phones, tablets, Windows computers, and a watch companion. Keep the four-active-Android-device limit. One managing device controls enrollment and removal and may transfer that role to a reachable paired device that accepts it. Every enrolled device can edit offline and exchange signed changes directly without the manager. Any member can leave locally, keep its vault copy, and start a new group. See [Personal device sync](docs/PERSONAL-DEVICE-SYNC.md) for the agreed direction, password requirements, and ordered work still needed.
 
 First implementation slice: Android devices settings identifies the managing device and disables hosting on secondary devices. Hosting requires local master-password verification before creating the QR invitation; the protocol also checks management authority before opening the pairing listener. The two-device split is labeled "Stop sharing" to distinguish it from revoking a member while preserving a larger group. Tablet creation and editing use the right detail pane, with draft preservation during window resizing and confirmation before navigation discards a draft. These changes do not complete transfer, recovery, or multi-device key rotation.
+
+September 27, 2026 source update: An active device can stop sharing from a two, three, or four device group. It keeps its local vault, starts a new vault ID and signed device chain with fresh content and transport keys, and drops the old group's local sync state. This is a local split. The old group has not received a signed removal and may still list the departed identity. Manager-authorized removal that keeps the survivors together remains pending; it needs per-survivor key delivery and epoch-aware transport and operation history. Planned authority transfer now has signed offer, recipient acceptance, and manager commit events carried by normal peer sync. Final receipt acknowledgement and physical interruption tests remain pending.
 
 Implementation update, September 24, 2026: The Android implementation now limits active membership to four devices, uses a separate group content key and transport credential, carries a signed membership history, and has an emulator test for direct sync between a second and third phone. The LAN exchange now persists separate received and applied heads. Locked receivers acknowledge ciphertext only after protected storage, and the device page shows the peer's reported progress for this phone's changes. Password-only conflicts are visible in review without displaying the secret. Automatic sync has Pause, Resume, Sync now, and retries after Wi-Fi address or NSD failures. These are implementation and emulator results, not completion of the release checklist below.
 
@@ -73,7 +77,7 @@ The release is ready when three Android devices can join one logical vault, edit
 
 ### Follow-up work
 
-- Windows vault and Windows sync.
+- Windows pairing, LAN exchange, incoming item application, and the remaining vault item types. The Windows SQLCipher vault now records cards, logins, authenticator codes, security questions, contact autofill profiles, and notes as Android-compatible signed local changes. It can verify and stage a bounded incoming operation batch, but these changes do not cross devices yet.
 - Internet relay, cloud hosting, and cross-network discovery.
 - Recovery Card creation and Recovery Card restore.
 - Browser extension integration.
@@ -214,15 +218,15 @@ Do not expand into Windows or a relay while these Android release gates remain o
 
 #### Accepted membership policy
 
-Use one designated managing device for membership changes in the first Android release. Ordinary record editing and direct data sync remain available on every active device. The managing device is needed to add/remove devices and transfer that management role.
+Use one designated managing device for enrollment and removal in the first Android release. Ordinary record editing and direct data sync remain available on every active device. A completed removal keeps all survivors in the same group with new keys.
 
-This product direction was accepted on September 25, 2026. It gives membership changes one signed order. Management operations need that device; ordinary edits and peer sync remain available without it. Show the managing role in the device list. Require local master-password verification before the manager hosts enrollment. Do not use that password as a shared network credential.
+This direction was confirmed on September 27, 2026. The linear signed membership chain gives control changes one order. A device must not advertise removal or transfer as complete until the new state is durable and the intended recipient has accepted a transfer. Show the managing role in the device list. Require local master-password verification before that device hosts enrollment. Do not use that password as a shared network credential.
 
-Provide an explicit role-transfer flow while the old managing device is available. If it is lost, a surviving unlocked device can start a new sync group with a new vault identity and fresh keys, retaining its local records and requiring remaining phones to enroll again. Clearly explain that unsynced data on the lost device cannot be recovered this way. Do not silently elect a new manager for the old group.
+Provide an explicit role-transfer flow while the old managing device and the paired recipient can connect and the recipient accepts. If the manager is lost, a surviving unlocked device can start a new sync group with a new vault identity and fresh keys, retaining its local records and enrolling a new empty phone. Other surviving populated devices need an explicit reconciliation flow before joining that new group. Unsynced data only on the lost device cannot be recovered.
 
 Before replacing a remaining phone's old group, preserve its local vault and unsynced changes in an encrypted backup. The new-group flow must include an explicit data-preservation/reconciliation step before the empty-destination enrollment requirement can be satisfied. Do not automatically clear populated phones to make re-enrollment pass.
 
-Do not automatically elect a manager or expire membership after 30 or 45 days. Inactivity may trigger a review reminder. Emergency recovery starts a fresh sync identity and keys, with explicit re-enrollment and reconciliation of surviving devices. Do not add a global sequence for ordinary edits or require the managing device to relay all data.
+Do not elect a successor based on inactivity or expire membership after 30 or 45 days. Inactivity may trigger a review reminder. Emergency recovery starts a fresh sync identity and keys, with explicit re-enrollment and reconciliation of surviving devices. Do not add a global sequence for ordinary edits or require the managing device to relay all data.
 
 #### Proposed transport direction
 
@@ -307,7 +311,7 @@ The locked store needs a device-protected index for encrypted queue items and ve
 
 1. Create a signed genesis membership event when the completed sync group is established.
 2. Bind each member's device ID, signing public key, transport identity, recipient envelope public key, role, and vault ID in admission records.
-3. Verify issuer authority at the preceding membership state. A newly arriving record cannot grant its own issuer authority.
+3. Verify issuer authority at the preceding membership state. Only the current manager authorizes additions, removals, and transfer. A newly arriving record cannot grant its own issuer authority.
 4. Keep immutable signed events and a materialized current-member table. Detect two different events claiming the same control-chain position; stop management updates and report the fork.
 5. Exchange missing membership history before ordinary vault operations. Validate it against the locally pinned genesis/control history, not against an identity merely advertised by the remote device.
 6. When A admits C, deliver C's admission proof to B. B verifies it, and B/C authenticate their own private identities directly. A's transport credential must not be sufficient for C to impersonate B.
@@ -351,7 +355,7 @@ Do not use the background transport private key to unwrap content keys. Otherwis
 
 #### Removal sequence
 
-1. Require an unlocked authorized managing device and explicit confirmation naming the device being removed.
+1. Require an unlocked managing device and explicit confirmation naming the other device being removed.
 2. Create a signed control change that removes the member, identifies the prior membership head, and advances the active key epoch.
 3. Generate a fresh random content key using the chosen library. Do not derive it from an old key the removed device already possesses.
 4. Create authenticated recipient-specific envelopes for every remaining active device. Use the reviewed public-key envelope suite selected in Step 0.
@@ -377,6 +381,7 @@ Do not use the background transport private key to unwrap content keys. Otherwis
 - [ ] Restart between database commit and mirror update never resumes using stale admission state.
 - [ ] Active offline work is preserved through rotation; removed-device work follows the documented cutoff.
 - [ ] Multiple old epochs remain readable until safely retired.
+- [ ] Manager-authorized removal preserves the group for surviving devices.
 - [ ] Managing-device transfer and the lost-manager new-group flow preserve local vault contents.
 
 ### Step 4. Recoverable enrollment and consistent snapshots

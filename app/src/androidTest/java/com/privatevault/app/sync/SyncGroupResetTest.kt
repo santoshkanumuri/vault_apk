@@ -12,6 +12,61 @@ import java.util.Base64
 import java.util.UUID
 
 class SyncGroupResetTest {
+    @Test fun secondaryCanLeaveThreeDeviceGroupWithoutErasingItsVault() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val identities = AndroidDeviceIdentityStore(context)
+        identities.clear()
+        val database = Room.inMemoryDatabaseBuilder(context, VaultDatabase::class.java).build()
+        val root = File(context.cacheDir, "sync-leave-${UUID.randomUUID()}")
+        val locked = LockedSyncStore(context, root)
+        try {
+            val local = identities.getOrCreate()
+            val managerSeed = ByteArray(32) { 7 }
+            val encoder = Base64.getUrlEncoder().withoutPadding()
+            val managerKey = encoder.encodeToString(DeviceIdentityCrypto.publicKey(managerSeed))
+            val thirdKey = encoder.encodeToString(DeviceIdentityCrypto.publicKey(ByteArray(32) { 8 }))
+            val signManager: (ByteArray) -> ByteArray = { DeviceIdentityCrypto.sign(managerSeed, it) }
+            val genesis = SyncMembershipEvent.sign("shared-vault", 1, GENESIS_HASH,
+                MembershipAction.GENESIS, "manager", "manager", managerKey, 1, signManager)
+            val localAdmission = SyncMembershipEvent.sign("shared-vault", 2, genesis.hash,
+                MembershipAction.ADD, "manager", local.deviceId, local.publicKeyBase64Url, 1, signManager)
+            val thirdAdmission = SyncMembershipEvent.sign("shared-vault", 3, localAdmission.hash,
+                MembershipAction.ADD, "manager", "third", thirdKey, 1, signManager)
+            database.dao().saveSettings(VaultSettings(vaultId = "shared-vault"))
+            database.syncDao().saveVaultState(SyncVaultStateEntity(vaultId = "shared-vault",
+                contentKey = encoder.encodeToString(ByteArray(32) { 3 }),
+                transportSecret = encoder.encodeToString(ByteArray(32) { 4 })))
+            listOf(genesis, localAdmission).forEach {
+                database.syncDao().insertMembershipEvent(SyncMembershipEventEntity.from(it))
+            }
+            SyncMembershipManager.verify(listOf(genesis, localAdmission)).members.forEach {
+                database.syncDao().upsertMembership(it)
+            }
+            assertTrue(runCatching { database.removeOnlyPairedDevice(identities, "manager") }.isFailure)
+            database.syncDao().insertMembershipEvent(SyncMembershipEventEntity.from(thirdAdmission))
+            database.syncDao().upsertMembership(
+                SyncMembershipManager.verify(listOf(genesis, localAdmission, thirdAdmission)).members.last())
+            database.dao().insertEntry(VaultEntry(id = "kept", type = EntryType.NOTE, title = "Keep me"))
+            locked.publish(database)
+
+            val newVaultId = database.leaveSyncGroup(identities)
+            locked.publish(database)
+
+            assertNotEquals("shared-vault", newVaultId)
+            assertEquals("Keep me", database.dao().entry("kept")?.entry?.title)
+            assertEquals(newVaultId, locked.snapshot()?.vaultId)
+            assertEquals(listOf(local.deviceId), database.syncDao().memberships(newVaultId).map { it.deviceId })
+            assertEquals(local.deviceId, SyncMembershipManager.verify(
+                database.syncDao().membershipEvents(newVaultId).map { it.toEvent() }).managerDeviceId)
+            database.prepareSyncGroup(identities)
+            assertEquals(newVaultId, database.syncDao().vaultState()?.vaultId)
+        } finally {
+            database.close()
+            identities.clear()
+            root.deleteRecursively()
+        }
+    }
+
     @Test fun removingOnlyPeerRotatesBothKeysAndKeepsLocalVault() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val identities = AndroidDeviceIdentityStore(context)

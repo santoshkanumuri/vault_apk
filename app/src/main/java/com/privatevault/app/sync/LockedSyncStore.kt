@@ -171,6 +171,12 @@ internal class LockedSyncStore(private val context: Context,
 
     @Synchronized fun peerProgress(deviceId: String): SyncProgress? = snapshot()?.peerProgress?.get(deviceId)
 
+    suspend fun hasPendingMembership(database: VaultDatabase): Boolean {
+        val mirror = snapshot() ?: return false
+        if (database.dao().settings()?.vaultId != mirror.vaultId) return false
+        return mirror.membershipEvents.size > database.syncDao().membershipEvents(mirror.vaultId).size
+    }
+
     @Synchronized fun recordPeerContact(deviceId: String, completed: Boolean) {
         val mirror = requireNotNull(snapshot())
         require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })

@@ -7,6 +7,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SyncProgressTest {
+    @Test fun matchesWindowsProgressEncoding() {
+        val progress = SyncProgress(
+            mapOf("phone" to SyncChainHead(2, "a".repeat(64)),
+                "windows" to SyncChainHead(0, GENESIS_HASH)),
+            mapOf("phone" to SyncChainHead(1, "b".repeat(64))),
+        )
+        val expected = """{"received":{"phone":[2,"${"a".repeat(64)}"],"windows":[0,"$GENESIS_HASH"]},"applied":{"phone":[1,"${"b".repeat(64)}"]}}"""
+        assertEquals(expected, progress.encode().toString(Charsets.UTF_8))
+        assertEquals(progress, SyncProgress.parse(expected.toByteArray()))
+    }
+
     @Test fun roundTripsExactCounters() {
         val head = SyncChainHead(9_007_199_254_740_993L, "a".repeat(64))
         val progress = SyncProgress(mapOf("phone" to head), mapOf("phone" to head))

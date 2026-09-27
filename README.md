@@ -29,9 +29,9 @@ The screenshots contain synthetic demonstration data only.
 
 ## Download
 
-**[Download Nuvori 2.0.6 phone preview APK](downloads/nuvori-v2.0.6-phone.apk?raw=true)**
+**[Download Nuvori 2.0.7 phone preview APK](downloads/nuvori-v2.0.7-phone.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.0.6.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.0.7.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 
@@ -41,7 +41,7 @@ For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Pa
 
 ## Features
 
-- **First-run guide:** four short pages explain saved items, local security, and moving data. Create a vault, then open encrypted-backup restore or password import from the final choice.
+- **First-run guide:** four short pages explain saved items, local security, and device sync. Choose a new vault, join an existing vault, restore a backup, or import browser passwords.
 - **Cards:** credit/debit cards, number, cardholder, expiry, CVV, notes, and photos. Choose from 34 colors and browse all cards in a stacked or expanded view. Copy individual fields; revealing or copying a CVV requires biometric authentication.
 - **Passwords and security questions:** save login details and answers, with notes and photos.
 - **Linked logins:** generate a 24-character password locally and link an existing authenticator to a login. View its code alongside the login without duplicating the setup key. Removing the login keeps the authenticator.

@@ -29,18 +29,23 @@ data class PairingTranscript(
     }.toByteArray()
 }
 
-/** One-time J-PAKE exchange. The 24-digit code never becomes a stored device key. */
+/** One-time J-PAKE exchange. Pairing codes and password proofs never become stored device keys. */
 class PairingCrypto private constructor(private val participant: JPAKEParticipant) {
     constructor(participantId: String, code: CharArray) : this(createParticipant(participantId, code, false))
     private var keyingMaterial: BigInteger? = null
 
     companion object {
+        internal fun masterPassword(participantId: String, password: CharArray) =
+            PairingCrypto(createParticipant(participantId, password, false, masterPassword = true))
+
         internal fun transport(participantId: String, secret: CharArray) =
             PairingCrypto(createParticipant(participantId, secret, true))
 
-        private fun createParticipant(id: String, secret: CharArray, transport: Boolean): JPAKEParticipant = try {
+        private fun createParticipant(id: String, secret: CharArray, transport: Boolean,
+            masterPassword: Boolean = false): JPAKEParticipant = try {
             require(id.isNotBlank())
             if (transport) require(secret.size == 43 && java.util.Base64.getUrlDecoder().decode(secret.concatToString()).size == 32)
+            else if (masterPassword) require(secret.size >= 12)
             else require(secret.size == PAIRING_CODE_DIGITS && secret.all { it in '0'..'9' })
             JPAKEParticipant(id, secret)
         } finally { secret.fill('\u0000') }

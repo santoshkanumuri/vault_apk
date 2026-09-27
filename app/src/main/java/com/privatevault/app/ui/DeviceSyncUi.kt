@@ -14,6 +14,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.animateContentSize
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircleOutline
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.HourglassEmpty
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.WifiFind
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -42,6 +49,7 @@ import com.privatevault.app.sync.MemberStatus
 import com.privatevault.app.sync.SyncConflictReview
 import com.privatevault.app.sync.SyncConflictSide
 import com.privatevault.app.sync.DevicePeerStatus
+import com.privatevault.app.sync.PeerSyncCounts
 import com.privatevault.app.data.SyncMembershipEntity
 import com.privatevault.app.sync.isPrivateAddress
 import kotlinx.coroutines.launch
@@ -93,10 +101,18 @@ private fun SyncStageTrail(phase: DeviceSyncPhase, modifier: Modifier = Modifier
 @Composable
 private fun SyncStatusTag(label: String, phase: DeviceSyncPhase) {
     val tone = syncTone(phase)
+    val icon = when (phase) {
+        DeviceSyncPhase.TRANSFERRING -> Icons.Outlined.Sync
+        DeviceSyncPhase.CHECKED -> Icons.Outlined.CheckCircleOutline
+        DeviceSyncPhase.ATTENTION -> Icons.Outlined.ErrorOutline
+        DeviceSyncPhase.FOUND, DeviceSyncPhase.CONNECTING -> Icons.Outlined.Link
+        DeviceSyncPhase.SEARCHING -> Icons.Outlined.WifiFind
+        else -> Icons.Outlined.HourglassEmpty
+    }
     Surface(color = tone.background, shape = RoundedCornerShape(10.dp)) {
         Row(Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(7.dp).background(tone.accent, CircleShape))
+            Icon(icon, contentDescription = null, tint = tone.accent, modifier = Modifier.size(16.dp))
             Text(label, style = MaterialTheme.typography.labelSmall, color = tone.foreground,
                 maxLines = 1)
         }
@@ -104,29 +120,33 @@ private fun SyncStatusTag(label: String, phase: DeviceSyncPhase) {
 }
 
 @Composable
-internal fun DeviceSyncState(status: DeviceSyncStatus, connected: Int, nearby: Int, paired: Int) {
+internal fun DeviceSyncState(status: DeviceSyncStatus, connected: Int, paired: Int,
+    waiting: Int = 0) {
     val tone = syncTone(status.phase)
+    val hasWaitingChanges = waiting > 0 && status.phase == DeviceSyncPhase.CHECKED
     Surface(Modifier.fillMaxWidth().animateContentSize(),
         shape = RoundedCornerShape(20.dp), color = tone.background) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.size(12.dp).background(tone.accent, CircleShape))
-                Text(status.phase.title, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                Text(if (hasWaitingChanges) "Changes still waiting" else status.phase.title,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold, color = tone.foreground)
             }
-            Text(status.detail, style = MaterialTheme.typography.bodySmall, color = tone.foreground,
+            Text(if (hasWaitingChanges) "The last exchange finished. Some changes still need delivery or application."
+                else status.detail, style = MaterialTheme.typography.bodySmall, color = tone.foreground,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (status.phase == DeviceSyncPhase.CONNECTING || status.phase == DeviceSyncPhase.TRANSFERRING)
                 LinearProgressIndicator(Modifier.fillMaxWidth(), color = tone.accent,
                     trackColor = tone.accent.copy(alpha = .24f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(Triple(connected, "Connected", if (connected > 0) MaterialTheme.colorScheme.primary
+                listOf(Triple(waiting, "Waiting", if (waiting > 0) MaterialTheme.colorScheme.primary
                     else tone.foreground),
-                    Triple(nearby, "Nearby", if (nearby == 0) tone.foreground
+                    Triple(connected, "Syncing", if (connected == 0) tone.foreground
                     else if (MaterialTheme.colorScheme.background.luminance() > .5f)
                         Color(0xFF225F99) else Color(0xFF9DCEFF)),
-                    Triple(paired, "Paired", tone.foreground)).forEach { (count, label, color) ->
+                    Triple(paired, "Devices", tone.foreground)).forEach { (count, label, color) ->
                     Column(Modifier.weight(1f)) {
                         Text("$count", style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold, color = color)
@@ -292,16 +312,23 @@ internal fun DeviceSyncSelfCard(device: SyncMembershipEntity, isManager: Boolean
 internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean,
     status: DevicePeerStatus?, lastContact: Long, lastExchange: Long, progress: String,
     savedAddress: String, canRemove: Boolean, showRemove: Boolean,
-    onTryAddress: (String) -> Unit, onRemove: () -> Unit) {
-    val peerLabel = when (status?.phase) {
-        DeviceSyncPhase.CONNECTING -> "Verifying"
-        DeviceSyncPhase.TRANSFERRING -> "Connected"
-        DeviceSyncPhase.CHECKED -> "Check complete"
-        DeviceSyncPhase.RECEIVED -> "More to sync"
-        DeviceSyncPhase.ATTENTION -> "Check failed"
-        DeviceSyncPhase.SEARCHING -> "Looking"
-        else -> "Not connected"
+    onTryAddress: (String) -> Unit, onRemove: () -> Unit,
+    counts: PeerSyncCounts = PeerSyncCounts(0, 0, 0, 0), advanced: Boolean = true) {
+    val needsCheck = counts.toSend > 0 || counts.toReceiveHere > 0 || counts.toApplyHere > 0 ||
+        counts.receivedThere > 0
+    val peerLabel = when {
+        status?.phase == DeviceSyncPhase.TRANSFERRING -> "Syncing"
+        status?.phase == DeviceSyncPhase.CONNECTING -> "Verifying"
+        status?.phase == DeviceSyncPhase.ATTENTION -> "Needs attention"
+        counts.toApplyHere > 0 -> "Waiting to apply"
+        needsCheck -> "Changes waiting"
+        status?.phase == DeviceSyncPhase.SEARCHING || status?.phase == DeviceSyncPhase.FOUND -> "Looking"
+        lastExchange > 0 -> "Checked"
+        else -> "Not checked yet"
     }
+    val displayPhase = if (needsCheck && status?.phase !in setOf(DeviceSyncPhase.TRANSFERRING,
+            DeviceSyncPhase.CONNECTING, DeviceSyncPhase.ATTENTION)) DeviceSyncPhase.RECEIVED
+        else status?.phase ?: DeviceSyncPhase.WAITING
     var address by rememberSaveable(device.deviceId) { mutableStateOf(savedAddress) }
     var showAddress by rememberSaveable(device.deviceId) { mutableStateOf(false) }
     LaunchedEffect(savedAddress) { if (!showAddress) address = savedAddress }
@@ -313,22 +340,39 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                 Column(Modifier.weight(1f)) {
                     Text(device.displayName, style = MaterialTheme.typography.titleSmall,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${if (isManager) "Managing device" else "Paired device"} · ${device.deviceId.take(8)}",
+                    Text(if (isManager) "Manages this sync group" else "In this sync group",
                         style = MaterialTheme.typography.labelSmall)
                 }
-                SyncStatusTag(peerLabel, status?.phase ?: DeviceSyncPhase.WAITING)
+                SyncStatusTag(peerLabel, displayPhase)
             }
-            Text(status?.detail ?: "No live connection. Tap Sync now to check this device.",
+            Text(when {
+                status?.phase == DeviceSyncPhase.TRANSFERRING -> "Sending and receiving encrypted changes."
+                status?.phase == DeviceSyncPhase.CONNECTING -> "Confirming this is your paired device."
+                status?.phase == DeviceSyncPhase.ATTENTION -> status.detail
+                counts.toSend > 0 -> "${counts.toSend} change${if (counts.toSend == 1L) "" else "s"} from this device still need to reach it."
+                counts.toApplyHere > 0 -> "${counts.toApplyHere} received change${if (counts.toApplyHere == 1L) "" else "s"} still need to apply here."
+                counts.toReceiveHere > 0 -> "Changes from this device are waiting to arrive here."
+                counts.receivedThere > 0 -> "It received changes and still needs to apply them."
+                lastExchange > 0 -> "The last check finished with no known changes waiting."
+                else -> "Linked to your vault. Waiting for the first check."
+            },
                 style = MaterialTheme.typography.bodySmall,
-                color = syncTone(status?.phase ?: DeviceSyncPhase.WAITING).foreground,
+                color = syncTone(displayPhase).foreground,
                 maxLines = if (status?.phase == DeviceSyncPhase.ATTENTION) 3 else 2,
                 overflow = TextOverflow.Ellipsis)
+            if (status?.phase == DeviceSyncPhase.TRANSFERRING)
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (advanced) {
             status?.let { SyncStageTrail(it.phase) }
             if (lastContact > 0) Text("Last verified · ${dateFormat.format(Date(lastContact))}",
                 style = MaterialTheme.typography.bodySmall)
             if (lastExchange > 0) Text("Last exchange · ${dateFormat.format(Date(lastExchange))}",
                 style = MaterialTheme.typography.bodySmall)
             if (progress.isNotBlank()) Text(progress, style = MaterialTheme.typography.bodySmall)
+            Text("To send: ${counts.toSend} · To apply here: ${counts.toApplyHere}",
+                style = MaterialTheme.typography.bodySmall)
+            Text("Received there, not applied: ${counts.receivedThere} · Known changes to receive: ${counts.toReceiveHere}",
+                style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { showAddress = !showAddress }, modifier = Modifier.weight(1f)) {
                     Text(if (showAddress) "Hide help" else "Connection help")
@@ -353,12 +397,14 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                 OutlinedButton(onClick = { onTryAddress(address) }, enabled = validAddress,
                     modifier = Modifier.fillMaxWidth()) { Text("Try this address") }
             }
+            }
         }
     }
 }
 
 @Composable
-internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) -> Unit) {
+internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) -> Unit,
+    joiningExisting: Boolean = false) {
     val state by viewModel.devicePairingState.collectAsStateWithLifecycle()
     val memberships by viewModel.pairedDevices.collectAsStateWithLifecycle()
     val localDevice by viewModel.localSyncDevice.collectAsStateWithLifecycle()
@@ -374,10 +420,22 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     val devices = memberships.filter { it.status == MemberStatus.ACTIVE.name }
     val activeDeviceCount = 1 + devices.size
     val connectedCount = devices.count { peerStatuses[it.deviceId]?.phase == DeviceSyncPhase.TRANSFERRING }
+    val counts = devices.associate { it.deviceId to viewModel.deviceSyncCounts(it.deviceId) }
+    val waitingCount = counts.values.count { it.toSend > 0 || it.toApplyHere > 0 ||
+        it.toReceiveHere > 0 || it.receivedThere > 0 }
     var link by remember { mutableStateOf("") }
     var showLink by rememberSaveable { mutableStateOf(false) }
     var showPairing by rememberSaveable { mutableStateOf(false) }
     var showSchedule by rememberSaveable { mutableStateOf(false) }
+    var showAdvanced by rememberSaveable { mutableStateOf(false) }
+    var joinLink by rememberSaveable { mutableStateOf<String?>(null) }
+    var joinPassword by rememberSaveable { mutableStateOf("") }
+    var changeJoinPassword by rememberSaveable { mutableStateOf(false) }
+    var oldJoinPassword by rememberSaveable { mutableStateOf("") }
+    var newJoinPassword by rememberSaveable { mutableStateOf("") }
+    var confirmJoinPassword by rememberSaveable { mutableStateOf("") }
+    var joinError by remember { mutableStateOf<String?>(null) }
+    var joining by remember { mutableStateOf(false) }
     var reviewConflictId by rememberSaveable { mutableStateOf<String?>(null) }
     var scanner by remember { mutableStateOf(false) }
     var permissionDenied by remember { mutableStateOf(false) }
@@ -403,7 +461,8 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     DisposableEffect(Unit) { onDispose { viewModel.cancelDevicePairing() } }
 
     if (devices.isEmpty()) {
-        Text("Connect another Android device to sync over Wi-Fi.",
+        Text(if (joiningExisting) "On the managing device, open Android devices and create a pairing link. Scan its QR here."
+            else "Connect another Android device to sync over Wi-Fi.",
             style = MaterialTheme.typography.bodyMedium)
         Text("Keep both devices unlocked during setup. The joining device needs an empty vault.",
             style = MaterialTheme.typography.bodySmall)
@@ -417,7 +476,10 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     }
 
     if (devices.isNotEmpty()) {
-        DeviceSyncState(syncStatus, connectedCount, nearbyCount, activeDeviceCount - 1)
+        Text("Your sync group", style = MaterialTheme.typography.titleMedium)
+        Text("These devices share one vault. Each keeps its own copy and catches up when connected.",
+            style = MaterialTheme.typography.bodySmall)
+        DeviceSyncState(syncStatus, connectedCount, activeDeviceCount - 1, waitingCount)
     }
     if (devices.isNotEmpty()) Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -494,7 +556,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     if (devices.isEmpty() || showPairing || state.stage !in setOf("idle", "paired")) Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text("Pair a device", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+            Text("Add a device to this vault", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                 if (devices.isNotEmpty() && state.stage in setOf("idle", "paired"))
                     TextButton(onClick = { showPairing = false }) { Text("Close") }
             }
@@ -511,7 +573,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     }
                     Image(bitmap.asImageBitmap(), "Temporary pairing QR code",
                         Modifier.widthIn(max = 320.dp).fillMaxWidth().aspectRatio(1f))
-                    Text("This link grants vault access after confirmation. Share it only with the device you are pairing.",
+                    Text("Use this link on an empty device with the same master password. Confirm the matching code before the vault copy begins.",
                         style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { copyLink(state.invitation) }, modifier = Modifier.weight(1f)) {
@@ -546,15 +608,17 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                         Text("Start a new pairing invitation from the managing device. You can still scan its QR code here.",
                             style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { passwordError = null; verifyPairing = true },
+                        if (!joiningExisting) Button(onClick = { passwordError = null; verifyPairing = true },
                             enabled = canHostPairing, modifier = Modifier.weight(1f)) {
-                            Text(if (activeDeviceCount < MAX_ACTIVE_SYNC_DEVICES) "Connect" else "Reconnect")
+                        Text(if (activeDeviceCount < MAX_ACTIVE_SYNC_DEVICES) "Create pairing link" else "Reconnect")
                         }
                         OutlinedButton(onClick = {
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                                 PackageManager.PERMISSION_GRANTED) scanner = true
                             else cameraPermission.launch(Manifest.permission.CAMERA)
-                        }, modifier = Modifier.weight(1f)) { Text("Scan QR") }
+                        }, modifier = if (joiningExisting) Modifier.fillMaxWidth() else Modifier.weight(1f)) {
+                            Text("Scan QR")
+                        }
                     }
                     if (permissionDenied) Text("Camera access was denied. Paste the setup link instead.")
                     TextButton(onClick = { showLink = !showLink }) {
@@ -564,9 +628,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                         OutlinedTextField(link, { link = it }, label = { Text("Setup link from the other device") },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth(), maxLines = 3)
-                        OutlinedButton(onClick = { viewModel.joinDevicePairing(link); link = "" },
+                        OutlinedButton(onClick = { joinLink = link; link = "" },
                             enabled = link.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
-                            Text("Join that vault")
+                            Text("Continue pairing")
                         }
                     }
                 }
@@ -576,7 +640,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
 
     if (devices.isNotEmpty()) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Your devices", style = MaterialTheme.typography.titleMedium,
+            Text("Devices in this vault", style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f))
             Text("$activeDeviceCount of $MAX_ACTIVE_SYNC_DEVICES",
                 style = MaterialTheme.typography.labelSmall)
@@ -598,12 +662,45 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                 savedAddress = viewModel.deviceSyncAddress(device.deviceId),
                 canRemove = canRemoveOnlyPeer, showRemove = canRemoveOnlyPeer || activeDeviceCount > 2,
                 onTryAddress = { viewModel.setDeviceSyncAddress(device.deviceId, it) },
-                onRemove = { removeDeviceId = device.deviceId })
+                onRemove = { removeDeviceId = device.deviceId },
+                counts = counts.getValue(device.deviceId), advanced = false)
         }
         if (canHostPairing && !showPairing && state.stage in setOf("idle", "paired"))
             OutlinedButton(onClick = { showPairing = true }, modifier = Modifier.fillMaxWidth()) {
                 Text("Add another device")
             }
+    }
+
+    if (devices.isNotEmpty()) Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp).animateContentSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Advanced settings", style = MaterialTheme.typography.titleMedium)
+                    Text("Change counts, last checks, and connection help",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = { showAdvanced = !showAdvanced }) {
+                    Text(if (showAdvanced) "Hide" else "Show")
+                }
+            }
+            if (showAdvanced) {
+                Text("$nearbyCount nearby Nuvori service${if (nearbyCount == 1) "" else "s"} found on Wi-Fi. Nearby does not mean paired.",
+                    style = MaterialTheme.typography.bodySmall)
+                Text("Counts describe known changes at the last contact. Another device may have newer changes until the next check.",
+                    style = MaterialTheme.typography.bodySmall)
+                devices.forEach { device ->
+                    val (lastContact, lastExchange) = viewModel.deviceSyncContact(device.deviceId)
+                    DeviceSyncPeerCard(device = device, isManager = device.deviceId == managerDeviceId,
+                        status = peerStatuses[device.deviceId], lastContact = lastContact,
+                        lastExchange = lastExchange, progress = viewModel.deviceSyncProgress(device.deviceId),
+                        savedAddress = viewModel.deviceSyncAddress(device.deviceId),
+                        canRemove = canRemoveOnlyPeer, showRemove = canRemoveOnlyPeer || activeDeviceCount > 2,
+                        onTryAddress = { viewModel.setDeviceSyncAddress(device.deviceId, it) },
+                        onRemove = { removeDeviceId = device.deviceId },
+                        counts = counts.getValue(device.deviceId))
+                }
+            }
+        }
     }
 
     conflicts.firstOrNull { it.id == reviewConflictId }?.let { conflict ->
@@ -612,9 +709,82 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             reviewConflictId = null
         }
     }
-    if (scanner) QrScanner(onResult = { value -> scanner = false; viewModel.joinDevicePairing(value) },
+    if (scanner) QrScanner(onResult = { value -> scanner = false; joinLink = value },
         close = { scanner = false }, title = "Scan Nuvori pairing QR",
         help = "Scan the QR shown on the other device. Keep both devices unlocked on the same Wi-Fi.")
+    if (joinLink != null) AlertDialog(
+        onDismissRequest = {
+            if (joining) return@AlertDialog
+            joinLink = null; joinPassword = ""; oldJoinPassword = ""; newJoinPassword = ""
+            confirmJoinPassword = ""; changeJoinPassword = false; joinError = null
+        },
+        title = { Text(if (changeJoinPassword) "Use the same password" else "Check this device's password") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Both devices must use the same master password. Nothing is copied until they match.")
+                joinError?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+                if (changeJoinPassword) {
+                    Text("This changes the password for this empty vault, then starts pairing.",
+                        style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(oldJoinPassword, { oldJoinPassword = it },
+                        label = { Text("Current password on this device") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(newJoinPassword, { newJoinPassword = it },
+                        label = { Text("Password used on managing device") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(confirmJoinPassword, { confirmJoinPassword = it },
+                        label = { Text("Confirm new password") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+                        isError = confirmJoinPassword.isNotEmpty() && confirmJoinPassword != newJoinPassword,
+                        supportingText = { if (confirmJoinPassword.isNotEmpty() && confirmJoinPassword != newJoinPassword)
+                            Text("Passwords do not match") })
+                } else {
+                    OutlinedTextField(joinPassword, { joinPassword = it },
+                        label = { Text("This device's master password") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                    TextButton(onClick = { changeJoinPassword = true; oldJoinPassword = joinPassword; joinPassword = "" }) {
+                        Text("Change this empty vault's password")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val currentLink = requireNotNull(joinLink)
+                val currentPassword = if (changeJoinPassword) oldJoinPassword.toCharArray()
+                    else joinPassword.toCharArray()
+                val replacementPassword = if (changeJoinPassword) newJoinPassword.toCharArray() else null
+                joining = true; joinError = null
+                scope.launch {
+                    try {
+                        if (replacementPassword != null)
+                            viewModel.changePasswordAndJoinDevice(currentLink, currentPassword, replacementPassword)
+                        else viewModel.joinDevicePairing(currentLink, currentPassword)
+                        joinPassword = ""; oldJoinPassword = ""; newJoinPassword = ""
+                        confirmJoinPassword = ""; changeJoinPassword = false; joinLink = null
+                    } catch (_: java.security.GeneralSecurityException) {
+                        joinError = "The current password on this device is incorrect."
+                    } catch (error: Exception) {
+                        joinError = error.message ?: "Could not start pairing. Try again."
+                    } finally {
+                        currentPassword.fill('\u0000'); replacementPassword?.fill('\u0000')
+                        joining = false
+                    }
+                }
+            }, enabled = !joining && if (changeJoinPassword) oldJoinPassword.isNotEmpty() &&
+                newJoinPassword.length >= 12 && newJoinPassword == confirmJoinPassword
+                else joinPassword.isNotEmpty()) {
+                Text(if (joining) "Checking…" else if (changeJoinPassword) "Change and pair" else "Verify and pair")
+            }
+        },
+        dismissButton = { TextButton(onClick = {
+            joinError = null
+            if (changeJoinPassword) {
+                changeJoinPassword = false; oldJoinPassword = ""; newJoinPassword = ""; confirmJoinPassword = ""
+            } else { joinLink = null; joinPassword = "" }
+        }, enabled = !joining) { Text(if (changeJoinPassword) "Back" else "Cancel") } })
     removeDeviceId?.let { deviceId ->
         AlertDialog(onDismissRequest = { removeDeviceId = null },
             title = { Text("Remove this device from sync?") },
@@ -632,7 +802,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         title = { Text("Verify before connecting") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Enter this device's master password to create a temporary pairing QR code. Your password stays on this device.")
+                Text("Enter this vault's master password. The new device must use the same password before it can receive a copy.")
                 OutlinedTextField(pairingPassword, { pairingPassword = it; passwordError = null },
                     label = { Text("Master password") }, singleLine = true,
                     visualTransformation = PasswordVisualTransformation(), enabled = !verifyingPassword,

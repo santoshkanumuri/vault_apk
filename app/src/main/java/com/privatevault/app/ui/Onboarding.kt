@@ -33,6 +33,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CreditCard
+import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
@@ -63,7 +64,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
-internal enum class FirstRunChoice { NEW, RESTORE, BROWSER_IMPORT }
+internal enum class FirstRunChoice { NEW, JOIN, RESTORE, BROWSER_IMPORT }
 
 private data class IntroPage(
     val icon: ImageVector,
@@ -77,11 +78,12 @@ private val introPages = listOf(
         "Keep cards, logins, authenticator codes, questions, and notes in one place.",
         listOf(Icons.Outlined.CreditCard to "Cards and photos", Icons.Outlined.Key to "Passwords and passkeys", Icons.Outlined.Timer to "Authenticator codes")),
     IntroPage(Icons.Outlined.Lock, "Private by design",
-        "Your vault stays on this device. It works offline and has no account or cloud sync.",
-        listOf(Icons.Outlined.Password to "A master password protects your vault", Icons.Outlined.Fingerprint to "Fingerprint access after setup", Icons.Outlined.CloudOff to "No Internet permission")),
-    IntroPage(Icons.Outlined.Backup, "Bring your data over",
-        "Restore an encrypted Nuvori backup, or import passwords from a Chrome or Brave CSV after setup.",
-        listOf(Icons.Outlined.Security to "Backups need their original password", Icons.Outlined.Key to "Browser CSV files contain readable passwords"))
+        "Your vault works offline. You can choose to share encrypted changes with your own devices over local Wi-Fi, without an account or cloud sync.",
+        listOf(Icons.Outlined.Password to "A master password protects your vault", Icons.Outlined.Fingerprint to "Fingerprint access after setup", Icons.Outlined.CloudOff to "No cloud account")),
+    IntroPage(Icons.Outlined.Devices, "One vault on your devices",
+        "Pair an empty device on the same Wi-Fi, confirm its code, then give it a copy of your vault. Later changes catch up when the devices connect again.",
+        listOf(Icons.Outlined.Password to "Use the same master password on both devices",
+            Icons.Outlined.Security to "Pairing verifies the device before copying data"))
 )
 
 @OptIn(ExperimentalAnimationApi::class)
@@ -129,6 +131,8 @@ internal fun OnboardingScreen(
                             style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             ChoiceRow(FirstRunChoice.NEW, choice, Icons.Outlined.Key, "New vault", "Start with an empty vault") { choice = it }
+                            ChoiceRow(FirstRunChoice.JOIN, choice, Icons.Outlined.Devices,
+                                "Join an existing vault", "Scan the managing device's QR after setup") { choice = it }
                             ChoiceRow(FirstRunChoice.RESTORE, choice, Icons.Outlined.Backup, "Restore a backup", "Use an encrypted .pvault file") { choice = it }
                             ChoiceRow(FirstRunChoice.BROWSER_IMPORT, choice, Icons.Outlined.Password, "Import browser passwords", "Choose a Chrome or Brave CSV") { choice = it }
                         }

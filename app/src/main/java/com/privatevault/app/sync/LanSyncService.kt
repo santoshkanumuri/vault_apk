@@ -34,15 +34,15 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 enum class DeviceSyncPhase(val title: String) {
-    OFF("Sync is off"),
-    PAUSED("Automatic sync paused"),
+    OFF("Device sync is off"),
+    PAUSED("Sync paused"),
     WAITING("Waiting for Wi-Fi"),
-    SEARCHING("Looking on Wi-Fi"),
-    FOUND("Nuvori found nearby"),
-    CONNECTING("Verifying connection"),
-    TRANSFERRING("Exchanging changes"),
-    RECEIVED("More to sync"),
-    CHECKED("Exchange complete"),
+    SEARCHING("Looking for your devices"),
+    FOUND("Device found nearby"),
+    CONNECTING("Verifying device"),
+    TRANSFERRING("Syncing changes"),
+    RECEIVED("Changes still waiting"),
+    CHECKED("Last check complete"),
     ATTENTION("Sync needs attention")
 }
 

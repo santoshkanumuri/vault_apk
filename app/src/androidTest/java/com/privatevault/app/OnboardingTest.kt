@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
@@ -46,6 +47,18 @@ class OnboardingTest {
         compose.runOnIdle { assertEquals(FirstRunChoice.BROWSER_IMPORT, selected) }
     }
 
+    @Test fun joiningExistingVaultIsAnOnboardingChoice() {
+        var selected: FirstRunChoice? = null
+        compose.setContent {
+            MaterialTheme {
+                OnboardingScreen(3, {}, { selected = it }, {})
+            }
+        }
+        compose.onNodeWithText("Join an existing vault", useUnmergedTree = true).performScrollTo().performClick()
+        compose.onNodeWithText("Start").performClick()
+        compose.runOnIdle { assertEquals(FirstRunChoice.JOIN, selected) }
+    }
+
     @Test fun startStaysVisibleOnShortScreenWithLargeText() {
         val page = mutableIntStateOf(3)
         compose.setContent {
@@ -70,6 +83,6 @@ class OnboardingTest {
         compose.setContent {
             MaterialTheme { SettingsDialog(model, FirstRunChoice.BROWSER_IMPORT) {} }
         }
-        compose.onNodeWithText("Choose password CSV").assertIsDisplayed()
+        compose.onNodeWithText("Choose password export").assertIsDisplayed()
     }
 }

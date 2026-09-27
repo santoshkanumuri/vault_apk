@@ -62,3 +62,21 @@ internal data class SyncProgress(
         }
     }
 }
+
+internal data class PeerSyncCounts(val toSend: Long, val toApplyHere: Long,
+    val receivedThere: Long, val toReceiveHere: Long)
+
+internal fun peerSyncCounts(localId: String, peerId: String, local: SyncProgress,
+    peer: SyncProgress?): PeerSyncCounts {
+    if (peer == null) return PeerSyncCounts(0, 0, 0, 0)
+    val localWritten = local.applied[localId]?.sequence ?: 0L
+    val remoteReceived = peer.received[localId]?.sequence ?: 0L
+    val remoteApplied = peer.applied[localId]?.sequence ?: 0L
+    val peerWrittenAtLastCheck = peer.applied[peerId]?.sequence ?: 0L
+    val localReceived = local.received[peerId]?.sequence ?: 0L
+    val localApplied = local.applied[peerId]?.sequence ?: 0L
+    return PeerSyncCounts((localWritten - remoteReceived).coerceAtLeast(0),
+        (localReceived - localApplied).coerceAtLeast(0),
+        (remoteReceived - remoteApplied).coerceAtLeast(0),
+        (peerWrittenAtLastCheck - localReceived).coerceAtLeast(0))
+}

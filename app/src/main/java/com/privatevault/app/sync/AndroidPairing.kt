@@ -30,7 +30,7 @@ data class PairingUiState(val stage: String = "idle", val invitation: String = "
 
 internal data class PairingInvitation(val address: String, val port: Int, val session: String,
     val vault: String, val code: String) {
-    fun encode(): String = "nuvori-pair://v2/" + Base64.getUrlEncoder().withoutPadding().encodeToString(
+    fun encode(): String = "nuvori-pair://v3/" + Base64.getUrlEncoder().withoutPadding().encodeToString(
         JsonObject().apply {
             addProperty("address", address); addProperty("port", port); addProperty("session", session)
             addProperty("vault", vault); addProperty("code", code)
@@ -38,8 +38,8 @@ internal data class PairingInvitation(val address: String, val port: Int, val se
 
     companion object {
         fun decode(value: String): PairingInvitation {
-            require(value.length <= 2048 && value.startsWith("nuvori-pair://v2/")) { "Invalid pairing link" }
-            val json = JsonParser.parseString(Base64.getUrlDecoder().decode(value.removePrefix("nuvori-pair://v2/"))
+            require(value.length <= 2048 && value.startsWith("nuvori-pair://v3/")) { "Invalid pairing link" }
+            val json = JsonParser.parseString(Base64.getUrlDecoder().decode(value.removePrefix("nuvori-pair://v3/"))
                 .toString(Charsets.UTF_8)).asJsonObject
             val result = PairingInvitation(json.get("address").asString, json.get("port").asInt,
                 json.get("session").asString, json.get("vault").asString, json.get("code").asString)
@@ -62,10 +62,11 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
     @Volatile private var connection: Socket? = null
     @Volatile private var approval: CompletableDeferred<Boolean>? = null
 
-    fun host(database: VaultDatabase, localKey: ByteArray) {
+    fun host(database: VaultDatabase, localKey: ByteArray, masterPassword: CharArray) {
         val previous = job
         cancel()
         val key = localKey.copyOf()
+        val password = masterPassword.copyOf()
         job = scope.launch {
             var committedHost = false
             try {
@@ -99,6 +100,8 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                 val result = pairingHandshake(frames, identity, invitation.code.toCharArray(),
                                     invitation.session, vaultId, true)
                                 try {
+                                    verifyMasterPassword(frames, identity, password, invitation.session,
+                                        vaultId, true, result.peer)
                                     EncryptedSyncChannel(frames, result.key, true).use { channel ->
                                         confirm(channel, result.confirmation)
                                         require(android.os.SystemClock.elapsedRealtime() < deadline) { "Pairing expired" }
@@ -151,15 +154,16 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                 } else mutableState.value = PairingUiState("failed", message =
                     pairingFailure(failure, mutableState.value.stage))
             }
-            finally { listener?.close(); listener = null; key.fill(0) }
+            finally { listener?.close(); listener = null; key.fill(0); password.fill('\u0000') }
         }
     }
 
-    fun join(database: VaultDatabase, localKey: ByteArray, link: String) {
+    fun join(database: VaultDatabase, localKey: ByteArray, link: String, masterPassword: CharArray) {
         val previous = job
         cancel()
         mutableState.value = PairingUiState("connecting", message = "QR read. Checking the invitation…")
         val key = localKey.copyOf()
+        val password = masterPassword.copyOf()
         job = scope.launch {
             var committedJoin = false
             try {
@@ -182,6 +186,8 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                     val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
                     val result = pairingHandshake(frames, identity, invitation.code.toCharArray(), invitation.session, invitation.vault, false)
                     try {
+                        verifyMasterPassword(frames, identity, password, invitation.session,
+                            invitation.vault, false, result.peer)
                         EncryptedSyncChannel(frames, result.key, false).use { channel ->
                             confirm(channel, result.confirmation)
                             mutableState.value = PairingUiState("transferring", message = "Receiving the encrypted vault copy…")
@@ -200,7 +206,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                 LanSyncService.store(context).recordPeerAddress(result.peer.deviceId,
                                     invitation.address)
                             }
-                            mutableState.value = PairingUiState("paired", message = "Vault received. Your master password and lock settings are unchanged.")
+                            mutableState.value = PairingUiState("paired", message = "Vault received. Both devices use the same master password.")
                         }
                     } finally { result.key.fill(0) }
                 }
@@ -208,7 +214,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
             catch (failure: Exception) { mutableState.value = if (committedJoin)
                 PairingUiState("paired", message = "Vault received. The other phone may still be waiting for confirmation.")
                 else PairingUiState("failed", message = pairingFailure(failure, mutableState.value.stage)) }
-            finally { connection = null; key.fill(0) }
+            finally { connection = null; key.fill(0); password.fill('\u0000') }
         }
     }
 
@@ -235,6 +241,16 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
         require(channel.receive().contentEquals("approved".toByteArray())) { "The other phone did not approve" }
     }
 
+    private fun verifyMasterPassword(frames: SyncFrames, identity: DeviceIdentity, password: CharArray,
+        session: String, vaultId: String, creator: Boolean, peer: DeviceIdentity) {
+        try {
+            pairingHandshake(frames, identity, password.copyOf(), "$session-master", vaultId,
+                creator, expectedPeer = peer, masterPassword = true).key.fill(0)
+        } catch (_: Exception) {
+            throw IllegalArgumentException("The master passwords do not match. Use the same password on both devices.")
+        }
+    }
+
     private fun wifi(): Pair<Network, InetAddress> {
         val manager = context.getSystemService(ConnectivityManager::class.java)
         for (network in manager.allNetworks) {
@@ -253,6 +269,7 @@ private fun pairingFailure(failure: Exception, stage: String): String = when {
     failure.message == "This vault is already paired" ->
         "This vault is already paired. Use Sync now instead of scanning the QR again."
     failure.message == "Connect to Wi-Fi to pair" -> "Connect this phone to Wi-Fi and try again."
+    failure.message?.startsWith("The master passwords do not match") == true -> failure.message!!
     failure.message == "Invalid pairing link" || failure.message == "Pair using the same Wi-Fi" ->
         "The QR is not a valid local pairing invitation. Generate a new QR on the other phone."
     failure is ConnectException || failure is java.net.NoRouteToHostException ->

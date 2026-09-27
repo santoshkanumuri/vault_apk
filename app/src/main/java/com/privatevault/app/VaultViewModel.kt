@@ -146,6 +146,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    internal fun deviceSyncCounts(deviceId: String): com.privatevault.app.sync.PeerSyncCounts {
+        val mirror = lockedSyncStore.snapshot() ?: return com.privatevault.app.sync.PeerSyncCounts(0, 0, 0, 0)
+        return com.privatevault.app.sync.peerSyncCounts(mirror.localDeviceId, deviceId,
+            lockedSyncStore.progress(), mirror.peerProgress[deviceId])
+    }
+
     fun deviceSyncAddress(deviceId: String): String =
         lockedSyncStore.snapshot()?.peerAddresses?.get(deviceId).orEmpty()
     fun deviceSyncContact(deviceId: String): Pair<Long, Long> {
@@ -974,6 +980,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun changePassword(current: CharArray, replacement: CharArray) = securedLaunch {
         try {
+            val db = requireNotNull(database)
+            val vaultId = requireNotNull(db.dao().settings()).vaultId
+            require(db.syncDao().activeMembershipCount(vaultId) <= 1) {
+                "Master password changes are unavailable while devices share a vault. Remove paired devices first."
+            }
             keyManager.changePassword(current, replacement)
             biometricGate.clearDailySession()
             _requestDailyBiometric.value = true
@@ -1136,12 +1147,41 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             check(database === activeDatabase && sessionKey === activeKey && _status.value is VaultStatus.Unlocked) {
                 "Vault locked during verification. Unlock and try again."
             }
-            devicePairing.host(activeDatabase, activeKey)
+            devicePairing.host(activeDatabase, activeKey, password)
         } finally { password.fill('\u0000') }
     }
 
-    fun joinDevicePairing(link: String) = securedLaunch {
-        devicePairing.join(requireNotNull(database), requireNotNull(sessionKey), link)
+    suspend fun joinDevicePairing(link: String, password: CharArray) {
+        try {
+            val verified = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                keyManager.unlock(password)
+            }
+            try { require(java.security.MessageDigest.isEqual(verified, requireNotNull(sessionKey))) {
+                "Incorrect master password on this device"
+            } } finally { verified.fill(0) }
+            devicePairing.join(requireNotNull(database), requireNotNull(sessionKey), link, password)
+        } finally { password.fill('\u0000') }
+    }
+
+    suspend fun changePasswordAndJoinDevice(link: String, current: CharArray, replacement: CharArray) {
+        try {
+            require(replacement.size >= com.privatevault.app.security.PasswordCrypto.MIN_PASSWORD_LENGTH) {
+                "Use at least 12 characters for the new master password"
+            }
+            com.privatevault.app.sync.PairingInvitation.decode(link.trim())
+            val db = requireNotNull(database)
+            val vaultId = requireNotNull(db.dao().settings()).vaultId
+            require(db.syncDao().activeMembershipCount(vaultId) <= 1 &&
+                db.dao().allEntries().isEmpty() && db.dao().allPasskeys().isEmpty() &&
+                db.dao().allGroupsWithEntries().isEmpty()) {
+                "Change the password here only for an empty, unpaired vault"
+            }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                keyManager.changePassword(current, replacement)
+            }
+            biometricGate.clearDailySession()
+            devicePairing.join(db, requireNotNull(sessionKey), link, replacement)
+        } finally { current.fill('\u0000'); replacement.fill('\u0000') }
     }
 
     fun approveDevicePairing() { touch(); devicePairing.approve() }

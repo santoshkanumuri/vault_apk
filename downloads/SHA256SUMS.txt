@@ -1,2 +1,4 @@
 d81651b13f9edf42851d54c6be91c71890e68c898570ef4733f014ceb289d57b  nuvori-v2.0.6-phone.aab
 b2eded26b8f1106c54c52783e9ee0bc4ed6584152b4b1efffff3cf8f75c2d32e  nuvori-v2.0.6-phone.apk
+0d01df6e4c331f2275ecc96152e3ed667e116d6febadb7b8de59006ac5b9fa36  nuvori-v2.0.7-phone.aab
+4f30e560895d494e23f7b0cf602fa3c8fa1dbf38c2f3c81894ee0a208f35bf1e  nuvori-v2.0.7-phone.apk

@@ -299,7 +299,8 @@ private fun SetupScreen(viewModel: VaultViewModel, firstRunChoice: FirstRunChoic
     val valid = password.length >= PasswordCrypto.MIN_PASSWORD_LENGTH && password == confirm
     BackHandler(onBack = onBack)
     val description = when (firstRunChoice) {
-        FirstRunChoice.NEW -> "Your master password cannot be recovered."
+        FirstRunChoice.NEW -> "Your master password cannot be recovered. To pair this empty device with an existing vault, use that vault's master password."
+        FirstRunChoice.JOIN -> "Create an empty vault with the same master password as your managing device. After setup, scan its pairing QR. If the passwords differ, you can change this empty vault's password on the pairing screen."
         FirstRunChoice.RESTORE -> "Create a password for this phone. You will enter the backup's original password next."
         FirstRunChoice.BROWSER_IMPORT -> "Create your encrypted vault first. Then choose your Chrome or Brave password CSV."
     }
@@ -309,7 +310,7 @@ private fun SetupScreen(viewModel: VaultViewModel, firstRunChoice: FirstRunChoic
         Text("Use at least ${PasswordCrypto.MIN_PASSWORD_LENGTH} characters. A long phrase is easier to remember.", style = MaterialTheme.typography.bodySmall)
         NfcPreference(enableNfc, viewModel.nfcSupported) { enableNfc = it }
         Button(onClick = { viewModel.setup(password.toCharArray(), enableNfc); password = ""; confirm = "" }, enabled = valid, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-            Text("Create vault")
+            Text(if (firstRunChoice == FirstRunChoice.JOIN) "Create and continue" else "Create vault")
         }
     }
 }
@@ -1981,12 +1982,17 @@ private fun SecurityChoices(title: String, explanation: String, selected: Long, 
 internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: FirstRunChoice? = null,
     copyPairingLink: (String) -> Unit = {}, initialPage: String? = null, close: () -> Unit) {
     val passkeys by viewModel.passkeys.collectAsStateWithLifecycle()
+    val pairedDevices by viewModel.pairedDevices.collectAsStateWithLifecycle()
     val savedAuthenticatorEntries by viewModel.entries.collectAsStateWithLifecycle()
     val passkeyTransfer by viewModel.passkeyTransferPreview.collectAsStateWithLifecycle()
     val passwordDuplicateReview by viewModel.passwordDuplicateReview.collectAsStateWithLifecycle()
     var deletePasskey by remember { mutableStateOf<com.privatevault.app.data.PasskeySummary?>(null) }
     var confirmPasswordDuplicateDelete by remember { mutableStateOf(false) }
-    var page by remember { mutableStateOf<String?>(if (initialImportChoice != null) "Backup and import" else initialPage) }
+    var page by remember { mutableStateOf<String?>(when (initialImportChoice) {
+        FirstRunChoice.JOIN -> "Android devices"
+        FirstRunChoice.RESTORE, FirstRunChoice.BROWSER_IMPORT -> "Backup and import"
+        else -> initialPage
+    }) }
     var pendingInterval by remember { mutableStateOf<Long?>(null) }
     var authenticatorPages by remember { mutableStateOf<Map<Int, com.privatevault.app.security.AuthenticatorTransferPage>>(emptyMap()) }
     var authenticatorBatchId by remember { mutableIntStateOf(0) }
@@ -2104,7 +2110,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
           }
           Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().align(Alignment.CenterHorizontally).weight(1f).verticalScroll(pageScroll).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (page == null) {
-                listOf("Security" to "Master password and lock behavior", "Android devices" to "Pair another phone on the same Wi-Fi", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Watch codes" to "Sync authenticator codes to a Wear OS watch", "Import authenticator codes" to "Transfer TOTP codes from another app", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and password exports", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "About" to "Privacy and security limits").forEach { (name, description) ->
+                listOf("Security" to "Master password and lock behavior", "Android devices" to "Pair another phone on the same Wi-Fi", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Watch codes" to "Sync authenticator codes to a Wear OS watch", "Import authenticator codes" to "Transfer TOTP codes from another app", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and password exports", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "Help" to "Answers and shortcuts for common tasks", "About" to "Privacy and security limits").forEach { (name, description) ->
                     Card(Modifier.fillMaxWidth().clickable { page = name }) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(name, style = MaterialTheme.typography.titleMedium)
@@ -2120,7 +2126,11 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     modifier = Modifier.semantics { contentDescription = "Light mode" })
             }
             }
-            if (page == "Android devices") DeviceSyncSettings(viewModel, copyPairingLink)
+            if (page == "Android devices") DeviceSyncSettings(viewModel, copyPairingLink,
+                joiningExisting = initialImportChoice == FirstRunChoice.JOIN)
+            if (page == "Help") HelpPage { destination ->
+                if (destination == "Vault") close() else page = destination
+            }
             if (page == "Passkeys") {
                 Text("Create passkeys from a supported website in Chrome or Brave. They are encrypted with your vault and included in backups. Deleting one here does not remove its registration on the website.")
                 if (android.os.Build.VERSION.SDK_INT >= 34) {
@@ -2258,7 +2268,12 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     else viewModel.setMasterPasswordInterval(value)
                 }
                 Text("Changing this interval ends the current fingerprint session. Enter your master password after the next lock to start a new one.", style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = { action = "password" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Change master password") }
+                if (pairedDevices.any { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name })
+                    Text("Paired devices must keep the same master password. Remove paired devices before changing it.",
+                        style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = { action = "password" },
+                    enabled = pairedDevices.none { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Change master password") }
                 OutlinedButton(onClick = { viewModel.lock(LockReason.MANUAL); close() }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Lock now") }
             }
             if (page == "Confirm interval") {

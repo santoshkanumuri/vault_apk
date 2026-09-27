@@ -196,23 +196,29 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
     }
 
     internal fun decrypt(change: SyncChangeRecord, vaultKey: ByteArray): JSONObject {
-        require(change.payloadCiphertext.length <= 1_500_000) { "Sync payload is too large" }
-        val ciphertext = Base64.getUrlDecoder().decode(change.payloadCiphertext)
-        val nonce = Base64.getUrlDecoder().decode(change.payloadNonce)
-        require(nonce.size == 12 && ciphertext.size <= 1_048_592) { "Invalid sync payload size" }
-        val payloadKey = Mac.getInstance("HmacSHA256").run {
-            init(SecretKeySpec(vaultKey, "HmacSHA256"))
-            doFinal("nuvori-sync-payload-key-v1".toByteArray())
-        }
-        return try {
-            val plaintext = Cipher.getInstance("AES/GCM/NoPadding").run {
-                init(Cipher.DECRYPT_MODE, SecretKeySpec(payloadKey, "AES"), GCMParameterSpec(128, nonce))
-                updateAAD("nuvori-sync-${change.entityType}-v1:${change.vaultId}:${change.mutationId}:${change.entityId}".toByteArray())
-                doFinal(ciphertext)
+        val plaintext = decryptBytes(change, vaultKey)
+        return try { JSONObject(plaintext.toString(Charsets.UTF_8)) }
+        finally { plaintext.fill(0) }
+    }
+
+    companion object {
+        internal fun decryptBytes(change: SyncChangeRecord, vaultKey: ByteArray): ByteArray {
+            require(change.payloadCiphertext.length <= 1_500_000) { "Sync payload is too large" }
+            val ciphertext = Base64.getUrlDecoder().decode(change.payloadCiphertext)
+            val nonce = Base64.getUrlDecoder().decode(change.payloadNonce)
+            require(nonce.size == 12 && ciphertext.size <= 1_048_592) { "Invalid sync payload size" }
+            val payloadKey = Mac.getInstance("HmacSHA256").run {
+                init(SecretKeySpec(vaultKey, "HmacSHA256"))
+                doFinal("nuvori-sync-payload-key-v1".toByteArray())
             }
-            try { JSONObject(plaintext.toString(Charsets.UTF_8)) }
-            finally { plaintext.fill(0) }
-        } finally { payloadKey.fill(0) }
+            return try {
+                Cipher.getInstance("AES/GCM/NoPadding").run {
+                    init(Cipher.DECRYPT_MODE, SecretKeySpec(payloadKey, "AES"), GCMParameterSpec(128, nonce))
+                    updateAAD("nuvori-sync-${change.entityType}-v1:${change.vaultId}:${change.mutationId}:${change.entityId}".toByteArray())
+                    doFinal(ciphertext)
+                }
+            } finally { payloadKey.fill(0) }
+        }
     }
 
     private fun parseEntry(json: JSONObject, expectedId: String): VaultEntry = try {

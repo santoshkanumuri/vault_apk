@@ -13,6 +13,21 @@ import java.util.concurrent.TimeUnit
 
 class SyncWireTest {
     @Test
+    fun encryptedFrameMatchesWindowsVector() {
+        val output = ByteArrayOutputStream()
+        val key = ByteArray(32) { it.toByte() }
+        EncryptedSyncChannel(SyncFrames(ByteArrayInputStream(byteArrayOf()), output), key, true).use {
+            it.send("windows-android-sync".toByteArray(Charsets.UTF_8))
+        }
+        val frame = output.toByteArray()
+        assertEquals(frame.size - 4, java.nio.ByteBuffer.wrap(frame, 0, 4).int)
+        assertEquals(
+            "c6bf8d52186446c6a0760af477e17f3612ffb6790074337508693195cc8a3233e63802a7",
+            frame.drop(4).joinToString("") { "%02x".format(it) },
+        )
+    }
+
+    @Test
     fun peersAuthenticateAndExchangeEncryptedFrames() {
         val executor = Executors.newSingleThreadExecutor()
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { server ->
@@ -45,6 +60,41 @@ class SyncWireTest {
                     }
                     assertEquals(result.confirmation, future.get(15, TimeUnit.SECONDS))
                 }
+            } finally { executor.shutdownNow() }
+        }
+    }
+
+    @Test
+    fun pairingRequiresTheSameMasterPasswordBeforeTransfer() {
+        val executor = Executors.newSingleThreadExecutor()
+        ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { server ->
+            val creator = DeviceIdentity("creator", DeviceIdentityCrypto.publicKey(ByteArray(32) { 1 }))
+            val joiner = DeviceIdentity("joiner", DeviceIdentityCrypto.publicKey(ByteArray(32) { 2 }))
+            val future = executor.submit<Boolean> {
+                server.accept().use { socket ->
+                    socket.soTimeout = 10_000
+                    val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
+                    val first = pairingHandshake(frames, creator, "123456789012345678901234".toCharArray(),
+                        "session", "vault", true)
+                    try {
+                        runCatching { pairingHandshake(frames, creator, "correct master phrase".toCharArray(),
+                            "session-master", "vault", true, first.peer, masterPassword = true) }.isFailure
+                    } finally { first.key.fill(0) }
+                }
+            }
+            try {
+                Socket(InetAddress.getLoopbackAddress(), server.localPort).use { socket ->
+                    socket.soTimeout = 10_000
+                    val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
+                    val first = pairingHandshake(frames, joiner, "123456789012345678901234".toCharArray(),
+                        "session", "vault", false)
+                    try {
+                        assertTrue(runCatching { pairingHandshake(frames, joiner,
+                            "different master phrase".toCharArray(), "session-master", "vault",
+                            false, first.peer, masterPassword = true) }.isFailure)
+                    } finally { first.key.fill(0) }
+                }
+                assertTrue(future.get(15, TimeUnit.SECONDS))
             } finally { executor.shutdownNow() }
         }
     }

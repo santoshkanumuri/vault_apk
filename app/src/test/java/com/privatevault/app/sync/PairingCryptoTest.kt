@@ -17,6 +17,20 @@ class PairingCryptoTest {
         assertTrue(runCatching { exchange(creator, joiner, transcript) }.isFailure)
     }
 
+    @Test fun matchingMasterPasswordsProveEqualityWithoutSendingThePassword() {
+        val transcript = PairingTranscript("session-master", "vault-a", "device-a", "public-a",
+            "device-b", "public-b")
+        val first = PairingCrypto.masterPassword("device-a", "shared master phrase".toCharArray())
+        val second = PairingCrypto.masterPassword("device-b", "shared master phrase".toCharArray())
+        val keys = exchange(first, second, transcript)
+        assertArrayEquals(keys.first, keys.second)
+        keys.first.fill(0); keys.second.fill(0)
+
+        val wrong = PairingCrypto.masterPassword("device-b", "different master phrase".toCharArray())
+        val host = PairingCrypto.masterPassword("device-a", "shared master phrase".toCharArray())
+        assertTrue(runCatching { exchange(host, wrong, transcript) }.isFailure)
+    }
+
     private fun peers(leftCode: String, rightCode: String) = Triple(
         PairingCrypto("device-a", leftCode.toCharArray()), PairingCrypto("device-b", rightCode.toCharArray()),
         PairingTranscript("session-a", "vault-a", "device-a", "public-a", "device-b", "public-b"),

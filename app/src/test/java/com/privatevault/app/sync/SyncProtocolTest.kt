@@ -90,6 +90,22 @@ class SyncProtocolTest {
         assertTrue(DeviceIdentityCrypto.verify(publicKey, change.signingBytes(), signature))
         assertTrue(!DeviceIdentityCrypto.verify(publicKey, change.copy(entityId = "changed").signingBytes(), signature))
     }
+
+    @Test
+    fun decryptsWindowsPayloadVectorAndRejectsAnotherRecordId() {
+        val change = SyncChangeRecord(
+            SYNC_FORMAT_VERSION, "vault-a", "device-a", 1, GENESIS_HASH, "mutation-a",
+            "entry", "entry-a", ChangeKind.DELETE, 0, RecordVersion(mapOf("device-a" to 1)),
+            "2026-09-22T12:00:00Z", "LWKXFqeXgeG1ZfM7H4dtiB0qQdbDdDeINRqisF0MXKk",
+            "AAECAwQFBgcICQoL", "test-signature", "",
+        )
+        val key = ByteArray(32) { it.toByte() }
+
+        assertEquals("{\"deleted\":true}", IncomingEntryChangeApplier.decryptBytes(change, key).toString(Charsets.UTF_8))
+        assertThrows(javax.crypto.AEADBadTagException::class.java) {
+            IncomingEntryChangeApplier.decryptBytes(change.copy(entityId = "another-entry"), key)
+        }
+    }
 }
 
 private data class FoundationFixture(

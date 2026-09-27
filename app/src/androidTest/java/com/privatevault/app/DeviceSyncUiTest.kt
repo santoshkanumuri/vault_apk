@@ -21,6 +21,7 @@ import com.privatevault.app.sync.DeviceSyncPhase
 import com.privatevault.app.sync.DeviceSyncStatus
 import com.privatevault.app.sync.SyncConflictReview
 import com.privatevault.app.sync.SyncConflictSide
+import com.privatevault.app.sync.PeerSyncCounts
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -38,7 +39,7 @@ class DeviceSyncUiTest {
                 Column(Modifier.requiredWidth(320.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     DeviceSyncState(DeviceSyncStatus(DeviceSyncPhase.TRANSFERRING,
-                        "Connected securely. Sending and receiving encrypted changes."), 1, 2, 1)
+                        "Connected securely. Sending and receiving encrypted changes."), 1, 1)
                     DeviceSyncPeerCard(device, false,
                         DevicePeerStatus(DeviceSyncPhase.TRANSFERRING, "Encrypted changes are being exchanged."),
                         0, 0, "This device's changes: 2 received, 1 applied", "192.168.1.12",
@@ -46,10 +47,10 @@ class DeviceSyncUiTest {
                 }
             }
         }
-        compose.onNodeWithText("Exchanging changes").assertExists()
-        compose.onNodeWithText("2").assertExists()
+        compose.onNodeWithText("Syncing changes").assertExists()
+        compose.onNodeWithText("Devices").assertExists()
         compose.onNodeWithText("Living room tablet").assertExists()
-        compose.onAllNodesWithText("Connected", useUnmergedTree = true).assertCountEquals(2)
+        compose.onAllNodesWithText("Syncing", useUnmergedTree = true).assertCountEquals(2)
         val screenshot = File(InstrumentationRegistry.getInstrumentation().targetContext
             .getExternalFilesDir(null), "sync-ui-review.png")
         screenshot.outputStream().use {
@@ -112,5 +113,19 @@ class DeviceSyncUiTest {
         compose.onNodeWithText("Device name").performTextReplacement("My phone")
         compose.onNodeWithText("Save name").performClick()
         compose.runOnIdle { assertEquals("My phone", saved.value) }
+    }
+
+    @Test fun completedExchangeWithPendingChangesStaysVisible() {
+        val device = SyncMembershipEntity("vault", "peer-12345678", "Tablet", "key",
+            "ACTIVE", "owner", 1, 1)
+        compose.setContent {
+            MaterialTheme(colorScheme = VaultLightColors) {
+                DeviceSyncPeerCard(device, false, DevicePeerStatus(DeviceSyncPhase.CHECKED,
+                    "Encrypted exchange completed."), 1, 1, "", "", false, false, {}, {},
+                    PeerSyncCounts(2, 0, 0, 0), advanced = false)
+            }
+        }
+        compose.onNodeWithText("Changes waiting").assertExists()
+        compose.onNodeWithText("2 changes from this device still need to reach it.").assertExists()
     }
 }

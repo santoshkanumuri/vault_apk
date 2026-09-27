@@ -52,8 +52,12 @@ internal data class HandshakeResult(val peer: DeviceIdentity, val key: ByteArray
 /** J-PAKE authenticates the shared secret; its result binds both public device identities. */
 internal fun pairingHandshake(frames: SyncFrames, local: DeviceIdentity, code: CharArray,
     sessionId: String, vaultId: String, creator: Boolean, expectedPeer: DeviceIdentity? = null,
-    transport: Boolean = false): HandshakeResult {
-    val crypto = if (transport) PairingCrypto.transport(local.deviceId, code) else PairingCrypto(local.deviceId, code)
+    transport: Boolean = false, masterPassword: Boolean = false): HandshakeResult {
+    val crypto = when {
+        transport -> PairingCrypto.transport(local.deviceId, code)
+        masterPassword -> PairingCrypto.masterPassword(local.deviceId, code)
+        else -> PairingCrypto(local.deviceId, code)
+    }
     val hello = frames.exchange(JsonObject().apply {
         addProperty("protocol", SYNC_WIRE_VERSION)
         addProperty("session", sessionId)

@@ -1,6 +1,6 @@
 # Nuvori 2.0.6 preview
 
-Phone version code 46. The Wear companion is unchanged. The refreshed phone APK and AAB are in `downloads/`.
+Phone version code 47. The Wear companion is unchanged. The refreshed phone APK and AAB are in `downloads/`.
 
 - Android devices now shows a compact overview and each paired device's connection stage, last contact, last exchange, and received/applied progress. The notification counts connected, nearby, and paired devices. Nearby devices are discovered on Wi-Fi; their identity is only trusted after authentication.
 - Failed discovery, stale addresses, and transfer failures trigger a shorter retry. A manual check waits for an active encrypted transfer to finish. Each device can set its own name; that name is signed and shared with its paired devices.

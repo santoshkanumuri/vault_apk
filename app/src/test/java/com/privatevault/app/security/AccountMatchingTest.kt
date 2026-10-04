@@ -49,6 +49,14 @@ class AccountMatchingTest {
         assertFalse("Other" in titles)
     }
 
+    @Test fun sharedHostingSitesAreSeparateServices() {
+        assertEquals("evil", siteKeyword("https://evil.github.io"))
+        assertTrue(possibleLoginMatches(listOf(login("Docs", "https://docs.github.io")), "com.android.chrome", null,
+            "https://evil.github.io").isEmpty())
+        assertTrue(possibleLoginMatches(listOf(login("Shop", "https://shop.vercel.app")), "com.android.chrome", null,
+            "https://phish.vercel.app").isEmpty())
+    }
+
     @Test fun websiteMatchesSameNameOnAnotherCountrySite() {
         val entries = listOf(login("Shop", "https://www.amazon.com"), login("Radio", "https://www.bbc.co.uk"))
         assertEquals(listOf("Shop"),

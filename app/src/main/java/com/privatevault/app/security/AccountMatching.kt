@@ -23,6 +23,10 @@ private val multiPartSuffixes = setOf(
     "com.ec", "com.my", "org.my", "net.my", "edu.my", "gov.my", "com.ph", "org.ph", "net.ph", "com.vn",
     "com.pk", "com.bd", "com.ng", "com.eg", "com.sa", "com.ua", "com.pl", "co.il", "org.il", "co.id",
     "or.id", "web.id", "ac.id", "go.id", "co.th", "in.th", "ac.th", "co.ke", "co.tz", "co.ug", "co.ae",
+    // Shared hosting: every customer site sits under these, so they act like public suffixes.
+    "github.io", "gitlab.io", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "web.app", "firebaseapp.com",
+    "appspot.com", "herokuapp.com", "blogspot.com", "azurewebsites.net", "cloudfront.net", "onrender.com",
+    "glitch.me", "wixsite.com", "fly.dev", "repl.co",
 )
 
 private val appStopWords = setOf(

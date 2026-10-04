@@ -301,6 +301,22 @@ class VaultCodesActivity : FragmentActivity() {
         dismissPicker()
     }
 
+    /** The vault already holds this exact password. A Credential Manager caller still needs a success result. */
+    private fun finishAlreadySaved() {
+        val request = loginSave
+        val operation = passwordCredentialOperation
+        if (operation?.create == true && Build.VERSION.SDK_INT >= 34 && request != null && pickerVisible && unlocked &&
+            request.expiresAt > android.os.SystemClock.elapsedRealtime()) {
+            runCatching {
+                operation.revalidate(this)
+                Intent().also {
+                    androidx.credentials.provider.PendingIntentHandler.setCreateCredentialResponse(it, androidx.credentials.CreatePasswordResponse())
+                }
+            }.getOrNull()?.let { setResult(RESULT_OK, it) }
+        }
+        dismissPicker()
+    }
+
     /** Toasts name what happened and never include the copied value. */
     private fun toast(text: String, long: Boolean = false) {
         Toast.makeText(applicationContext, text, if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
@@ -466,8 +482,11 @@ class VaultCodesActivity : FragmentActivity() {
             (request.origin != null && !trustedBrowser(request.packageName, request.identity))) {
             dismissPicker(); return
         }
-        val username = expected?.primaryValue ?: request.username.ifBlank { typedUsername.trim() }
-        if (username.isBlank() || (request.username.isBlank() && expected == null && username.length > 1024)) return
+        val formAccount = request.username.takeIf { it.isNotBlank() && request.usernameConfirmed }
+        // An update must belong to the account the form submitted, when the form named one for certain.
+        if (expected != null && formAccount != null && expected.primaryValue != formAccount) return
+        val username = expected?.primaryValue ?: formAccount ?: typedUsername.trim()
+        if (username.isBlank() || username.length > 1024) return
         val key = saveKey?.copyOf() ?: return
         val secret = request.password.copyOf()
         busy = true
@@ -746,14 +765,25 @@ class VaultCodesActivity : FragmentActivity() {
             val request = loginFill
             val destinationName = request?.let(::fillDestination).orEmpty()
             val account = entry.primaryValue.ifBlank { entry.title }
+            val savedFor = (httpsOrigin(entry.tertiaryValue) ?: httpsOrigin("https://${entry.tertiaryValue.trim()}"))?.removePrefix("https://")
+            // Names can be copied by any app or site. Make a mismatch visible before the link becomes permanent.
+            val caution = when {
+                savedFor != null && savedFor != request?.origin?.removePrefix("https://") ->
+                    "This login is saved for $savedFor. Link it only if $destinationName belongs to the same service."
+                request?.origin == null -> "Link it only if this is the official app for this login."
+                else -> null
+            }
             AlertDialog(
                 onDismissRequest = { if (!busy) pendingLoginLink = null },
                 title = { Text("Fill and link this login?") },
-                text = { Text(if (request?.embeddedWebView == true)
+                text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    caution?.let { StatusBanner(StatusKind.WARNING, it) }
+                    Text(if (request?.embeddedWebView == true)
                     "Fill $account in the embedded browser of $destinationName (${request.packageName})? This app can read the credentials. Linking authorizes this app's signing identity for future suggestions, not the website shown inside it."
                 else if (request?.origin != null)
                     "Fill $account and link it to the exact website $destinationName. Nuvori can suggest it there next time."
-                else "Fill $account and link it to $destinationName (${request?.packageName.orEmpty()}). Nuvori will also bind the link to the app's current signing certificate.") },
+                else "Fill $account and link it to $destinationName (${request?.packageName.orEmpty()}). Nuvori will also bind the link to the app's current signing certificate.")
+                } },
                 confirmButton = { Button(enabled = !busy, onClick = { linkAndFill(entry) }) { PickerButtonLabel("Fill and link", busy) } },
                 dismissButton = { TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text("Cancel") } },
             )
@@ -860,7 +890,7 @@ class VaultCodesActivity : FragmentActivity() {
         }
         val showSearch = searchable && (noMatches || findLogin)
         val searched = if (!showSearch) emptyList() else eligible.filter { entry ->
-            (search.isNotBlank() || possible.none { it.id == entry.id }) && (search.isBlank() ||
+            (search.isNotBlank() || (possible.none { it.id == entry.id } && matches.none { it.id == entry.id })) && (search.isBlank() ||
                 listOf(entry.title, entry.primaryValue, entry.tertiaryValue, entry.autofillOrigins).any { it.contains(search, ignoreCase = true) })
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -975,10 +1005,10 @@ class VaultCodesActivity : FragmentActivity() {
         val request = loginSave ?: return
         val defaultTitle = remember(request) { request.origin?.removePrefix("https://") ?: appLabel(request.packageName) ?: request.packageName }
         var name by remember(request) { mutableStateOf(defaultTitle) }
-        var typedUsername by remember(request) { mutableStateOf("") }
+        var typedUsername by remember(request) { mutableStateOf(if (request.usernameConfirmed) "" else request.username) }
         var showPassword by remember(request) { mutableStateOf(false) }
-        // Some forms have no username field. Then the user types one, or updates a login that already has one.
-        val needsUsername = request.username.isBlank()
+        // Some forms have no username field, or only a guessed one. Then the user types or confirms it, or updates a login that has one.
+        val needsUsername = request.username.isBlank() || !request.usernameConfirmed
         val candidates = entries.filter { entry ->
             entry.type == EntryType.PASSWORD &&
                 (if (needsUsername) entry.primaryValue.isNotBlank() else entry.primaryValue == request.username) &&
@@ -993,7 +1023,8 @@ class VaultCodesActivity : FragmentActivity() {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (needsUsername) OutlinedTextField(typedUsername, { typedUsername = it.take(1024) },
                         label = { Text("Username or email") }, singleLine = true,
-                        supportingText = { Text("Required to save a new login.") }, modifier = Modifier.fillMaxWidth())
+                        supportingText = { Text(if (request.usernameConfirmed) "Required to save a new login."
+                            else "Check this is your account name, not a server or workspace.") }, modifier = Modifier.fillMaxWidth())
                     else PickerLabeledValue("Username", request.username)
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("Password", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1013,7 +1044,7 @@ class VaultCodesActivity : FragmentActivity() {
             }
             if (identical.isNotEmpty()) {
                 StatusBanner(StatusKind.SUCCESS, "This password is already saved in Nuvori.")
-                Button(onClick = ::dismissPicker, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Done") }
+                Button(onClick = ::finishAlreadySaved, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Done") }
                 OutlinedButton(enabled = !busy && canCreate, onClick = { saveLogin(null, typedUsername, name) },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel("Save as new login", busy && savingId == "new") }
             } else {

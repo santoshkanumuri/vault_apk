@@ -30,7 +30,8 @@ internal data class FormNode(
 )
 
 internal data class LoginFormFields(val username: Int?, val password: Int?, val otp: Int?, val origin: String? = null,
-    val newPasswords: List<Int> = emptyList(), val embeddedWebView: Boolean = false, val pinPassword: Boolean = false)
+    val newPasswords: List<Int> = emptyList(), val embeddedWebView: Boolean = false, val pinPassword: Boolean = false,
+    val usernameGuessed: Boolean = false)
 
 private const val MAX_NODES = 2000
 private const val MAX_DEPTH = 40
@@ -236,10 +237,13 @@ internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean): LoginFo
     val (password, fresh) = split
     val anchor = secrets[0]
     var username = usernames.lastOrNull { it.index < anchor.index } ?: usernames.singleOrNull()
-    if (username == null && usernames.isEmpty() && secrets.size == 1 && password != null)
+    var guessed = false
+    if (username == null && usernames.isEmpty() && secrets.size == 1 && password != null) {
         username = precedingAccount(items, password, browser)
+        guessed = username != null
+    }
     val pin = password != null && password.node.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_NUMBER
-    return LoginFormFields(username?.node?.id, password?.node?.id, null, origin, fresh.mapNotNull { it.node.id }, embedded, pin)
+    return LoginFormFields(username?.node?.id, password?.node?.id, null, origin, fresh.mapNotNull { it.node.id }, embedded, pin, guessed)
 }
 
 /** Contact and address fields of one form. Repeated kinds are fine; credentials and card fields never count. */

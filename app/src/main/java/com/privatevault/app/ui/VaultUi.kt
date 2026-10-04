@@ -282,10 +282,13 @@ fun PrivateVaultApp(
     LaunchedEffect(notice) {
         notice?.let { shown ->
             noticeKind = shown.kind
-            // Problems and long explanations stay until read; confirmations dismiss themselves.
+            // Errors stay until dismissed, warnings and long explanations stay longer; confirmations dismiss themselves.
             val persistent = shown.kind == StatusKind.ERROR || shown.kind == StatusKind.WARNING || shown.text.length > 90
-            snackbar.showSnackbar(shown.text, withDismissAction = persistent,
-                duration = if (persistent) SnackbarDuration.Long else SnackbarDuration.Short)
+            snackbar.showSnackbar(shown.text, withDismissAction = persistent, duration = when {
+                shown.kind == StatusKind.ERROR -> SnackbarDuration.Indefinite
+                persistent -> SnackbarDuration.Long
+                else -> SnackbarDuration.Short
+            })
             viewModel.clearNotice(shown)
         }
     }

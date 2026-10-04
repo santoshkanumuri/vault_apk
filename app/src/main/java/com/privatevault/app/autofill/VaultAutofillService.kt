@@ -79,14 +79,15 @@ internal object PendingLoginFills {
 }
 
 internal data class NativeLoginFields(val username: AutofillId?, val password: AutofillId?, val otp: AutofillId?, val origin: String? = null,
-    val newPasswords: List<AutofillId> = emptyList(), val embeddedWebView: Boolean = false, val pinPassword: Boolean = false)
+    val newPasswords: List<AutofillId> = emptyList(), val embeddedWebView: Boolean = false, val pinPassword: Boolean = false,
+    val usernameGuessed: Boolean = false)
 
 /** Thin adapter: the rules live in [classifyLoginForm], which runs on plain nodes so it can be unit tested. */
 internal fun nativeLoginFields(structure: AssistStructure, browser: Boolean = false): NativeLoginFields? {
     val tree = formTree(structure) ?: return null
     val form = classifyLoginForm(tree.roots, browser) ?: return null
     return NativeLoginFields(form.username?.let { tree.ids[it] }, form.password?.let { tree.ids[it] },
-        form.otp?.let { tree.ids[it] }, form.origin, form.newPasswords.map { tree.ids[it] }, form.embeddedWebView, form.pinPassword)
+        form.otp?.let { tree.ids[it] }, form.origin, form.newPasswords.map { tree.ids[it] }, form.embeddedWebView, form.pinPassword, form.usernameGuessed)
 }
 
 class VaultAutofillService : AutofillService() {
@@ -189,12 +190,16 @@ class VaultAutofillService : AutofillService() {
                 browser && it.getString("selected_origin") == origin && it.getString("selected_browser") == destination
             }?.getString("selected_username")
             // No readable account: the review screen asks for it. A blank field counts as missing.
-            val username = listOf(values[fields.username]?.toString(), values[previousUsername]?.toString(), selected)
+            val formUsername = values[fields.username]?.toString()?.takeIf { it.isNotBlank() }
+            val username = listOf(formUsername, values[previousUsername]?.toString(), selected)
                 .firstOrNull { !it.isNullOrBlank() }.orEmpty()
+            // A guessed account box (the field before a lone password) may hold a server or workspace name: confirm it first.
+            val confirmed = formUsername == null || !fields.usernameGuessed
             val password = requireNotNull(values[savedPassword])
             check(fields.newPasswords.all { values[it]?.toString() == password.toString() })
             require(username.length <= 1024 && password.isNotEmpty() && password.length <= 4096)
-            pending = LoginSaveRequest(destination, identity, origin, username, CharArray(password.length) { password[it] }, SystemClock.elapsedRealtime() + 120_000)
+            pending = LoginSaveRequest(destination, identity, origin, username, CharArray(password.length) { password[it] },
+                SystemClock.elapsedRealtime() + 120_000, usernameConfirmed = confirmed)
             token = PendingLoginSaves.put(pending)
             val intent = Intent(this, VaultCodesActivity::class.java).setAction("vault.save.$token").putExtra("login_save_token", token)
             val sender = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE).intentSender

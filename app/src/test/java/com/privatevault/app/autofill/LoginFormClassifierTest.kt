@@ -49,6 +49,17 @@ class LoginFormClassifierTest {
         val form = login(appScreen(appInput(0, idEntry = "field_one"), appInput(1, idEntry = "field_two", hint = "Enter ID"),
             appLabel("Password"), appInput(2, PASSWORD_INPUT)))!!
         assertEquals(1, form.username); assertEquals(2, form.password)
+        // The guess is marked so a save asks the user to confirm the account name.
+        assertTrue(form.usernameGuessed)
+        assertFalse(login(appScreen(appInput(0, idEntry = "username"), appInput(1, PASSWORD_INPUT)))!!.usernameGuessed)
+    }
+
+    @Test fun fallbackNeverTakesServerOrWorkspaceBoxes() {
+        listOf("server" to null, "workspace_url" to null, "et_domain" to null, null to "Company", null to "Host name", null to "Tenant ID")
+            .forEach { (id, hint) ->
+                val form = login(appScreen(appInput(0, idEntry = id, hint = hint), appInput(1, PASSWORD_INPUT)))!!
+                assertNull("$id $hint", form.username)
+            }
     }
 
     @Test fun fallbackSkipsInvisibleDisabledAndNonInputs() {
@@ -166,8 +177,9 @@ class LoginFormClassifierTest {
             val form = login(appScreen(appInput(0, pin, idEntry = it)))!!
             assertNull(it, form.otp); assertEquals(it, 0, form.password)
         }
-        // An unmasked text box keeps the plain containment rule.
-        assertEquals(0, login(appScreen(appInput(0, TEXT_INPUT, idEntry = "etotp")))!!.otp)
+        // Unmasked boxes need the word too: "footprint" and "root_path" only contain the letters.
+        assertEquals(0, login(appScreen(appInput(0, TEXT_INPUT, idEntry = "et_otp")))!!.otp)
+        listOf("etotp", "footprint", "root_path").forEach { assertNull(it, login(appScreen(appInput(0, TEXT_INPUT, idEntry = it)))) }
     }
 
     @Test fun otpMixedWithPasswordOrUsernameInTheSameFormIsRefused() {

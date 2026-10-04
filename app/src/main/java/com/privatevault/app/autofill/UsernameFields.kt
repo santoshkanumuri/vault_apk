@@ -21,7 +21,9 @@ private val USERNAME_NAMES = setOf("username", "email", "emailaddress", "login",
 private val NATIVE_USERNAME_TOKENS = listOf("username", "userid", "loginid", "login", "email", "emailaddress", "accountname",
     "accountid", "phoneoremail", "emailorphone", "mobileoremail", "emailormobile", "identifier", "signin")
 private val NEGATIVE_TOKENS = listOf("search", "confirm", "verify", "otp", "code", "coupon", "promo", "message", "comment",
-    "first", "last", "full", "nick", "display", "refer", "billing", "shipping")
+    "first", "last", "full", "nick", "display", "refer", "billing", "shipping",
+    // Sign-in screens often ask for a server or workspace before the password; that box is not the account.
+    "server", "workspace", "domain", "host", "tenant", "company", "organization", "organisation", "captcha", "website")
 // A "login password" box is not an account name even when its id says login.
 private val SECRET_TOKENS = listOf("password", "passwd", "pwd", "passcode")
 
@@ -30,7 +32,7 @@ private val OTP_NAMES = setOf("otp", "totp", "otpcode", "totpcode", "onetimecode
     "twofactorcode", "2fa", "2facode", "mfa", "mfacode", "authcode", "authenticationcode", "authenticatorcode",
     "verificationcode", "approvalscode")
 private val NATIVE_OTP_TOKENS = listOf("otp", "totp", "twofactor", "2fa", "mfa", "authenticatorcode", "verificationcode", "authcode")
-private val OTP_NEGATIVE_TOKENS = NEGATIVE_TOKENS - setOf("otp", "code", "verify")
+private val OTP_NEGATIVE_TOKENS = NEGATIVE_TOKENS - setOf("otp", "code", "verify", "website")
 
 /** Lower-case alphanumerics only, so "Login-Email", "login_email" and "loginEmail" compare equal. */
 internal fun normalizeToken(value: String?): String = value.orEmpty().lowercase(Locale.ROOT).replace(NON_ALPHANUMERIC, "")
@@ -109,6 +111,7 @@ internal fun isOtpFieldByName(hints: Set<String>, attributes: Map<String, String
     val inputClass = inputType and InputType.TYPE_MASK_CLASS
     if (inputClass != InputType.TYPE_CLASS_TEXT && inputClass != InputType.TYPE_CLASS_NUMBER) return false
     if (inputClass == InputType.TYPE_CLASS_TEXT && inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0) return false
-    val named = if (wholeWord) hasIdWord(idEntry, NATIVE_OTP_TOKENS) else normalizeToken(idEntry).let { id -> NATIVE_OTP_TOKENS.any { it in id } }
+    // Whole words only: "footprint" and "root_path" contain the letters "otp" but are not code fields.
+    val named = hasIdWord(idEntry, NATIVE_OTP_TOKENS)
     return named && !hasNegativeToken(listOf(idEntry, hintText), OTP_NEGATIVE_TOKENS)
 }

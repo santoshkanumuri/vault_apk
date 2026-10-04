@@ -5,8 +5,9 @@ import android.os.Looper
 import android.os.SystemClock
 import java.util.UUID
 
+/** [usernameConfirmed] is false when the account name came from a guessed field and the user must check it. */
 internal class LoginSaveRequest(val packageName: String, val identity: String, val origin: String?,
-    val username: String, val password: CharArray, val expiresAt: Long) {
+    val username: String, val password: CharArray, val expiresAt: Long, val usernameConfirmed: Boolean = true) {
     fun clear() = password.fill('\u0000')
 }
 

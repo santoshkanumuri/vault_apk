@@ -97,6 +97,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SheetValue
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -258,15 +259,23 @@ fun PrivateVaultApp(
     onSyncSettingsOpened: () -> Unit = {},
 ) {
     val status by viewModel.status.collectAsStateWithLifecycle()
-    val message by viewModel.message.collectAsStateWithLifecycle()
+    val notice by viewModel.notice.collectAsStateWithLifecycle()
     val requestDailyBiometric by viewModel.requestDailyBiometric.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    var noticeKind by remember { mutableStateOf(StatusKind.INFO) }
     var showPrivacy by remember { mutableStateOf(false) }
     var onboardingPage by rememberSaveable { mutableIntStateOf(0) }
     var showSetup by rememberSaveable { mutableStateOf(false) }
     var firstRunChoice by rememberSaveable { mutableStateOf(FirstRunChoice.NEW) }
-    LaunchedEffect(message) {
-        message?.let { snackbar.showSnackbar(it); viewModel.clearMessage() }
+    LaunchedEffect(notice) {
+        notice?.let { shown ->
+            noticeKind = shown.kind
+            // Problems and long explanations stay until read; confirmations dismiss themselves.
+            val persistent = shown.kind == StatusKind.ERROR || shown.kind == StatusKind.WARNING || shown.text.length > 90
+            snackbar.showSnackbar(shown.text, withDismissAction = persistent,
+                duration = if (persistent) SnackbarDuration.Long else SnackbarDuration.Short)
+            viewModel.clearNotice(shown)
+        }
     }
     LaunchedEffect(requestDailyBiometric) {
         if (requestDailyBiometric) onEnableDailyBiometric()
@@ -290,7 +299,9 @@ fun PrivateVaultApp(
                             firstRunChoice, { firstRunChoice = FirstRunChoice.NEW },
                             openSyncSettings, onSyncSettingsOpened)
                 }
-                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
+                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()) { data ->
+                    NoticeSnackbar(data, noticeKind)
+                }
                 if (status is VaultStatus.Locked || status is VaultStatus.NeedsSetup && showSetup)
                     TextButton(onClick = { showPrivacy = true }, modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding()) { Text("Privacy policy") }
                 if (showPrivacy) PrivacyPolicyDialog { showPrivacy = false }

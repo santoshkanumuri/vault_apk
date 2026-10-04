@@ -208,7 +208,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val groups = com.privatevault.app.security.exactPasswordDuplicateGroups(dao().allEntries())
         if (groups.isEmpty()) {
             _passwordDuplicateReview.value = null
-            _message.value = "No exact password duplicates found."
+            notify("No exact password duplicates found.", StatusKind.INFO)
         } else {
             _passwordDuplicateReview.value = PasswordDuplicateReview(groups)
         }
@@ -243,7 +243,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
         cancelPasswordDuplicateReview()
         refresh()
-        _message.value = "Deleted $deleted exact password ${if (deleted == 1) "duplicate" else "duplicates"}."
+        notify("Deleted $deleted exact password ${if (deleted == 1) "duplicate" else "duplicates"}.", StatusKind.SUCCESS)
     }
 
     fun cancelCredentialTransfer() {
@@ -291,13 +291,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
         cancelCredentialTransfer()
         refreshPasskeys()
-        _message.value = "Imported ${result.added} passkeys. ${result.alreadySaved} were already saved."
+        notify("Imported ${result.added} passkeys. ${result.alreadySaved} were already saved.", StatusKind.SUCCESS)
     }
 
     fun credentialTransferFailed(cancelled: Boolean) {
         externalFlowActive = false
         touch()
-        if (!cancelled) _message.value = "No compatible passkey transfer was available. The source manager must support Android credential transfer."
+        if (!cancelled) notify("No compatible passkey transfer was available. The source manager must support Android credential transfer.", StatusKind.WARNING)
     }
 
     internal fun previewPasswordImport(uri: Uri, mapping: PasswordColumnMapping? = null) = securedLaunch {
@@ -396,9 +396,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             cancelPasswordImport()
             refresh()
             val duplicateRows = preview?.duplicateRows ?: 0
-            _message.value = "Added ${result.added} logins and updated ${result.updated}. " +
+            notify("Added ${result.added} logins and updated ${result.updated}. " +
                 "Skipped ${result.skippedExact + duplicateRows} duplicates and ${result.skippedConflicts} incoming password changes. " +
-                "Delete the readable export file after checking your logins."
+                "Delete the readable export file after checking your logins.", StatusKind.SUCCESS)
         }
     }
     fun cancelRestore() {
@@ -419,7 +419,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             pendingCameraFile = file
             androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.camera", file)
                 .also { pendingCameraUri = it; externalFlowActive = true }
-        }.getOrElse { clearCamera(); _message.value = "Could not open the camera."; null }
+        }.getOrElse { clearCamera(); notify("Could not open the camera.", StatusKind.ERROR); null }
     }
 
     fun clearCamera() {
@@ -460,8 +460,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val passkeys = _passkeys.asStateFlow()
     private val _groups = MutableStateFlow<List<VaultGroup>>(emptyList())
     val groups = _groups.asStateFlow()
-    private val _message = MutableStateFlow<String?>(null)
-    val message = _message.asStateFlow()
+    private val _notice = MutableStateFlow<UserNotice?>(null)
+    val notice = _notice.asStateFlow()
+
+    /** Shows a short confirmation or problem report. Never include passwords, codes, keys or card numbers. */
+    internal fun notify(text: String, kind: StatusKind = StatusKind.INFO) { _notice.value = UserNotice(text, kind) }
     private val _requestDailyBiometric = MutableStateFlow(false)
     val requestDailyBiometric = _requestDailyBiometric.asStateFlow()
 
@@ -472,7 +475,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setLightMode(enabled: Boolean) {
         if (preferences.edit().putBoolean("light_mode", enabled).commit()) _lightMode.value = enabled
-        else _message.value = "Could not save appearance preference."
+        else notify("Could not save appearance preference.", StatusKind.ERROR)
         persistSettings()
     }
 
@@ -488,7 +491,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val value = enabled && nfcSupported
         if (!value) cancelNfcScan()
         if (preferences.edit().putBoolean("nfc_enabled", value).commit()) _nfcEnabled.value = value
-        else { _nfcEnabled.value = false; _message.value = "Could not save NFC preference. NFC is off for this session." }
+        else { _nfcEnabled.value = false; notify("Could not save NFC preference. NFC is off for this session.", StatusKind.ERROR) }
         persistSettings()
     }
 
@@ -524,8 +527,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             _securitySettings.value = updated
             lastWatchAccounts = accounts.map(::watchAccount)
             refresh()
-            _message.value = if (delivered) "Codes saved on the watch."
-                else "Watch paired. Codes are queued; open Nuvori on the watch to receive them."
+            if (delivered) notify("Codes saved on the watch.", StatusKind.SUCCESS)
+            else notify("Watch paired. Codes are queued; open Nuvori on the watch to receive them.", StatusKind.INFO)
         } finally { key.fill(0) }
     }
 
@@ -543,7 +546,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             db.dao().saveSettings(updated)
             _securitySettings.value = updated
             lastWatchAccounts = null
-            _message.value = "Removal queued. A disconnected watch will erase its codes when it reconnects."
+            notify("Removal queued. A disconnected watch will erase its codes when it reconnects.", StatusKind.INFO)
         } finally { key.fill(0) }
     }
 
@@ -573,7 +576,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 if (database !== db || _status.value !is VaultStatus.Unlocked) return@runCatching
                 _securitySettings.value = updated
                 if (inactivity != null) scheduleInactivity()
-            }.onFailure { _message.value = "Could not save security settings." }
+            }.onFailure { notify("Could not save security settings.", StatusKind.ERROR) }
         }
     }
 
@@ -593,7 +596,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _nfcResult.value = result
         touch()
     }
-    fun failNfcScan(message: String) { cancelNfcScan(); _message.value = message }
+    fun failNfcScan(message: String) { cancelNfcScan(); notify(message, StatusKind.ERROR) }
     fun consumeNfcResult() { _nfcResult.value = null }
 
     fun setup(password: CharArray, enableNfc: Boolean = false) = viewModelScope.launch {
@@ -603,7 +606,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 setNfcEnabled(enableNfc)
                 _requestDailyBiometric.value = _securitySettings.value.masterPasswordIntervalMs > 0
             }
-            .onFailure { _message.value = it.userMessage("Could not create the vault") }
+            .onFailure { notify(it.userMessage("Could not create the vault"), StatusKind.ERROR) }
         password.fill('\u0000')
     }
 
@@ -613,21 +616,21 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 open(it)
                 _requestDailyBiometric.value = _securitySettings.value.masterPasswordIntervalMs > 0
             }
-            .onFailure { _message.value = "The master password is incorrect." }
+            .onFailure { notify("The master password is incorrect.", StatusKind.ERROR) }
         password.fill('\u0000')
     }
 
     fun requireMasterPasswordForBiometric() {
         val current = _status.value
         if (current is VaultStatus.Locked) _status.value = current.copy(canUseBiometric = false)
-        _message.value = "Fingerprint session is unavailable or expired. Enter the master password."
+        notify("Fingerprint session is unavailable or expired. Enter the master password.", StatusKind.WARNING)
     }
 
     fun unlockWithBiometric(key: ByteArray) {
         _requestDailyBiometric.value = false
         viewModelScope.launch {
             runCatching { open(key) }
-                .onFailure { key.fill(0); biometricGate.clearDailySession(); _message.value = "Biometric session expired. Use the master password." }
+                .onFailure { key.fill(0); biometricGate.clearDailySession(); notify("Biometric session expired. Use the master password.", StatusKind.WARNING) }
         }
     }
 
@@ -684,14 +687,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                 catch (_: Exception) {
                     if (database === db && _status.value is VaultStatus.Unlocked)
-                        _message.value = "Some synced changes are waiting. Retry after unlocking."
+                        notify("Some synced changes are waiting. Retry after unlocking.", StatusKind.WARNING)
                 } finally { syncKey.fill(0) }
             }
         }
     }
 
     fun dailyBiometricEncryptionCipher(): Cipher? = runCatching { biometricGate.dailyEncryptionCipher() }
-        .onFailure { _message.value = "Fingerprint is unavailable. Use the master password next time." }
+        .onFailure { notify("Fingerprint is unavailable. Use the master password next time.", StatusKind.WARNING) }
         .getOrNull()
 
     fun enableDailyBiometric(cipher: Cipher) {
@@ -699,8 +702,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val interval = _securitySettings.value.masterPasswordIntervalMs
         if (interval == 0L) { _requestDailyBiometric.value = false; return }
         runCatching { biometricGate.enableDailySession(cipher, key, interval) }
-            .onSuccess { _requestDailyBiometric.value = false; _message.value = "Fingerprint enabled for the selected interval." }
-            .onFailure { biometricGate.clearDailySession(); _requestDailyBiometric.value = false; _message.value = "Could not enable fingerprint. Use the master password next time." }
+            .onSuccess { _requestDailyBiometric.value = false; notify("Fingerprint enabled for the selected interval.", StatusKind.SUCCESS) }
+            .onFailure { biometricGate.clearDailySession(); _requestDailyBiometric.value = false; notify("Could not enable fingerprint. Use the master password next time.", StatusKind.ERROR) }
     }
 
     fun skipDailyBiometric() { _requestDailyBiometric.value = false }
@@ -823,7 +826,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (failure: Exception) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
-                _message.value = "Entry saved, but some photos could not be added. Open the entry to add them again."
+                notify("Entry saved, but some photos could not be added. Open the entry to add them again.", StatusKind.WARNING)
             }
         } finally {
             remaining.forEach(::discardDraftPhoto)
@@ -842,7 +845,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         refresh()
-        _message.value = "Imported ${result.added} authenticator ${if (result.added == 1) "account" else "accounts"}. ${result.alreadySaved} already saved. ${result.conflicts} conflicts skipped."
+        notify("Imported ${result.added} authenticator ${if (result.added == 1) "account" else "accounts"}. ${result.alreadySaved} already saved. ${result.conflicts} conflicts skipped.", StatusKind.SUCCESS)
     }
 
     fun refreshPasskeys() = securedLaunch { _passkeys.value = dao().passkeySummaries() }
@@ -1065,7 +1068,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             keyManager.changePassword(current, replacement)
             biometricGate.clearDailySession()
             _requestDailyBiometric.value = true
-            _message.value = "Master password changed. Existing backups still use their original password."
+            notify("Master password changed. Existing backups still use their original password.", StatusKind.SUCCESS)
         } finally {
             current.fill('\u0000'); replacement.fill('\u0000')
         }
@@ -1077,7 +1080,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             keyManager.unlock(password).fill(0)
             val output = requireNotNull(getApplication<Application>().contentResolver.openOutputStream(uri, "w"))
             output.use { VaultBackupManager(getApplication(), dao(), photoStore).export(it, password, requireNotNull(sessionKey)) }
-            _message.value = "Encrypted backup created."
+            notify("Encrypted backup created.", StatusKind.SUCCESS)
         } finally {
             password.fill('\u0000')
         }
@@ -1109,15 +1112,15 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         preferences.edit().putBoolean("light_mode", _lightMode.value).putBoolean("nfc_enabled", _nfcEnabled.value).commit()
         biometricGate.clearDailySession()
         cancelRestore()
-        _message.value = "Backup restored as a separate vault. Use this vault's master password to unlock, then set up fingerprint and reconnect paired devices."
+        notify("Backup restored as a separate vault. Use this vault's master password to unlock, then set up fingerprint and reconnect paired devices.", StatusKind.SUCCESS)
         lock(LockReason.BACKGROUND)
     }
 
-    fun clearMessage() { _message.value = null }
+    fun clearNotice(shown: UserNotice) { _notice.compareAndSet(shown, null) }
 
     private fun securedLaunch(block: suspend () -> Unit) = viewModelScope.launch {
         touch()
-        runCatching { block() }.onFailure { _message.value = it.userMessage("That action failed") }
+        runCatching { block() }.onFailure { notify(it.userMessage("That action failed"), StatusKind.ERROR) }
     }
 
     private fun dao() = requireNotNull(database) { "Vault is locked" }.dao()
@@ -1163,7 +1166,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             com.privatevault.app.autofill.UnlockedProfileStore(getApplication()).publish(vaultId, entries.map { it.entry })
         } }
-            .onFailure { _message.value = "Autofill details could not be updated on this device." }
+            .onFailure { notify("Autofill details could not be updated on this device.", StatusKind.WARNING) }
         _groups.value = groups
         _pairedDevices.value = paired
         _localSyncDevice.value = members.firstOrNull { it.deviceId == self }
@@ -1183,7 +1186,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     androidx.core.content.ContextCompat.checkSelfPermission(getApplication(), android.Manifest.permission.POST_NOTIFICATIONS) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED)) {
                 runCatching { com.privatevault.app.sync.LanSyncService.start(getApplication()) }
-                    .onFailure { _message.value = "Open Android devices settings to resume automatic sync." }
+                    .onFailure { notify("Open Android devices settings to resume automatic sync.", StatusKind.WARNING) }
             }
         }
         val current = _entries.value.map { it.entry }.filter { it.type == com.privatevault.app.data.EntryType.AUTHENTICATOR }
@@ -1201,7 +1204,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     throw cancelled
                 } catch (_: Exception) {
                     if (database === activeDatabase && _status.value is VaultStatus.Unlocked)
-                        _message.value = "Watch sync did not complete. Reconnect the watch and tap Sync codes."
+                        notify("Watch sync did not complete. Reconnect the watch and tap Sync codes.", StatusKind.WARNING)
                     lastWatchAccounts = null
                 } finally { key.fill(0) }
             }
@@ -1346,7 +1349,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         db.completeAuthorityTransfer(deviceIdentityStore)
         com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         refresh()
-        _message.value = "Management transferred. The other device can add devices after it receives this change."
+        notify("Management transferred. The other device can add devices after it receives this change.", StatusKind.SUCCESS)
     }
 
     fun cancelAuthorityTransfer() = securedLaunch {
@@ -1393,7 +1396,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
         _securitySettings.value = requireNotNull(dao().settings())
         refresh()
-        _message.value = "This device now has a separate sync group and keeps its vault copy. Pair a new empty device when ready; pair the watch again for codes."
+        notify("This device now has a separate sync group and keeps its vault copy. Pair a new empty device when ready; pair the watch again for codes.", StatusKind.SUCCESS)
     }
 
     fun resolveSyncConflict(id: String, useIncoming: Boolean, expectedVersion: String) = securedLaunch {

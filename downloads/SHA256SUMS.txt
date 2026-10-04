@@ -1,6 +1,6 @@
-d81651b13f9edf42851d54c6be91c71890e68c898570ef4733f014ceb289d57b  nuvori-v2.0.6-phone.aab
-b2eded26b8f1106c54c52783e9ee0bc4ed6584152b4b1efffff3cf8f75c2d32e  nuvori-v2.0.6-phone.apk
-0d01df6e4c331f2275ecc96152e3ed667e116d6febadb7b8de59006ac5b9fa36  nuvori-v2.0.7-phone.aab
-4f30e560895d494e23f7b0cf602fa3c8fa1dbf38c2f3c81894ee0a208f35bf1e  nuvori-v2.0.7-phone.apk
-79c1dd259fe58b8b41e1267616a76fda8b6aca3de6c12579605b39123e3aaa33  nuvori-v2.0.9-phone.aab
-df0af7b29f14352e98d44d82bf62605a7153734bebdb3c5008a0027ea3acbe8b  nuvori-v2.0.9-phone.apk
+a9ea37409aaebe56fae65566e9c9a14a27ab6bfc8393f17ec5e04e40172aa056  nuvori-v2.1.0-phone.aab
+f2d897b3dd451b4e3b9206c7f718384169d43ae3a20b3667dc09008b1cebc617  nuvori-v2.1.0-phone.apk
+6b3f02823d332e546fd98aa80ba77b065f0e7be4b54970d3714f847ef28dae42  nuvori-v2.1.0-phone-mapping.zip
+05bfc1ddff1fe39301b4cb05c7eb0246226da8ee630bbd0d8730e73062126cd4  nuvori-v2.1.0-watch.aab
+7713dba7aa3c8759aff3d435983bbd357d51e27d6686ffb30867d7a3ccae5998  nuvori-v2.1.0-watch.apk
+6ba4505d5c3b24e5d79bb45599cbad6d6c34d08d6a604b26e5d7eed7d705a4c7  nuvori-v2.1.0-watch-mapping.zip

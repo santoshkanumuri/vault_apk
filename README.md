@@ -37,7 +37,9 @@ Open the download on your phone and allow installation from your browser or file
 
 **Moving from v1.5.2 or earlier:** v1.6.0 uses the new package `com.application.private_vault` and installs as a separate app. Export an encrypted backup from the old app, restore it into the new app, and check your records before removing the old installation. Later updates using the same package and signing identity can install over this version.
 
-For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Package registration is separate from publishing a store listing.
+For Google Play, use the [2.1.0 phone AAB](downloads/nuvori-v2.1.0-phone.aab?raw=true) and [release build guide](docs/PUBLISHING.md). An AAB is for store upload; install the APK directly on a phone.
+
+Wear OS companion version 2.1.0, code 360010: [watch APK](downloads/nuvori-v2.1.0-watch.apk?raw=true), [watch AAB](downloads/nuvori-v2.1.0-watch.aab?raw=true), and [setup guide](docs/WATCH-COMPANION.md). Install the watch APK on the watch. For local setup, the phone and watch apps must share the package name and signing certificate; these download builds match.
 
 ## Features
 
@@ -54,6 +56,7 @@ For Google Play, use the AAB and [submission guide](docs/PLAY-SUBMISSION.md). Pa
 - **App-linked codes:** choose Linked apps when editing an authenticator account. Optional Usage access lets the tile suggest accounts for the previous app. Codes start masked, with Copy, Show/Hide, and Show all controls. App links are included in encrypted backups. Browser websites cannot be identified this way.
 - **Photos:** full-resolution capture and original-file import, encrypted thumbnails, crop, rotate, cover selection, and zoom. Imported originals remain outside the vault.
 - **Android device sync preview:** pair up to four Android devices on the same Wi-Fi. Entries and photos sync through an encrypted local connection. The Android devices page starts with the sync status, last check time, and **Sync now**, then shows problems, your devices, the Automatic sync switch and check interval, pairing, and a Danger zone for leaving the group. Status colors mean the same everywhere: green checked, blue in progress, amber waiting, red needs attention. Keep an encrypted backup while testing this preview.
+- **Windows pairing preview:** copy the vault to an unlocked Nuvori Windows vault over an encrypted local connection. Scan the phone's QR on the PC or use **Copy link**. If the PC cannot reach the phone, show a QR in Windows Sync and choose **Scan Windows QR** on the managing phone. Enter the phone's master password in Windows and confirm the matching code on both devices. Windows keeps its existing local items. Later edits do not sync with Windows yet. This repository supplies the Android build; it does not include a Windows installer.
 - **Home:** favorites, recently opened entries, expiry warnings, and quick add. Search across entry types, usernames, questions, card last four digits, folders, groups, tags, and notes. Passwords, answers, CVVs, full card numbers, and authenticator keys stay out of search.
 - **Clear feedback:** saving, updating, deleting, copying, and sync actions show a short colored confirmation. Messages never include passwords, codes, or card numbers.
 - **Appearance:** light mode or a pure black dark mode, with layouts for phones and larger screens.

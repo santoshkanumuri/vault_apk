@@ -115,72 +115,72 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                     message = "Scan this QR on the new device, or copy its link to Windows, within two minutes.")
                 else PairingUiState("connecting", message = "Connecting to Windows on the local networkâ€¦")
                 val deadline = android.os.SystemClock.elapsedRealtime() + 120_000
-                    repeat(if (reverse == null) 3 else 1) {
-                        ensureActive()
-                        require(android.os.SystemClock.elapsedRealtime() < deadline) { "Pairing expired" }
-                        val socket = if (reverse == null) {
-                            requireNotNull(server).soTimeout = (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1).toInt()
-                            server.accept()
-                        } else Socket().apply {
-                            network.bindSocket(this)
-                            connect(InetSocketAddress(InetAddresses.parseNumericAddress(reverse.address), reverse.port), 10_000)
-                        }
-                        connection = socket
-                        try {
-                            socket.use {
-                                socket.soTimeout = 30_000
-                                val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
-                                if (reverse != null) frames.send(vaultId.toByteArray(Charsets.UTF_8), 128)
-                                val result = pairingHandshake(frames, identity, invitation.code.toCharArray(),
-                                    invitation.session, vaultId, true)
-                                try {
-                                    verifyMasterPassword(frames, identity, password, invitation.session,
-                                        vaultId, true, result.peer)
-                                    EncryptedSyncChannel(frames, result.key, true).use { channel ->
-                                        confirm(channel, result.confirmation)
-                                        require(android.os.SystemClock.elapsedRealtime() < deadline) { "Pairing expired" }
-                                        socket.soTimeout = 300_000
-                                        val existing = database.syncDao().membership(vaultId, result.peer.deviceId)
-                                        require(existing != null || database.syncDao().activeMembershipCount(vaultId) < MAX_ACTIVE_SYNC_DEVICES) {
-                                            "This vault already has $MAX_ACTIVE_SYNC_DEVICES active Android devices"
-                                        }
-                                        val member = SyncMembershipEntity.from(DeviceMembership(vaultId, result.peer.deviceId,
-                                            if (result.peerPlatform == "windows") "Windows device" else "Android device",
-                                            result.peer.publicKeyBase64Url, MemberStatus.ACTIVE, identity.deviceId,
-                                            database.syncDao().membershipEvents(vaultId).size + 1L, 1))
-                                        mutableState.value = PairingUiState("transferring", message = "Sending the encrypted vault copy…")
-                                        val admission = SyncChannelOutput(channel).use { output ->
-                                            SyncSnapshot(context, database, EncryptedPhotoStore(context))
-                                                .export(output, key, result.key, member,
-                                                    windowsPeer = result.peerPlatform == "windows")
-                                        }
-                                        require(channel.receive().contentEquals("ready".toByteArray())) { "Enrollment was not prepared" }
-                                        ensureActive()
-                                        if (admission != null) database.withTransaction {
-                                            database.syncDao().insertMembershipEvent(admission)
-                                            database.syncDao().upsertMembership(member)
-                                        }
-                                        committedHost = true
-                                        channel.send("commit".toByteArray())
-                                        require(channel.receive().contentEquals("committed".toByteArray()))
-                                        runCatching {
-                                            LanSyncService.store(context).publish(database)
-                                            LanSyncService.store(context).recordPeerAddress(result.peer.deviceId,
-                                                socket.inetAddress.hostAddress!!)
-                                        }
-                                        mutableState.value = PairingUiState("paired", message = "The new device has the vault copy.")
-                                    }
-                                } finally { result.key.fill(0) }
-                            }
-                            return@launch
-                        } catch (failure: CancellationException) { throw failure }
-                        catch (failure: Exception) {
-                            if (mutableState.value.stage != "offering") throw failure
-                            mutableState.value = PairingUiState("offering", invitation.encode(),
-                                message = "A connection closed before confirmation. Scan this QR again.")
-                        } finally { connection = null }
+                repeat(if (reverse == null) 3 else 1) {
+                    ensureActive()
+                    require(android.os.SystemClock.elapsedRealtime() < deadline) { "Pairing expired" }
+                    val socket = if (reverse == null) {
+                        requireNotNull(server).soTimeout = (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1).toInt()
+                        server.accept()
+                    } else Socket().apply {
+                        network.bindSocket(this)
+                        connect(InetSocketAddress(InetAddresses.parseNumericAddress(reverse.address), reverse.port), 10_000)
                     }
-                    error("Pairing attempts exhausted")
+                    connection = socket
+                    try {
+                        socket.use {
+                            socket.soTimeout = 30_000
+                            val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
+                            if (reverse != null) frames.send(vaultId.toByteArray(Charsets.UTF_8), 128)
+                            val result = pairingHandshake(frames, identity, invitation.code.toCharArray(),
+                                invitation.session, vaultId, true)
+                            try {
+                                verifyMasterPassword(frames, identity, password, invitation.session,
+                                    vaultId, true, result.peer)
+                                EncryptedSyncChannel(frames, result.key, true).use { channel ->
+                                    confirm(channel, result.confirmation)
+                                    require(android.os.SystemClock.elapsedRealtime() < deadline) { "Pairing expired" }
+                                    socket.soTimeout = 300_000
+                                    val existing = database.syncDao().membership(vaultId, result.peer.deviceId)
+                                    require(existing != null || database.syncDao().activeMembershipCount(vaultId) < MAX_ACTIVE_SYNC_DEVICES) {
+                                        "This vault already has $MAX_ACTIVE_SYNC_DEVICES active Android devices"
+                                    }
+                                    val member = SyncMembershipEntity.from(DeviceMembership(vaultId, result.peer.deviceId,
+                                        if (result.peerPlatform == "windows") "Windows device" else "Android device",
+                                        result.peer.publicKeyBase64Url, MemberStatus.ACTIVE, identity.deviceId,
+                                        database.syncDao().membershipEvents(vaultId).size + 1L, 1))
+                                    mutableState.value = PairingUiState("transferring", message = "Sending the encrypted vault copy…")
+                                    val admission = SyncChannelOutput(channel).use { output ->
+                                        SyncSnapshot(context, database, EncryptedPhotoStore(context))
+                                            .export(output, key, result.key, member,
+                                                windowsPeer = result.peerPlatform == "windows")
+                                    }
+                                    require(channel.receive().contentEquals("ready".toByteArray())) { "Enrollment was not prepared" }
+                                    ensureActive()
+                                    if (admission != null) database.withTransaction {
+                                        database.syncDao().insertMembershipEvent(admission)
+                                        database.syncDao().upsertMembership(member)
+                                    }
+                                    committedHost = true
+                                    channel.send("commit".toByteArray())
+                                    require(channel.receive().contentEquals("committed".toByteArray()))
+                                    runCatching {
+                                        LanSyncService.store(context).publish(database)
+                                        LanSyncService.store(context).recordPeerAddress(result.peer.deviceId,
+                                            socket.inetAddress.hostAddress!!)
+                                    }
+                                    mutableState.value = PairingUiState("paired", message = "The new device has the vault copy.")
+                                }
+                            } finally { result.key.fill(0) }
+                        }
+                        return@launch
+                    } catch (failure: CancellationException) { throw failure }
+                    catch (failure: Exception) {
+                        if (mutableState.value.stage != "offering") throw failure
+                        mutableState.value = PairingUiState("offering", invitation.encode(),
+                            message = "A connection closed before confirmation. Scan this QR again.")
+                    } finally { connection = null }
+                }
+                error("Pairing attempts exhausted")
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 if (committedHost) {

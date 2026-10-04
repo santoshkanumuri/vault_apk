@@ -17,8 +17,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 30
         targetSdk = 36
-        versionCode = 360008
-        versionName = "2.0.0"
+        versionCode = 360010
+        versionName = "2.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -54,6 +54,8 @@ dependencies {
     implementation("com.google.code.gson:gson:2.13.2")
     implementation("androidx.activity:activity-compose:1.9.1")
     implementation("androidx.core:core-ktx:1.13.1")
+    // Upgrade the old Fragment dependency pulled in by Play Services Wearable.
+    implementation("androidx.fragment:fragment:1.8.2")
     implementation("androidx.compose.ui:ui:1.6.8")
     implementation("androidx.compose.foundation:foundation:1.6.8")
     implementation("androidx.compose.material3:material3:1.2.1")

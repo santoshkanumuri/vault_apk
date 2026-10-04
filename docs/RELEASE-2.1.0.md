@@ -1,6 +1,11 @@
 # Nuvori 2.1.0 preview
 
-Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wear companion is unchanged.
+Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wear companion uses version 2.1.0, code 360010; signed watch downloads are now available too.
+
+- [Install the phone APK](../downloads/nuvori-v2.1.0-phone.apk?raw=true)
+- [Download the phone AAB for Google Play](../downloads/nuvori-v2.1.0-phone.aab?raw=true)
+- [R8 mapping for crash reports](../downloads/nuvori-v2.1.0-phone-mapping.zip)
+- [SHA-256 checksums](../downloads/SHA256SUMS.txt)
 
 ## Autofill
 
@@ -33,8 +38,25 @@ Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wea
 - Colors carry the same meaning everywhere: green is checked, blue is in progress, amber is waiting or paused, and red needs attention.
 - Sync actions confirm what happened, such as "Automatic sync paused" or "Conflict resolved". The Auto sync tile shows On, Paused, or Set up.
 
+## Windows pairing
+
+- Copy the vault, including photos, to an unlocked Nuvori Windows vault through the encrypted pairing connection. Windows keeps its existing local items.
+- Scan the managing phone's QR on the PC or use **Copy link**. When the PC cannot reach the phone, show a QR in Windows Sync and choose **Scan Windows QR** on the phone. Both devices must be reachable across their local networks.
+- Enter the phone's master password in Windows and confirm the matching code on both devices before copying. Later edits do not sync with Windows yet. A Windows installer is outside this Android repository.
+
 ## Verification
 
-- 138 JVM unit tests passed. They cover the new form classifier (login, one-time-code, and profile fields, including unsafe pages that must stay rejected), possible-match ranking, username rules, and password import.
-- Every app source file was type-checked against Compose Multiplatform 1.6.11 with AndroidX stand-ins. There were no new errors compared with 2.0.9.
-- Before publishing, still run: the debug unit and instrumentation suites, vital lint, the signed release APK and AAB build, and autofill checks in Chrome, Brave, and native apps on a phone.
+- Built October 4, 2026 from the merged 2.1.0 code. Fixed the retry block's indentation in `AndroidPairing.kt` so release lint passes; behavior is unchanged.
+- 219 JVM tests passed, with no failures or skipped tests. This includes form classification, possible-match ranking, username rules, password import, sync, Windows portable-backup framing, and the shared watch protocol.
+- `:app:lintRelease` passed with zero errors and 72 warnings. The signed, minified release APK and AAB builds passed.
+- Both archives identify package `com.application.private_vault`, version 2.1.0, code 51. APK and AAB signatures verified, and the signer certificate matches the 2.0.9 APK. All 576 AAB payload entries verified as signed. JDK `jarsigner` also reports self-signed certificate, timestamp, and ZIP streaming-order warnings.
+- APK ZIP alignment and every native library's 16 KB ELF alignment passed for both archives. SHA-256 checksums cover the files present in `downloads/`, including the matching R8 mapping archive. Superseded 2.0.9 phone downloads were removed; the current phone and watch builds remain.
+- Instrumentation tests did not run because no Android device was connected. Before publishing, test autofill in Chrome, Brave, and native apps, plus Android and Windows pairing on physical devices.
+
+## Watch build
+
+- Fixed the Google Play outdated SDK warning for `androidx.fragment:fragment:1.1.0`. Play Services Wearable brought in the old version; the watch now explicitly uses Fragment 1.8.2, matching the phone. The release dependency graph and the rebuilt AAB's dependency metadata both confirm 1.8.2.
+- [Watch APK](../downloads/nuvori-v2.1.0-watch.apk?raw=true), [watch AAB](../downloads/nuvori-v2.1.0-watch.aab?raw=true), and [R8 mapping](../downloads/nuvori-v2.1.0-watch-mapping.zip) were built from the current checkout on October 4, 2026. Package `com.application.private_vault`, version 2.1.0, code 360010. The watch version code was increased from 360009 for the Fragment dependency fix.
+- The signed, minified watch APK and AAB builds passed. Watch release lint passed with zero errors and 17 warnings. The three shared watch protocol tests passed; the watch module has no JVM unit tests.
+- Both signatures verified and match the phone release certificate. All 84 watch AAB payload entries verified as signed. APK ZIP alignment passed. The watch archives contain no native libraries. JDK `jarsigner` reports the same self-signed certificate, timestamp, and ZIP streaming-order warnings as the phone bundle.
+- The matching R8 mapping is archived and included in the AAB. Checksums cover all retained download files. Watch instrumentation tests and paired-device setup remain pending because no device was connected. See the [watch setup guide](WATCH-COMPANION.md).

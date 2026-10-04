@@ -13,6 +13,7 @@ signing.properties
 !downloads/private-vault-*.apk
 !downloads/nuvori-*.apk
 *.aab
+!downloads/nuvori-*.aab
 *.pvault
 *.vaultphoto
 *.vaultthumb
@@ -30,3 +31,5 @@ captures/
 !THIRD_PARTY_NOTICES.md
 !docs/RELEASE-*.md
 !docs/PERSONAL-DEVICE-SYNC.md
+!docs/PUBLISHING.md
+!docs/WATCH-COMPANION.md

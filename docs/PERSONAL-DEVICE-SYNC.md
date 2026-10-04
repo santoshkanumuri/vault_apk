@@ -1,8 +1,8 @@
 # Personal device sync
 
-Decision revised September 27, 2026.
+Decision revised October 4, 2026.
 
-Nuvori is a private vault for one owner using personal devices. The usual setup is a primary phone, perhaps a second phone and tablet, a Windows computer, and a watch for codes. Android membership remains limited to four active devices. Windows integration remains separate implementation work; the watch is a companion rather than an Android vault member.
+Nuvori is a private vault for one owner using personal devices. The usual setup is a primary phone, perhaps a second phone and tablet, a Windows computer, and a watch for codes. Android membership remains limited to four active devices. Version 2.1.0 includes Windows pairing and an initial vault copy over the encrypted connection. Later edits do not sync with Windows yet. The watch is a companion rather than an Android vault member.
 
 ## Daily behavior
 

@@ -30,7 +30,7 @@ internal data class FormNode(
 )
 
 internal data class LoginFormFields(val username: Int?, val password: Int?, val otp: Int?, val origin: String? = null,
-    val newPasswords: List<Int> = emptyList(), val embeddedWebView: Boolean = false)
+    val newPasswords: List<Int> = emptyList(), val embeddedWebView: Boolean = false, val pinPassword: Boolean = false)
 
 private const val MAX_NODES = 2000
 private const val MAX_DEPTH = 40
@@ -129,6 +129,12 @@ private fun isAccountField(item: FormItem, html: Boolean, native: Boolean): Bool
     return native && nativeUsernameField(item.tokens, node.idEntry, node.hintText, node.inputType)
 }
 
+private val CONFIRM_WORDS = listOf("confirm", "repeat", "retype", "verify", "again")
+
+/** Named as a confirmation (password_confirmation, password2), which only follows the new password it repeats. */
+private fun confirmsPassword(item: FormItem): Boolean = listOfNotNull(item.attrs["name"], item.attrs["id"]).map(::normalizeToken)
+    .any { name -> name.isNotEmpty() && (CONFIRM_WORDS.any { it in name } || name.endsWith("2")) }
+
 private fun kindOf(item: FormItem): PasswordKind {
     if ("newpassword" in item.norm) return PasswordKind.NEW
     if ("currentpassword" in item.norm) return PasswordKind.CURRENT
@@ -151,7 +157,9 @@ private fun splitPasswords(secrets: List<FormItem>): Pair<FormItem?, List<FormIt
         2 -> when {
             kinds[1] != PasswordKind.NEW -> null
             kinds[0] == PasswordKind.CURRENT -> Pair(secrets[0], listOf(secrets[1]))
-            else -> Pair(null, secrets)
+            kinds[0] == PasswordKind.NEW || confirmsPassword(secrets[1]) -> Pair(null, secrets)
+            // A plain box beside a "new" one may be a change form whose current field has no label. Too ambiguous to fill.
+            else -> null
         }
         3 -> if (kinds[1] == PasswordKind.NEW && kinds[2] == PasswordKind.NEW && kinds[0] != PasswordKind.NEW) Pair(secrets[0], secrets.drop(1)) else null
         else -> null
@@ -230,7 +238,8 @@ internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean): LoginFo
     var username = usernames.lastOrNull { it.index < anchor.index } ?: usernames.singleOrNull()
     if (username == null && usernames.isEmpty() && secrets.size == 1 && password != null)
         username = precedingAccount(items, password, browser)
-    return LoginFormFields(username?.node?.id, password?.node?.id, null, origin, fresh.mapNotNull { it.node.id }, embedded)
+    val pin = password != null && password.node.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_NUMBER
+    return LoginFormFields(username?.node?.id, password?.node?.id, null, origin, fresh.mapNotNull { it.node.id }, embedded, pin)
 }
 
 /** Contact and address fields of one form. Repeated kinds are fine; credentials and card fields never count. */

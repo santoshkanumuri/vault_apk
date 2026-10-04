@@ -19,7 +19,7 @@ import java.util.UUID
 internal data class LoginFillRequest(val packageName: String, val identity: String,
     val username: AutofillId?, val password: AutofillId?, val otp: AutofillId?, val expiresAt: Long, val origin: String? = null,
     val newPasswords: List<AutofillId> = emptyList(), val embeddedWebView: Boolean = false,
-    val previousUsername: AutofillId? = null)
+    val previousUsername: AutofillId? = null, val pinPassword: Boolean = false)
 
 private const val SAVE_USERNAME_ID = "save_username_id"
 private const val SAVE_ORIGIN = "save_origin"
@@ -49,8 +49,9 @@ internal fun LoginFillRequest.saveInfo(): SaveInfo? {
     val savedPassword = newPasswords.firstOrNull() ?: password ?: return null
     if (otp != null) return null
     // A native form without a username field still saves its password; the review screen asks which account it belongs to.
+    // A lone numeric PIN (app lock, card PIN) is not offered: it is rarely a login and would prompt on every entry.
     if (origin == null && username == null && previousUsername == null && newPasswords.isEmpty())
-        return SaveInfo.Builder(SaveInfo.SAVE_DATA_TYPE_PASSWORD, arrayOf(savedPassword))
+        return if (pinPassword) null else SaveInfo.Builder(SaveInfo.SAVE_DATA_TYPE_PASSWORD, arrayOf(savedPassword))
             .setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE).build()
     val canSave = if (origin != null) username != null || newPasswords.isNotEmpty()
         else username != null && password != null
@@ -78,14 +79,14 @@ internal object PendingLoginFills {
 }
 
 internal data class NativeLoginFields(val username: AutofillId?, val password: AutofillId?, val otp: AutofillId?, val origin: String? = null,
-    val newPasswords: List<AutofillId> = emptyList(), val embeddedWebView: Boolean = false)
+    val newPasswords: List<AutofillId> = emptyList(), val embeddedWebView: Boolean = false, val pinPassword: Boolean = false)
 
 /** Thin adapter: the rules live in [classifyLoginForm], which runs on plain nodes so it can be unit tested. */
 internal fun nativeLoginFields(structure: AssistStructure, browser: Boolean = false): NativeLoginFields? {
     val tree = formTree(structure) ?: return null
     val form = classifyLoginForm(tree.roots, browser) ?: return null
     return NativeLoginFields(form.username?.let { tree.ids[it] }, form.password?.let { tree.ids[it] },
-        form.otp?.let { tree.ids[it] }, form.origin, form.newPasswords.map { tree.ids[it] }, form.embeddedWebView)
+        form.otp?.let { tree.ids[it] }, form.origin, form.newPasswords.map { tree.ids[it] }, form.embeddedWebView, form.pinPassword)
 }
 
 class VaultAutofillService : AutofillService() {
@@ -114,7 +115,7 @@ class VaultAutofillService : AutofillService() {
             val previousUsername = if (browser) request.clientState?.previousUsernameFor(destination, identity, fields.origin) else null
             val fill = LoginFillRequest(destination, identity, fields.username, fields.password, fields.otp,
                 SystemClock.elapsedRealtime() + 120_000, fields.origin, fields.newPasswords, fields.embeddedWebView,
-                previousUsername)
+                previousUsername, fields.pinPassword)
             val keyboard = getSharedPreferences("vault_preferences", MODE_PRIVATE)
                 .getBoolean("autofill_keyboard_suggestions", true) && fields.otp == null && fields.newPasswords.isEmpty()
             val token = PendingLoginFills.put(fill)

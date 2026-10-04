@@ -101,6 +101,9 @@ class LoginFormClassifierTest {
     @Test fun numericPinIsAPasswordOnlyInTheNumberClass() {
         val pin = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
         assertEquals(0, login(appScreen(appInput(0, pin)))!!.password)
+        // Flagged so a lone PIN screen gets no save prompt; a text password does not carry the flag.
+        assertTrue(login(appScreen(appInput(0, pin)))!!.pinPassword)
+        assertFalse(login(appScreen(appInput(0, PASSWORD_INPUT)))!!.pinPassword)
         // 0x10 is TEXT_VARIATION_URI in the text class.
         assertEquals(InputType.TYPE_NUMBER_VARIATION_PASSWORD, InputType.TYPE_TEXT_VARIATION_URI)
         assertNull(login(appScreen(appInput(0, TEXT_INPUT or InputType.TYPE_TEXT_VARIATION_URI))))
@@ -262,7 +265,7 @@ class LoginFormClassifierTest {
         val explicit = login(webPage(htmlForm(htmlInput(0, type = "password", autocomplete = "new-password"),
             htmlInput(1, type = "password", autocomplete = "new-password"))), browser = true)!!
         assertEquals(listOf(0, 1), explicit.newPasswords); assertNull(explicit.password)
-        listOf("confirm", "repeat_password", "retype", "verify_password", "password_again", "password2", "newpass").forEach {
+        listOf("confirm", "repeat_password", "retype", "verify_password", "password_again", "password2").forEach {
             val form = login(webPage(htmlForm(htmlInput(0, type = "password", name = "pw"), htmlInput(1, type = "password", name = it))), browser = true)
             assertEquals(it, listOf(0, 1), form!!.newPasswords)
         }
@@ -290,10 +293,11 @@ class LoginFormClassifierTest {
         val hinted = login(webPage(htmlForm(htmlInput(0, type = "password", autocomplete = "current-password"),
             htmlInput(1, type = "password", autocomplete = "new-password"))), browser = true)!!
         assertEquals(0, hinted.password); assertEquals(listOf(1), hinted.newPasswords)
-        // An unlabelled first box beside a new one is a registration, not a change.
-        val registration = login(webPage(htmlForm(htmlInput(0, type = "password", name = "password"),
-            htmlInput(1, type = "password", autocomplete = "new-password"))), browser = true)!!
-        assertNull(registration.password); assertEquals(listOf(0, 1), registration.newPasswords)
+        // A plain box beside one marked only "new" could be an unlabelled change form: never guess.
+        assertNull(login(webPage(htmlForm(htmlInput(0, type = "password", name = "password"),
+            htmlInput(1, type = "password", autocomplete = "new-password"))), browser = true))
+        assertNull(login(webPage(htmlForm(htmlInput(0, type = "password", name = "pw"),
+            htmlInput(1, type = "password", name = "newpass"))), browser = true))
     }
 
     @Test fun aLoneNewPasswordFieldIsNew() {

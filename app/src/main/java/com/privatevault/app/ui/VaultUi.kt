@@ -2111,6 +2111,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     val pageScroll = remember(page) { androidx.compose.foundation.ScrollState(0) }
     LaunchedEffect(page) {
         if (page == "Passkeys") viewModel.refreshPasskeys()
+        if (page == "Watch codes") viewModel.refreshWatchConnection()
         if (page != "Import authenticator codes") {
             authenticatorPages = emptyMap(); authenticatorError = null
             oneAuthUri = null; oneAuthPassword = ""
@@ -2177,6 +2178,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     val lightMode by viewModel.lightMode.collectAsStateWithLifecycle()
     val nfcEnabled by viewModel.nfcEnabled.collectAsStateWithLifecycle()
     val security by viewModel.securitySettings.collectAsStateWithLifecycle()
+    val watchConnection by viewModel.watchConnection.collectAsStateWithLifecycle()
     var action by remember { mutableStateOf<String?>(null) }
     var password by remember { mutableStateOf("") }
     var current by remember { mutableStateOf("") }
@@ -2374,10 +2376,20 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             if (page == "Watch codes") {
                 SettingsSection("Codes on your watch",
                     description = "Install Nuvori on the watch and connect it to this phone. The watch keeps an encrypted copy of your authenticator accounts so it can show codes without the phone. The watch must have a screen lock.") {
-                    if (security.watchSyncEnabled) StatusBanner(kind = StatusKind.SUCCESS, title = "Watch sync is on",
-                        message = "Codes are sent to your watch after you add, edit, or delete one.")
+                    val watches = watchConnection.names
+                    val lastSent = com.privatevault.app.watch.WatchDisplay.syncedLabel(System.currentTimeMillis(),
+                        watchConnection.lastSentAt, prefix = "Last update sent")
+                    if (security.watchSyncEnabled) when {
+                        watches == null -> StatusBanner(kind = StatusKind.INFO, title = "Watch sync is on",
+                            message = listOfNotNull("Codes are sent after you add, edit, or delete one.", lastSent?.let { "$it." }).joinToString(" "))
+                        watches.isEmpty() -> StatusBanner(kind = StatusKind.WARNING, title = "No watch connected right now",
+                            message = listOfNotNull("Codes reach your watch when it reconnects to this phone.", lastSent?.let { "$it." }).joinToString(" "))
+                        else -> StatusBanner(kind = StatusKind.SUCCESS, title = "Connected to ${watches.joinToString()}",
+                            message = listOfNotNull("Codes are sent after you add, edit, or delete one.", lastSent?.let { "$it." }).joinToString(" "))
+                    }
                     else StatusBanner(kind = StatusKind.INFO, title = "Watch sync is off",
-                        message = "Connect a Wear OS watch to see your authenticator codes there.")
+                        message = if (!watches.isNullOrEmpty()) "${watches.joinToString()} is connected. Connect it to see your authenticator codes there."
+                            else "Connect a Wear OS watch to see your authenticator codes there.")
                     SettingsPrimaryButton(if (security.watchSyncEnabled) "Sync codes now" else "Connect watch and sync codes",
                         icon = Icons.Outlined.Watch, onClick = viewModel::connectWatch)
                     if (security.watchSyncEnabled) {
@@ -2387,7 +2399,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     }
                 }
                 SettingsSection("How watch sync works") {
-                    Text("Nuvori sends updated accounts after you add, edit, or delete a code. Changes reach the watch when it reconnects. Until then, the watch may show an older list.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Nuvori sends updated accounts after you add, edit, or delete a code, and each time you unlock it on this phone. Changes reach the watch when it reconnects. The watch shows when it last received codes.", style = MaterialTheme.typography.bodyMedium)
+                    Text("On the watch, tap a code to show it full screen. The ring around the edge counts down, and the next code appears in the last 10 seconds.", style = MaterialTheme.typography.bodySmall)
                     Text("Sync may use Google's encrypted Wear OS relay when Bluetooth is unavailable. Only authenticator accounts are sent.", style = MaterialTheme.typography.bodySmall)
                 }
             }

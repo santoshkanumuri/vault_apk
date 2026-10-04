@@ -183,6 +183,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val watchSyncPublisher = com.privatevault.app.watch.WatchSyncPublisher(application)
     private var lastWatchAccounts: List<com.privatevault.app.watch.WatchAccount>? = null
     private var watchPublishJob: Job? = null
+    private val _watchConnection = MutableStateFlow(com.privatevault.app.watch.WatchConnection(null, 0L))
+    val watchConnection = _watchConnection.asStateFlow()
     private var preparedRestore: com.privatevault.app.backup.PreparedRestore? = null
     private val _restoreSummary = MutableStateFlow<String?>(null)
     val restoreSummary = _restoreSummary.asStateFlow()
@@ -529,7 +531,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             db.dao().saveSettings(updated)
             _securitySettings.value = updated
             lastWatchAccounts = accounts.map(::watchAccount)
+            recordWatchSent()
             refresh()
+            refreshWatchConnection()
             if (delivered) notify("Codes saved on the watch.", StatusKind.SUCCESS)
             else notify("Watch paired. Codes are queued; open Nuvori on the watch to receive them.", StatusKind.INFO)
         } finally { key.fill(0) }
@@ -549,8 +553,23 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             db.dao().saveSettings(updated)
             _securitySettings.value = updated
             lastWatchAccounts = null
+            recordWatchSent()
             notify("Removal queued. A disconnected watch will erase its codes when it reconnects.", StatusKind.INFO)
         } finally { key.fill(0) }
+    }
+
+    /** Device-only record of the last successful send, shown on the Watch codes page. Contains no vault data. */
+    private fun recordWatchSent() {
+        val now = System.currentTimeMillis()
+        preferences.edit().putLong("watch_last_sent_at", now).apply()
+        _watchConnection.value = _watchConnection.value.copy(lastSentAt = now)
+    }
+
+    fun refreshWatchConnection() {
+        viewModelScope.launch {
+            val names = watchSyncPublisher.connectedWatches()
+            _watchConnection.value = com.privatevault.app.watch.WatchConnection(names, preferences.getLong("watch_last_sent_at", 0L))
+        }
     }
 
     private fun watchAccount(entry: VaultEntry) = com.privatevault.app.watch.WatchAccount(
@@ -1243,8 +1262,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             val key = sessionKey?.copyOf() ?: return
             watchPublishJob = viewModelScope.launch {
                 try {
-                    if (database === activeDatabase && _status.value is VaultStatus.Unlocked)
+                    if (database === activeDatabase && _status.value is VaultStatus.Unlocked) {
                         watchSyncPublisher.publish(_securitySettings.value.vaultId, key, current)
+                        recordWatchSent()
+                    }
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {

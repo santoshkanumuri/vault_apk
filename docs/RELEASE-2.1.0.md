@@ -9,10 +9,10 @@ Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wea
 - Signup and password-change pages are recognized from field names such as `password_confirmation` when they lack autocomplete hints. A plain password next to a field marked only as new is still left alone, because it may be a change form.
 - One-time-code fields named `otp`, `2fa`, `mfa`, or `verification_code` are offered linked codes. A code field in the same form as a password is still refused.
 - Autofill details fill separate first-name and last-name fields from the saved name, and repeated fields such as "confirm email". Suggestions say what they will fill, for example "Name · Email · Phone +2", without showing the values. Card fields and partial phone fields are never filled.
-- The account picker shows the requesting app's icon and name or the website's host. When no login is linked yet, it lists **Possible matches** by website or app name and opens search right away. A suggestion still needs **Fill and link** confirmation, and the link is bound to the exact website or the app's signing certificate.
+- The account picker shows the requesting app's icon and name or the website's host. When no login is linked yet, it lists **Possible matches** by website or app name and opens search right away. A suggestion still needs **Fill and link** confirmation, which names the website a login is saved for when it differs. Sites on shared hosts such as github.io or vercel.app are not treated as the same service. The link is bound to the exact website or the app's signing certificate.
 - After the picker fills a login with a linked authenticator, the current code is copied as a sensitive clipboard item for the next screen. Turn it off in **Settings > Autofill and codes > Copy linked code after filling**.
 - Unlocking in the picker is quicker. The fingerprint button comes first, the master password field can show what you typed, the keyboard's Done key unlocks, and a wrong password is marked on the field.
-- Save and update prompts show the app or website, the username, a hidden password with **Show**, and an editable name. They say whether the password is already saved, differs from a saved login (**Update**), or is new. App sign-in screens without a username field can be saved; you type the account name. A lone numeric PIN screen does not ask to save.
+- Save and update prompts show the app or website, the username, a hidden password with **Show**, and an editable name. They say whether the password is already saved, differs from a saved login (**Update**), or is new. App sign-in screens without a username field can be saved; you type the account name. When Nuvori only guessed which box held the account, it asks you to confirm the name before saving. Server, workspace, and company boxes are never taken as the account. A lone numeric PIN screen does not ask to save. When the password is already saved, **Done** also completes Android Credential Manager save requests.
 - Passkey requests show the website, account, and requesting app on one card. Sign-in lists each matching passkey as a row.
 - Android's suggestion menu follows the light or dark system theme.
 
@@ -35,6 +35,6 @@ Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wea
 
 ## Verification
 
-- 136 JVM unit tests passed. They cover the new form classifier (login, one-time-code, and profile fields, including unsafe pages that must stay rejected), possible-match ranking, username rules, and password import.
+- 138 JVM unit tests passed. They cover the new form classifier (login, one-time-code, and profile fields, including unsafe pages that must stay rejected), possible-match ranking, username rules, and password import.
 - Every app source file was type-checked against Compose Multiplatform 1.6.11 with AndroidX stand-ins. There were no new errors compared with 2.0.9.
 - Before publishing, still run: the debug unit and instrumentation suites, vital lint, the signed release APK and AAB build, and autofill checks in Chrome, Brave, and native apps on a phone.

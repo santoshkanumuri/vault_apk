@@ -63,7 +63,8 @@ internal fun passwordSuggestions(context: Context, request: LoginFillRequest, en
             PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE)
         val title = "Choose another login"
         val description = "Choose another login in Nuvori's account picker"
-        val menu = menu(title, "Search and link in Nuvori", description)
+        // Shown before unlock, so it names the action rather than any saved account.
+        val menu = menu(title, "Search all saved logins", description)
         val inline = inline(visible.size, title, "Nuvori", description)
         val dataset = Dataset.Builder(menu).setId("nuvori-picker").setAuthentication(picker.intentSender)
         listOfNotNull(request.username, request.password).forEach { dataset.presentField(it, null, menu, inline) }

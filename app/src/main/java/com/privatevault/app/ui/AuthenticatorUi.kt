@@ -53,24 +53,31 @@ internal fun TotpTile(entry: VaultEntry, copy: (String, String) -> Unit, open: (
     val code = remember(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod, current?.div(entry.totpPeriod.coerceAtLeast(1))) {
         if (current == null) null else runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod, current) }.getOrNull()
     }
-    Card(if (initiallyMasked) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().clickable(onClick = open)) {
+    // Recompute on tap so a code at a time-step boundary isn't copied stale.
+    val copyCurrent: () -> Unit = {
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod) }
+                .onSuccess { copy("Authenticator code", it) }
+        }
+    }
+    val warning = statusColors(StatusKind.WARNING).accent
+    val urgent = statusColors(StatusKind.ERROR).accent
+    // The masked card copies without revealing the code; the plain card opens its entry.
+    Card(Modifier.fillMaxWidth().clickable(onClickLabel = if (initiallyMasked) "Copy code" else null,
+        onClick = if (initiallyMasked) copyCurrent else open)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(entry.title, style = MaterialTheme.typography.titleMedium)
             if (entry.primaryValue.isNotBlank()) Text(entry.primaryValue, style = MaterialTheme.typography.bodySmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(if (revealed) code ?: "••• •••" else "••• •••", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
                 if (initiallyMasked) TextButton(onClick = { revealed = !revealed }) { Text(if (revealed) "Hide" else "Show") }
-                IconButton(enabled = code != null, onClick = {
-                    // Recompute on tap so a code at a time-step boundary isn't copied stale.
-                    if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                        runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod) }
-                            .onSuccess { copy("Authenticator code", it) }
-                    }
-                }) { Icon(Icons.Outlined.ContentCopy, "Copy authenticator code") }
+                IconButton(enabled = code != null, onClick = copyCurrent) { Icon(Icons.Outlined.ContentCopy, "Copy authenticator code") }
             }
             if (current != null && code != null) {
                 val remaining = entry.totpPeriod - current % entry.totpPeriod
-                LinearProgressIndicator(progress = remaining.toFloat() / entry.totpPeriod, modifier = Modifier.fillMaxWidth())
+                // Warn before the code rolls over so a slow paste doesn't fail.
+                val barColor = if (remaining <= 2) urgent else if (remaining <= 5) warning else MaterialTheme.colorScheme.primary
+                LinearProgressIndicator(progress = remaining.toFloat() / entry.totpPeriod, modifier = Modifier.fillMaxWidth(), color = barColor)
                 Text("New code in ${remaining}s", style = MaterialTheme.typography.labelSmall)
             } else if (current != null) Text("Check this authenticator's setup key and settings.", color = MaterialTheme.colorScheme.error)
         }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="autofill_suggestion_background">#2B2D30</color>
+    <color name="autofill_suggestion_stroke">#444746</color>
+    <color name="autofill_suggestion_title">#FFFFFF</color>
+    <color name="autofill_suggestion_subtitle">#C4C7C5</color>
+</resources>

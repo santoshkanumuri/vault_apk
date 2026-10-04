@@ -23,8 +23,13 @@ internal data class AutofillProfile(
         put("city", city); put("state", state); put("postalCode", postalCode); put("country", country)
     }.toString()
 
+    /** The vault stores one name. Given is everything before the last word (or the whole name if it is one word). */
+    private fun nameWords(): List<String> = name.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+
     fun value(field: ProfileField): String = when (field) {
         ProfileField.NAME -> name
+        ProfileField.GIVEN_NAME -> nameWords().let { if (it.size < 2) it.firstOrNull().orEmpty() else it.dropLast(1).joinToString(" ") }
+        ProfileField.FAMILY_NAME -> nameWords().let { if (it.size < 2) "" else it.last() }
         ProfileField.EMAIL -> email
         ProfileField.PHONE -> phone
         ProfileField.ADDRESS1 -> address1
@@ -52,7 +57,26 @@ internal data class AutofillProfile(
 }
 
 internal enum class ProfileField {
-    NAME, EMAIL, PHONE, ADDRESS1, ADDRESS2, UNIT, FULL_ADDRESS, CITY, STATE, POSTAL_CODE, COUNTRY
+    NAME, GIVEN_NAME, FAMILY_NAME, EMAIL, PHONE, ADDRESS1, ADDRESS2, UNIT, FULL_ADDRESS, CITY, STATE, POSTAL_CODE, COUNTRY
+}
+
+/** What a field kind is called in the picker. Labels only, never the stored values. */
+internal fun ProfileField.summaryLabel(): String = when (this) {
+    ProfileField.NAME, ProfileField.GIVEN_NAME, ProfileField.FAMILY_NAME -> "Name"
+    ProfileField.EMAIL -> "Email"
+    ProfileField.PHONE -> "Phone"
+    ProfileField.ADDRESS1, ProfileField.ADDRESS2, ProfileField.UNIT, ProfileField.FULL_ADDRESS -> "Address"
+    ProfileField.CITY -> "City"
+    ProfileField.STATE -> "State"
+    ProfileField.POSTAL_CODE -> "Postal code"
+    ProfileField.COUNTRY -> "Country"
+}
+
+/** "Name · Email · Phone +2": the kinds a profile will fill, in a fixed order, at most [shown] of them. */
+internal fun profileFillSummary(kinds: Collection<ProfileField>, shown: Int = 3): String {
+    val labels = kinds.sortedBy { it.ordinal }.map { it.summaryLabel() }.distinct()
+    if (labels.isEmpty()) return "Autofill details"
+    return labels.take(shown).joinToString(" · ") + if (labels.size > shown) " +${labels.size - shown}" else ""
 }
 
 internal fun VaultEntry.autofillProfile(): AutofillProfile? =

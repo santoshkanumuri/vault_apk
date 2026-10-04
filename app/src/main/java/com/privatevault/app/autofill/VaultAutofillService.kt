@@ -8,13 +8,11 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.SystemClock
 import android.service.autofill.*
-import android.text.InputType
 import android.view.autofill.AutofillId
 import android.widget.RemoteViews
 import com.privatevault.app.VaultCodesActivity
 import com.privatevault.app.security.appSigningIdentity
 import com.privatevault.app.security.trustedBrowser
-import com.privatevault.app.security.httpsOrigin
 import com.privatevault.app.security.VaultKeyManager
 import java.util.UUID
 
@@ -49,9 +47,14 @@ internal fun Bundle.previousUsernameFor(packageName: String, identity: String, o
 
 internal fun LoginFillRequest.saveInfo(): SaveInfo? {
     val savedPassword = newPasswords.firstOrNull() ?: password ?: return null
+    if (otp != null) return null
+    // A native form without a username field still saves its password; the review screen asks which account it belongs to.
+    if (origin == null && username == null && previousUsername == null && newPasswords.isEmpty())
+        return SaveInfo.Builder(SaveInfo.SAVE_DATA_TYPE_PASSWORD, arrayOf(savedPassword))
+            .setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE).build()
     val canSave = if (origin != null) username != null || newPasswords.isNotEmpty()
         else username != null && password != null
-    if (otp != null || (!canSave && previousUsername == null)) return null
+    if (!canSave && previousUsername == null) return null
     return SaveInfo.Builder(SaveInfo.SAVE_DATA_TYPE_USERNAME or SaveInfo.SAVE_DATA_TYPE_PASSWORD,
         (listOfNotNull(username ?: previousUsername, savedPassword) + newPasswords.drop(1)).toTypedArray())
         .setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE).build()
@@ -77,70 +80,12 @@ internal object PendingLoginFills {
 internal data class NativeLoginFields(val username: AutofillId?, val password: AutofillId?, val otp: AutofillId?, val origin: String? = null,
     val newPasswords: List<AutofillId> = emptyList(), val embeddedWebView: Boolean = false)
 
+/** Thin adapter: the rules live in [classifyLoginForm], which runs on plain nodes so it can be unit tested. */
 internal fun nativeLoginFields(structure: AssistStructure, browser: Boolean = false): NativeLoginFields? {
-    val usernames = mutableListOf<AutofillId>()
-    val passwords = mutableListOf<AutofillId>()
-    val newPasswords = mutableListOf<AutofillId>()
-    val codes = mutableListOf<AutofillId>()
-    var unsafe = false
-    var count = 0
-    var forms = 0
-    var unlabelledPassword = false
-    var embeddedWebView = false
-    val origins = mutableSetOf<String>()
-    fun visit(node: AssistStructure.ViewNode, depth: Int, parentOrigin: String? = null, parentVisible: Boolean = true,
-        parentWeb: Boolean = false) {
-        if (++count > 2000 || depth > 40) { unsafe = true; return }
-        val web = parentWeb || !node.webDomain.isNullOrBlank() || node.htmlInfo != null || node.className?.contains("WebView", true) == true
-        if (web && !browser) embeddedWebView = true
-        var origin = parentOrigin
-        if (!node.webDomain.isNullOrBlank()) {
-            origin = if (node.webScheme == "https") httpsOrigin("https://${node.webDomain}") else null
-            if (origin == null && browser) unsafe = true
-            if (origin != null) origins.add(origin)
-            if (!browser && node.webScheme != null && node.webScheme != "https") unsafe = true
-        }
-        val attributes = node.htmlInfo?.attributes.orEmpty().associate { it.first.lowercase(java.util.Locale.ROOT) to it.second }
-        if (node.htmlInfo?.tag?.lowercase(java.util.Locale.ROOT) in setOf("iframe", "frame")) unsafe = true
-        if (node.htmlInfo?.tag.equals("form", true)) forms++
-        val hints = node.autofillHints.orEmpty().toSet() + attributes["autocomplete"].orEmpty().lowercase(java.util.Locale.ROOT).split(' ')
-        if (!browser && hints.any { it == "newPassword" || it == "newUsername" || it == "new-password" }) unsafe = true
-        val visible = parentVisible && node.visibility == android.view.View.VISIBLE
-        if (visible && node.isEnabled) node.autofillId?.let { id ->
-            val variation = node.inputType and InputType.TYPE_MASK_VARIATION
-            val htmlType = attributes["type"]?.lowercase(java.util.Locale.ROOT)
-            val username = isUsernameField(hints, attributes,
-                node.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT &&
-                    variation in setOf(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS, InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS), browser || web)
-            val recognized = hints.any { it in setOf("2faAppOTPCode", "oneTimeCode", "one-time-code", "password", "current-password", "newPassword", "new-password", "username", "newUsername", "emailAddress") } ||
-                username || htmlType == "password" || variation == InputType.TYPE_TEXT_VARIATION_PASSWORD || variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
-            if (browser && recognized && origin == null) unsafe = true
-            when {
-                hints.any { it == "newPassword" || it == "new-password" } -> {
-                    if (origin == null) unsafe = true
-                    newPasswords.add(id)
-                }
-                hints.any { it == "2faAppOTPCode" || it == "oneTimeCode" || it == "one-time-code" } -> codes.add(id)
-                "password" in hints || "current-password" in hints || htmlType == "password" || variation == InputType.TYPE_TEXT_VARIATION_PASSWORD || variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD -> {
-                    passwords.add(id)
-                    if ("current-password" !in hints) unlabelledPassword = true
-                }
-                username -> usernames.add(id)
-            }
-        }
-        for (i in 0 until node.childCount) visit(node.getChildAt(i), depth + 1, origin, visible, web)
-    }
-    for (i in 0 until structure.windowNodeCount) visit(structure.getWindowNodeAt(i).rootViewNode, 0)
-    if (unsafe || passwords.size > 1 || newPasswords.size > 2 || usernames.size > 1 || codes.size > 1) return null
-    if (browser && (origins.size != 1 || forms > 1)) return null
-    if (embeddedWebView && (origins.size > 1 || forms > 1)) return null
-    if (newPasswords.isNotEmpty() && unlabelledPassword) return null
-    // Separate OTP screens only: do not fill multiple factors in a mixed form.
-    if (codes.isNotEmpty() && (passwords.isNotEmpty() || newPasswords.isNotEmpty() || usernames.isNotEmpty())) return null
-    if (passwords.isEmpty() && newPasswords.isEmpty() && codes.isEmpty() && !((browser || embeddedWebView) && usernames.size == 1)) return null
-    // An embedded app can invent webDomain. Its certificate is the destination trust boundary.
-    return NativeLoginFields(usernames.singleOrNull(), passwords.singleOrNull(), codes.singleOrNull(),
-        if (browser) origins.single() else null, newPasswords, embeddedWebView)
+    val tree = formTree(structure) ?: return null
+    val form = classifyLoginForm(tree.roots, browser) ?: return null
+    return NativeLoginFields(form.username?.let { tree.ids[it] }, form.password?.let { tree.ids[it] },
+        form.otp?.let { tree.ids[it] }, form.origin, form.newPasswords.map { tree.ids[it] }, form.embeddedWebView)
 }
 
 class VaultAutofillService : AutofillService() {
@@ -239,12 +184,15 @@ class VaultAutofillService : AutofillService() {
                 if (browser && nativeLoginFields(context.structure, true)?.origin != origin) continue
                 for (i in 0 until context.structure.windowNodeCount) visit(context.structure.getWindowNodeAt(i).rootViewNode)
             }
-            val username = values[fields.username]?.toString() ?: values[previousUsername]?.toString() ?: request.clientState?.takeIf {
+            val selected = request.clientState?.takeIf {
                 browser && it.getString("selected_origin") == origin && it.getString("selected_browser") == destination
-            }?.getString("selected_username") ?: error("Select an account before changing its password")
+            }?.getString("selected_username")
+            // No readable account: the review screen asks for it. A blank field counts as missing.
+            val username = listOf(values[fields.username]?.toString(), values[previousUsername]?.toString(), selected)
+                .firstOrNull { !it.isNullOrBlank() }.orEmpty()
             val password = requireNotNull(values[savedPassword])
             check(fields.newPasswords.all { values[it]?.toString() == password.toString() })
-            require(username.isNotBlank() && username.length <= 1024 && password.isNotEmpty() && password.length <= 4096)
+            require(username.length <= 1024 && password.isNotEmpty() && password.length <= 4096)
             pending = LoginSaveRequest(destination, identity, origin, username, CharArray(password.length) { password[it] }, SystemClock.elapsedRealtime() + 120_000)
             token = PendingLoginSaves.put(pending)
             val intent = Intent(this, VaultCodesActivity::class.java).setAction("vault.save.$token").putExtra("login_save_token", token)

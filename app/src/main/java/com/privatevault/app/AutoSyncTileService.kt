@@ -45,13 +45,13 @@ class AutoSyncTileService : TileService() {
     }
 
     private fun updateState() {
-        qsTile?.apply {
-            label = "Auto sync"
-            state = if (hasPairedGroup() && !LanSyncService.isPaused(this@AutoSyncTileService) &&
-                getSystemService(NotificationManager::class.java).areNotificationsEnabled())
-                Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-            updateTile()
-        }
+        val tile = qsTile ?: return
+        val ready = hasPairedGroup() && getSystemService(NotificationManager::class.java).areNotificationsEnabled()
+        val running = ready && !LanSyncService.isPaused(this)
+        tile.label = "Auto sync"
+        tile.subtitle = if (!ready) "Set up" else if (running) "On" else "Paused"
+        tile.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        tile.updateTile()
     }
 
     @Suppress("DEPRECATION")

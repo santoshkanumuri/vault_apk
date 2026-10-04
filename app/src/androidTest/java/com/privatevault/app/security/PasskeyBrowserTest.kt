@@ -113,7 +113,8 @@ class PasskeyBrowserTest {
             set(waitFor("Sign-in username") { it.viewIdResourceName == "username" && it.isEditable }, username)
             tap(text("Sign in with passkey"))
             unlock()
-            tap(text("Sign in as $username"))
+            // The picker lists each passkey by account name; the website's own username field is in another package.
+            tap(waitFor("Passkey row") { it.text?.toString() == username && it.packageName?.toString() == context.packageName })
             waitFor("Restored passkey accepted by website") { it.text?.toString()?.startsWith("Signed in as") == true }
         } finally {
             shell("am force-stop com.brave.browser")

@@ -23,9 +23,13 @@ internal fun profileSuggestions(context: Context, fields: Map<AutofillId, Profil
         .setAction("vault.autofill.profiles"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     var added = 0
     profiles.take(slots).forEachIndexed { index, (title, profile) ->
+        // Which kinds this profile fills, by label only: the stored values stay out of the suggestion.
+        val filled = fields.filter { (_, field) -> profile.value(field).isNotBlank() }
+        if (filled.isEmpty()) return@forEachIndexed
+        val summary = profileFillSummary(filled.values)
         val menu = RemoteViews(context.packageName, R.layout.autofill_suggestion).apply {
             setTextViewText(R.id.autofill_suggestion_title, title)
-            setTextViewText(R.id.autofill_suggestion_subtitle, "Autofill details")
+            setTextViewText(R.id.autofill_suggestion_subtitle, summary)
             setContentDescription(R.id.autofill_suggestion_root, "Fill details from $title")
         }
         val inline = if (Build.VERSION.SDK_INT >= 30 && inlineRequest != null) runCatching {
@@ -34,20 +38,16 @@ internal fun profileSuggestions(context: Context, fields: Map<AutofillId, Profil
             if (!androidx.autofill.inline.UiVersions.getVersions(spec.style)
                     .contains(androidx.autofill.inline.UiVersions.INLINE_UI_VERSION_1)) return@runCatching null
             val content: androidx.autofill.inline.UiVersions.Content = androidx.autofill.inline.v1.InlineSuggestionUi
-                .newContentBuilder(attribution).setTitle(title).setSubtitle("Autofill details")
+                .newContentBuilder(attribution).setTitle(title).setSubtitle(summary)
                 .setStartIcon(android.graphics.drawable.Icon.createWithResource(context, R.mipmap.ic_launcher))
                 .setContentDescription("Fill details from $title").build()
             InlinePresentation(content.slice, spec, false)
         }.getOrNull() else null
         val dataset = Dataset.Builder(menu).setId("profile-$index")
-        var values = 0
-        fields.forEach { (id, field) ->
-            profile.value(field).takeIf { it.isNotBlank() }?.let { value ->
-                dataset.presentField(id, AutofillValue.forText(value), menu, inline)
-                values++
-            }
+        filled.forEach { (id, field) ->
+            dataset.presentField(id, AutofillValue.forText(profile.value(field)), menu, inline)
         }
-        if (values > 0) { response.addDataset(dataset.build()); added++ }
+        response.addDataset(dataset.build()); added++
     }
     return if (added > 0) response.build() else null
 }

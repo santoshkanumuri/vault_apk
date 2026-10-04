@@ -213,12 +213,12 @@ interface VaultDao {
     @Update suspend fun updateEntry(entry: VaultEntry)
 
     @Transaction
-    suspend fun saveBrowserLogin(origin: String, username: String, password: String, expected: VaultEntry?) {
+    suspend fun saveBrowserLogin(origin: String, username: String, password: String, expected: VaultEntry?, title: String? = null) {
         require(com.privatevault.app.security.httpsOrigin(origin) == origin && username.isNotBlank() && password.isNotEmpty())
         if (expected == null) {
             val duplicate = loginAndCodeEntries().any { it.type == EntryType.PASSWORD &&
                 com.privatevault.app.security.httpsOrigin(it.tertiaryValue) == origin && it.primaryValue == username && it.secondaryValue == password }
-            if (!duplicate) insertEntry(VaultEntry(type = EntryType.PASSWORD, title = origin.removePrefix("https://"),
+            if (!duplicate) insertEntry(VaultEntry(type = EntryType.PASSWORD, title = com.privatevault.app.security.newLoginTitle(title, origin.removePrefix("https://")),
                 primaryValue = username, secondaryValue = password, tertiaryValue = origin))
         } else {
             val current = entry(expected.id)?.entry
@@ -230,13 +230,13 @@ interface VaultDao {
     }
 
     @Transaction
-    suspend fun saveNativeLogin(packageName: String, identity: String, appName: String, username: String, password: String, expected: VaultEntry?) {
+    suspend fun saveNativeLogin(packageName: String, identity: String, appName: String, username: String, password: String, expected: VaultEntry?, title: String? = null) {
         require(packageName.isNotBlank() && '\n' !in packageName && '=' !in packageName && identity.isNotBlank() && '\n' !in identity)
         require(username.isNotBlank() && password.isNotEmpty())
         if (expected == null) {
             val duplicate = loginAndCodeEntries().any { it.type == EntryType.PASSWORD && it.primaryValue == username &&
                 it.secondaryValue == password && com.privatevault.app.security.loginAuthorized(it, packageName, identity) }
-            if (!duplicate) insertEntry(VaultEntry(type = EntryType.PASSWORD, title = appName.ifBlank { packageName },
+            if (!duplicate) insertEntry(VaultEntry(type = EntryType.PASSWORD, title = com.privatevault.app.security.newLoginTitle(title, appName.ifBlank { packageName }),
                 primaryValue = username, secondaryValue = password, autofillSignatures = "$packageName=$identity"))
         } else {
             val current = entry(expected.id)?.entry

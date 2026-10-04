@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.net.InetAddresses
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
@@ -15,22 +16,23 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.CheckCircleOutline
-import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.HourglassEmpty
-import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.AppShortcut
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.LinkOff
+import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.QrCode
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Sync
-import androidx.compose.material.icons.outlined.WifiFind
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -54,24 +56,28 @@ import com.privatevault.app.sync.PairingInvitation
 import com.privatevault.app.sync.ReversePairingInvitation
 import com.privatevault.app.data.SyncMembershipEntity
 import com.privatevault.app.sync.isPrivateAddress
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
-private data class SyncTone(val background: Color, val foreground: Color, val accent: Color)
+/** Maps a sync phase to the shared status meaning. `waitingChanges` marks a finished check that left changes undelivered. */
+private fun DeviceSyncPhase.statusKind(waitingChanges: Boolean = false): StatusKind = when (this) {
+    DeviceSyncPhase.ATTENTION -> StatusKind.ERROR
+    DeviceSyncPhase.TRANSFERRING, DeviceSyncPhase.CONNECTING, DeviceSyncPhase.SEARCHING,
+        DeviceSyncPhase.FOUND -> StatusKind.PROGRESS
+    DeviceSyncPhase.RECEIVED, DeviceSyncPhase.PAUSED -> StatusKind.WARNING
+    DeviceSyncPhase.CHECKED -> if (waitingChanges) StatusKind.WARNING else StatusKind.SUCCESS
+    DeviceSyncPhase.OFF, DeviceSyncPhase.WAITING -> StatusKind.NEUTRAL
+}
 
-@Composable
-private fun syncTone(phase: DeviceSyncPhase): SyncTone {
-    val colors = MaterialTheme.colorScheme
-    val light = colors.background.luminance() > .5f
-    return when (phase) {
-        DeviceSyncPhase.ATTENTION -> SyncTone(colors.error.copy(alpha = .12f), colors.error, colors.error)
-        DeviceSyncPhase.TRANSFERRING, DeviceSyncPhase.CHECKED ->
-            SyncTone(colors.primaryContainer, colors.onPrimaryContainer, colors.primary)
-        DeviceSyncPhase.SEARCHING, DeviceSyncPhase.FOUND, DeviceSyncPhase.CONNECTING, DeviceSyncPhase.RECEIVED ->
-            if (light) SyncTone(Color(0xFFE4F1FF), Color(0xFF153A5B), Color(0xFF225F99))
-            else SyncTone(Color(0xFF152D43), Color(0xFFDAEDFF), Color(0xFF9DCEFF))
-        else -> SyncTone(colors.surfaceVariant, colors.onSurfaceVariant, colors.outline)
+private fun relativeTime(then: Long, now: Long): String {
+    val seconds = ((now - then) / 1000).coerceAtLeast(0)
+    return when {
+        seconds < 60 -> "just now"
+        seconds < 3_600 -> (seconds / 60).let { if (it == 1L) "1 minute ago" else "$it minutes ago" }
+        seconds < 86_400 -> (seconds / 3_600).let { if (it == 1L) "1 hour ago" else "$it hours ago" }
+        else -> DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(then))
     }
 }
 
@@ -86,75 +92,68 @@ private fun SyncStageTrail(phase: DeviceSyncPhase, modifier: Modifier = Modifier
         else -> -1
     }
     if (step < 0) return
-    val tone = syncTone(phase)
+    val accent = statusColors(phase.statusKind()).accent
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         listOf("Find", "Verify", "Exchange", "Checked").forEachIndexed { index, label ->
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Box(Modifier.size(8.dp).background(
-                    if (index <= step) tone.accent else tone.foreground.copy(alpha = .32f), CircleShape))
-                Text(label, style = MaterialTheme.typography.labelSmall, color = tone.foreground,
-                    maxLines = 1)
+                    if (index <= step) accent else muted.copy(alpha = .32f), CircleShape))
+                Text(label, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
             }
         }
     }
 }
 
-@Composable
-private fun SyncStatusTag(label: String, phase: DeviceSyncPhase) {
-    val tone = syncTone(phase)
-    val icon = when (phase) {
-        DeviceSyncPhase.TRANSFERRING -> Icons.Outlined.Sync
-        DeviceSyncPhase.CHECKED -> Icons.Outlined.CheckCircleOutline
-        DeviceSyncPhase.ATTENTION -> Icons.Outlined.ErrorOutline
-        DeviceSyncPhase.FOUND, DeviceSyncPhase.CONNECTING -> Icons.Outlined.Link
-        DeviceSyncPhase.SEARCHING -> Icons.Outlined.WifiFind
-        else -> Icons.Outlined.HourglassEmpty
-    }
-    Surface(color = tone.background, shape = RoundedCornerShape(10.dp)) {
-        Row(Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = tone.accent, modifier = Modifier.size(16.dp))
-            Text(label, style = MaterialTheme.typography.labelSmall, color = tone.foreground,
-                maxLines = 1)
-        }
-    }
-}
-
+/** The state of this vault's sync at a glance, with the one action people need most. */
 @Composable
 internal fun DeviceSyncState(status: DeviceSyncStatus, connected: Int, paired: Int,
-    waiting: Int = 0) {
-    val tone = syncTone(status.phase)
+    waiting: Int = 0, lastChecked: Long = 0L, onSyncNow: (() -> Unit)? = null) {
     val hasWaitingChanges = waiting > 0 && status.phase == DeviceSyncPhase.CHECKED
-    Surface(Modifier.fillMaxWidth().animateContentSize(),
-        shape = RoundedCornerShape(20.dp), color = tone.background) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.size(12.dp).background(tone.accent, CircleShape))
-                Text(if (hasWaitingChanges) "Changes still waiting" else status.phase.title,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold, color = tone.foreground)
+    val kind = status.phase.statusKind(hasWaitingChanges)
+    val colors = statusColors(kind)
+    val busy = status.phase == DeviceSyncPhase.CONNECTING || status.phase == DeviceSyncPhase.TRANSFERRING
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    if (lastChecked > 0) LaunchedEffect(lastChecked, status.phase) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(30_000)
+        }
+    }
+    Surface(Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(20.dp),
+        color = colors.container, contentColor = colors.content) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Icon(kind.icon, contentDescription = null, tint = colors.accent, modifier = Modifier.size(28.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(if (hasWaitingChanges) "Changes still waiting" else status.phase.title,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    if (lastChecked > 0) Text("Last checked ${relativeTime(lastChecked, now)}",
+                        style = MaterialTheme.typography.labelMedium)
+                }
             }
             Text(if (hasWaitingChanges) "The last exchange finished. Some changes still need delivery or application."
-                else status.detail, style = MaterialTheme.typography.bodySmall, color = tone.foreground,
+                else status.detail, style = MaterialTheme.typography.bodySmall,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (status.phase == DeviceSyncPhase.CONNECTING || status.phase == DeviceSyncPhase.TRANSFERRING)
-                LinearProgressIndicator(Modifier.fillMaxWidth(), color = tone.accent,
-                    trackColor = tone.accent.copy(alpha = .24f))
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = colors.accent,
+                trackColor = colors.accent.copy(alpha = .24f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(Triple(waiting, "Waiting", if (waiting > 0) MaterialTheme.colorScheme.primary
-                    else tone.foreground),
-                    Triple(connected, "Syncing", if (connected == 0) tone.foreground
-                    else if (MaterialTheme.colorScheme.background.luminance() > .5f)
-                        Color(0xFF225F99) else Color(0xFF9DCEFF)),
-                    Triple(paired, "Devices", tone.foreground)).forEach { (count, label, color) ->
+                listOf(waiting to "Waiting", connected to "Syncing", paired to "Devices").forEach { (count, label) ->
                     Column(Modifier.weight(1f)) {
-                        Text("$count", style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold, color = color)
-                        Text(label, style = MaterialTheme.typography.labelSmall, color = tone.foreground)
+                        Text("$count", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(label, style = MaterialTheme.typography.labelSmall)
                     }
                 }
+            }
+            if (onSyncNow != null) Button(onClick = onSyncNow, enabled = !busy,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                if (busy) CircularProgressIndicator(Modifier.size(ButtonDefaults.IconSize), strokeWidth = 2.dp,
+                    color = LocalContentColor.current)
+                else Icon(Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                Text("Sync now")
             }
         }
     }
@@ -163,17 +162,13 @@ internal fun DeviceSyncState(status: DeviceSyncStatus, connected: Int, paired: I
 @Composable
 private fun ConflictInbox(conflicts: List<SyncConflictReview>, onReview: (String) -> Unit) {
     if (conflicts.isEmpty()) return
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.error.copy(alpha = .08f))) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Conflicts to review", style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f))
-                SyncStatusTag("${conflicts.size} waiting", DeviceSyncPhase.ATTENTION)
-            }
-            conflicts.forEach { conflict ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        StatusBanner(kind = StatusKind.WARNING, title = "Conflicts to review",
+            message = "${conflicts.size} ${if (conflicts.size == 1) "record was" else "records were"} changed on two devices. Choose which version to keep.")
+        conflicts.forEach { conflict ->
+            Card(Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text(conflict.type.replaceFirstChar { it.uppercase() } + " conflict",
                             style = MaterialTheme.typography.titleSmall)
@@ -181,7 +176,9 @@ private fun ConflictInbox(conflicts: List<SyncConflictReview>, onReview: (String
                             style = MaterialTheme.typography.bodySmall, maxLines = 1,
                             overflow = TextOverflow.Ellipsis)
                     }
-                    TextButton(onClick = { onReview(conflict.id) }) { Text("Review") }
+                    OutlinedButton(onClick = { onReview(conflict.id) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("Review")
+                    }
                 }
             }
         }
@@ -195,7 +192,7 @@ private fun ConflictVersion(label: String, side: SyncConflictSide) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                if (side.deleted) SyncStatusTag("Deleted", DeviceSyncPhase.ATTENTION)
+                if (side.deleted) StatusChip(StatusKind.ERROR, "Deleted")
             }
             Text(side.device, style = MaterialTheme.typography.labelMedium)
             Text("Changed ${side.reportedAtUtc}", style = MaterialTheme.typography.bodySmall)
@@ -227,27 +224,28 @@ internal fun ConflictReviewSheet(conflict: SyncConflictReview, onDismiss: () -> 
             Text("Times may differ. Secret values stay hidden.",
                 style = MaterialTheme.typography.bodySmall)
             if (conflict.current.deleted || conflict.incoming.deleted)
-                Text("A deleted version removes this record.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                StatusBanner(kind = StatusKind.WARNING, message = "A deleted version removes this record.")
             if (conflict.type == "passkey")
-                Text("The incoming passkey cannot replace another credential with the same ID. Keep this device's version, then register a new passkey on the website.",
-                    style = MaterialTheme.typography.bodySmall)
+                StatusBanner(kind = StatusKind.INFO, message = "The incoming passkey cannot replace another credential with the same ID. Keep this device's version, then register a new passkey on the website.")
             if (pendingChoice == null) {
-                OutlinedButton(onClick = { pendingChoice = false }, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { pendingChoice = false },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
                     Text("Keep this device's version")
                 }
                 if (conflict.type != "passkey")
-                    Button(onClick = { pendingChoice = true }, modifier = Modifier.fillMaxWidth(),
+                    Button(onClick = { pendingChoice = true },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                         colors = if (conflict.incoming.deleted) ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error)
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError)
                         else ButtonDefaults.buttonColors()) {
                         Text("Use incoming version")
                     }
             } else {
                 val choosingDeleted = if (pendingChoice == true) conflict.incoming.deleted
                     else conflict.current.deleted
-                Surface(color = if (choosingDeleted) MaterialTheme.colorScheme.error.copy(alpha = .12f)
-                    else MaterialTheme.colorScheme.primaryContainer,
+                val panel = statusColors(if (choosingDeleted) StatusKind.ERROR else StatusKind.INFO)
+                Surface(color = panel.container, contentColor = panel.content,
                     shape = RoundedCornerShape(14.dp)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(if (pendingChoice == true) "Use the incoming version?" else "Keep this device's version?",
@@ -256,12 +254,15 @@ internal fun ConflictReviewSheet(conflict: SyncConflictReview, onDismiss: () -> 
                             else "This replaces the current whole record on paired devices.",
                             style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { pendingChoice = null }, modifier = Modifier.weight(1f)) {
-                                Text("Go back")
+                            TextButton(onClick = { pendingChoice = null },
+                                modifier = Modifier.weight(1f).heightIn(min = 52.dp)) {
+                                Text("Go back", color = panel.content)
                             }
-                            Button(onClick = { onChoose(pendingChoice == true) }, modifier = Modifier.weight(1f),
+                            Button(onClick = { onChoose(pendingChoice == true) },
+                                modifier = Modifier.weight(1f).heightIn(min = 52.dp),
                                 colors = if (choosingDeleted) ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.error)
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = MaterialTheme.colorScheme.onError)
                                 else ButtonDefaults.buttonColors()) {
                                 Text("Confirm choice")
                             }
@@ -279,15 +280,19 @@ internal fun DeviceSyncSelfCard(device: SyncMembershipEntity, isManager: Boolean
     var editing by rememberSaveable(device.deviceId) { mutableStateOf(false) }
     var name by rememberSaveable(device.deviceId) { mutableStateOf(device.displayName) }
     Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text("This device", style = MaterialTheme.typography.labelSmall)
+        Row(Modifier.padding(start = 16.dp, top = 12.dp, end = 8.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            SettingsIconBadge(Icons.Outlined.PhoneAndroid)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("This device", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary)
                 Text(device.displayName, style = MaterialTheme.typography.titleMedium,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("${if (isManager) "Managing device" else "Paired device"} · ${device.deviceId.take(8)}",
                     style = MaterialTheme.typography.labelSmall)
             }
-            TextButton(onClick = { name = device.displayName; editing = true }) { Text("Rename") }
+            TextButton(onClick = { name = device.displayName; editing = true },
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("Rename") }
         }
     }
     if (editing) AlertDialog(onDismissRequest = { editing = false },
@@ -318,19 +323,17 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
     counts: PeerSyncCounts = PeerSyncCounts(0, 0, 0, 0), advanced: Boolean = true) {
     val needsCheck = counts.toSend > 0 || counts.toReceiveHere > 0 || counts.toApplyHere > 0 ||
         counts.receivedThere > 0
-    val peerLabel = when {
-        status?.phase == DeviceSyncPhase.TRANSFERRING -> "Syncing"
-        status?.phase == DeviceSyncPhase.CONNECTING -> "Verifying"
-        status?.phase == DeviceSyncPhase.ATTENTION -> "Needs attention"
-        counts.toApplyHere > 0 -> "Waiting to apply"
-        needsCheck -> "Changes waiting"
-        status?.phase == DeviceSyncPhase.SEARCHING || status?.phase == DeviceSyncPhase.FOUND -> "Looking"
-        lastExchange > 0 -> "Checked"
-        else -> "Not checked yet"
+    val (peerLabel, peerKind) = when {
+        status?.phase == DeviceSyncPhase.TRANSFERRING -> "Syncing" to StatusKind.PROGRESS
+        status?.phase == DeviceSyncPhase.CONNECTING -> "Verifying" to StatusKind.PROGRESS
+        status?.phase == DeviceSyncPhase.ATTENTION -> "Needs attention" to StatusKind.ERROR
+        counts.toApplyHere > 0 -> "Waiting to apply" to StatusKind.WARNING
+        needsCheck -> "Changes waiting" to StatusKind.WARNING
+        status?.phase == DeviceSyncPhase.SEARCHING || status?.phase == DeviceSyncPhase.FOUND ->
+            "Looking" to StatusKind.PROGRESS
+        lastExchange > 0 -> "Checked" to StatusKind.SUCCESS
+        else -> "Not checked yet" to StatusKind.NEUTRAL
     }
-    val displayPhase = if (needsCheck && status?.phase !in setOf(DeviceSyncPhase.TRANSFERRING,
-            DeviceSyncPhase.CONNECTING, DeviceSyncPhase.ATTENTION)) DeviceSyncPhase.RECEIVED
-        else status?.phase ?: DeviceSyncPhase.WAITING
     var address by rememberSaveable(device.deviceId) { mutableStateOf(savedAddress) }
     var showAddress by rememberSaveable(device.deviceId) { mutableStateOf(false) }
     LaunchedEffect(savedAddress) { if (!showAddress) address = savedAddress }
@@ -345,7 +348,7 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                     Text(if (isManager) "Manages this sync group" else "In this sync group",
                         style = MaterialTheme.typography.labelSmall)
                 }
-                SyncStatusTag(peerLabel, displayPhase)
+                StatusChip(peerKind, peerLabel)
             }
             Text(when {
                 status?.phase == DeviceSyncPhase.TRANSFERRING -> "Sending and receiving encrypted changes."
@@ -359,7 +362,6 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                 else -> "Linked to your vault. Waiting for the first check."
             },
                 style = MaterialTheme.typography.bodySmall,
-                color = syncTone(displayPhase).foreground,
                 maxLines = if (status?.phase == DeviceSyncPhase.ATTENTION) 3 else 2,
                 overflow = TextOverflow.Ellipsis)
             if (status?.phase == DeviceSyncPhase.TRANSFERRING)
@@ -375,7 +377,8 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                     style = MaterialTheme.typography.bodySmall)
                 Text("Received there, not applied: ${counts.receivedThere} · Known changes to receive: ${counts.toReceiveHere}",
                     style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { showAddress = !showAddress }) {
+                TextButton(onClick = { showAddress = !showAddress },
+                    modifier = Modifier.heightIn(min = 48.dp)) {
                     Text(if (showAddress) "Hide connection help" else "Connection help")
                 }
                 if (showAddress) {
@@ -390,14 +393,27 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                             if (address.isNotBlank() && !validAddress)
                                 Text("Enter a private Wi-Fi IP address")
                         }, modifier = Modifier.fillMaxWidth())
-                    OutlinedButton(onClick = { onTryAddress(address) }, enabled = validAddress,
-                        modifier = Modifier.fillMaxWidth()) { Text("Try this address") }
+                    SettingsSecondaryButton("Try this address", onClick = { onTryAddress(address) },
+                        enabled = validAddress)
                 }
             }
-            if (showRemove) TextButton(onClick = onRemove, enabled = canRemove) {
-                Text("Remove device", color = if (canRemove) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = .38f))
-            }
+            if (showRemove) SettingsDangerButton("Remove device", onClick = onRemove, enabled = canRemove,
+                icon = Icons.Outlined.LinkOff)
+        }
+    }
+}
+
+@Composable
+private fun PairingStep(number: Int, title: String, detail: String) {
+    Row(Modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(Modifier.size(28.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+            contentAlignment = Alignment.Center) {
+            Text("$number", style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(detail, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -426,7 +442,6 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         it.toReceiveHere > 0 || it.receivedThere > 0 }
     var link by remember { mutableStateOf("") }
     var showLink by rememberSaveable { mutableStateOf(false) }
-    var showSchedule by rememberSaveable { mutableStateOf(false) }
     var showAdvanced by rememberSaveable { mutableStateOf(false) }
     var joinLink by rememberSaveable { mutableStateOf<String?>(null) }
     var joinPassword by rememberSaveable { mutableStateOf("") }
@@ -456,34 +471,63 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     var passwordError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     var interval by remember { mutableLongStateOf(LanSyncService.syncInterval(context)) }
+    var autoOverride by remember { mutableStateOf<Boolean?>(null) }
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         scanner = allowed
         permissionDenied = !allowed
     }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         notificationDenied = !allowed
-        if (allowed) viewModel.resumeDeviceSync()
+        if (allowed) {
+            autoOverride = true
+            viewModel.resumeDeviceSync()
+        }
     }
     DisposableEffect(Unit) { onDispose { viewModel.cancelDevicePairing() } }
+    LaunchedEffect(syncStatus.phase) { autoOverride = null }
 
-    if (devices.isEmpty()) {
-        Text(if (joiningExisting) "On the managing device, open Android devices and tap Create QR. Scan it here."
-            else "Connect another Android device to sync over Wi-Fi.",
-            style = MaterialTheme.typography.bodyMedium)
-        Text("Keep both devices unlocked during setup. The joining device needs an empty vault.",
-            style = MaterialTheme.typography.bodySmall)
+    val lastChecked = devices.maxOfOrNull { viewModel.deviceSyncContact(it.deviceId).second } ?: 0L
+    val autoRunning = !LanSyncService.isPaused(context) &&
+        syncStatus.phase != DeviceSyncPhase.OFF && syncStatus.phase != DeviceSyncPhase.PAUSED
+    val autoOn = autoOverride ?: autoRunning
+    val intervalLabel = when (interval) {
+        30_000L -> "30 seconds"
+        60_000L -> "1 minute"
+        300_000L -> "5 minutes"
+        else -> "15 minutes"
     }
-    if (devices.isEmpty() || canHostPairing || state.stage != "idle") Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Add a device", style = MaterialTheme.typography.titleMedium)
-            if (state.message.isNotBlank()) Surface(Modifier.fillMaxWidth()
-                .semantics { liveRegion = LiveRegionMode.Polite },
-                color = if (state.stage == "failed") MaterialTheme.colorScheme.error.copy(alpha = .12f)
-                else MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) {
-                Text(state.message, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall,
-                    color = if (state.stage == "failed") MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurfaceVariant)
+    val setAutomatic: (Boolean) -> Unit = { on ->
+        if (!on) {
+            autoOverride = false
+            viewModel.pauseDeviceSync()
+        } else if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            autoOverride = true
+            viewModel.resumeDeviceSync()
+        }
+    }
+
+    val addDeviceCard: @Composable () -> Unit = {
+        SettingsSection("Add a device") {
+            if (devices.isEmpty() && (state.stage == "idle" || state.stage == "failed")) {
+                Text(if (joiningExisting) "Scan the QR code from the device that manages your vault."
+                    else "Connect another Android device to sync over Wi-Fi.",
+                    style = MaterialTheme.typography.bodyMedium)
+                PairingStep(1, "Create a QR on the managing device", "Open Android devices there and tap Create QR.")
+                PairingStep(2, "Scan it here", "On the empty device, tap Scan QR and point the camera at the code.")
+                PairingStep(3, "Compare the codes", "Confirm the same code appears on both devices before the vault copy starts.")
+                Text("Keep both devices unlocked during setup. The joining device needs an empty vault.",
+                    style = MaterialTheme.typography.bodySmall)
             }
+            if (state.message.isNotBlank()) StatusBanner(kind = when (state.stage) {
+                "failed" -> StatusKind.ERROR
+                "paired", "enrolled_pending" -> StatusKind.SUCCESS
+                "connecting", "transferring" -> StatusKind.PROGRESS
+                else -> StatusKind.INFO
+            }, message = state.message)
             when (state.stage) {
                 "offering" -> {
                     Text("1. Scan this QR on the new device", style = MaterialTheme.typography.titleSmall)
@@ -505,81 +549,75 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     Text("On another Android phone, start with an empty vault. On Windows, scan this QR with the PC camera or use Copy link. The phone and PC must be able to reach each other across their local networks. Enter this phone's master password on Windows, then confirm the matching code before copying the vault.",
                         style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { copyLink(state.invitation) }, modifier = Modifier.weight(1f)) {
-                            Text("Copy link")
-                        }
-                        OutlinedButton(onClick = viewModel::cancelDevicePairing, modifier = Modifier.weight(1f)) {
-                            Text("Cancel")
-                        }
+                        SettingsSecondaryButton("Copy link", onClick = { copyLink(state.invitation) },
+                            modifier = Modifier.weight(1f), icon = Icons.Outlined.ContentCopy, fill = false)
+                        SettingsSecondaryButton("Cancel", onClick = viewModel::cancelDevicePairing,
+                            modifier = Modifier.weight(1f), fill = false)
                     }
                 }
                 "confirm" -> {
                     Text("2. Compare the code on both devices", style = MaterialTheme.typography.titleSmall)
                     Text(state.confirmation, style = MaterialTheme.typography.headlineLarge)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = viewModel::approveDevicePairing, modifier = Modifier.weight(1f)) {
-                            Text("Codes match")
-                        }
-                        OutlinedButton(onClick = viewModel::cancelDevicePairing, modifier = Modifier.weight(1f)) {
-                            Text("Cancel")
-                        }
+                        SettingsPrimaryButton("Codes match", onClick = viewModel::approveDevicePairing,
+                            modifier = Modifier.weight(1f), icon = Icons.Outlined.Check, fill = false)
+                        SettingsSecondaryButton("Cancel", onClick = viewModel::cancelDevicePairing,
+                            modifier = Modifier.weight(1f), fill = false)
                     }
                 }
                 "connecting", "transferring" -> {
                     Text(if (state.stage == "connecting") "Connecting to the new device"
                         else "3. Copying the vault", style = MaterialTheme.typography.titleSmall)
                     LinearProgressIndicator(Modifier.fillMaxWidth())
-                    OutlinedButton(onClick = viewModel::cancelDevicePairing, modifier = Modifier.fillMaxWidth()) {
-                        Text("Cancel")
-                    }
+                    SettingsSecondaryButton("Cancel", onClick = viewModel::cancelDevicePairing)
                 }
                 "paired", "enrolled_pending" -> {
-                    TextButton(onClick = viewModel::cancelDevicePairing) { Text("Done") }
+                    SettingsPrimaryButton("Done", onClick = viewModel::cancelDevicePairing, icon = Icons.Outlined.Check)
                 }
                 else -> {
-                    if (state.stage == "failed") TextButton(onClick = viewModel::cancelDevicePairing) {
+                    if (state.stage == "failed") TextButton(onClick = viewModel::cancelDevicePairing,
+                        modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Dismiss error")
                     }
+                    if (devices.isNotEmpty() && !canHostPairing) Text(
+                        "To add a device, start pairing from ${devices.firstOrNull { it.deviceId == managerDeviceId }?.displayName ?: "the managing device"}.",
+                        style = MaterialTheme.typography.bodyMedium)
                     if (!canHostPairing && devices.isEmpty())
                         Text("Start a new pairing invitation from the managing device. You can still scan its QR code here.",
                             style = MaterialTheme.typography.bodySmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (canHostPairing && !joiningExisting) Button(onClick = { reverseLink = null; passwordError = null; verifyPairing = true },
-                            enabled = canHostPairing, modifier = Modifier.weight(1f)) {
-                            Text(if (activeDeviceCount < MAX_ACTIVE_SYNC_DEVICES) "Create QR" else "Reconnect")
-                        }
-                        if (devices.isEmpty()) OutlinedButton(onClick = {
+                    val canCreate = canHostPairing && !joiningExisting
+                    if (canCreate || devices.isEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (canCreate) SettingsPrimaryButton(
+                            if (activeDeviceCount < MAX_ACTIVE_SYNC_DEVICES) "Create QR" else "Reconnect",
+                            onClick = { reverseLink = null; passwordError = null; verifyPairing = true },
+                            modifier = Modifier.weight(1f), icon = Icons.Outlined.QrCode, fill = false)
+                        if (devices.isEmpty()) SettingsSecondaryButton("Scan QR", onClick = {
                             scanWindowsQr = false
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                                 PackageManager.PERMISSION_GRANTED) scanner = true
                             else cameraPermission.launch(Manifest.permission.CAMERA)
-                        }, modifier = if (joiningExisting) Modifier.fillMaxWidth() else Modifier.weight(1f)) {
-                            Text("Scan QR")
-                        }
+                        }, modifier = Modifier.weight(1f), icon = Icons.Outlined.QrCodeScanner, fill = false)
                     }
-                    if (canHostPairing && !joiningExisting) OutlinedButton(onClick = {
+                    if (canCreate) SettingsSecondaryButton("Scan Windows QR if the PC cannot reach this phone", onClick = {
                         scanWindowsQr = true
                         scanError = null
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                             PackageManager.PERMISSION_GRANTED) scanner = true
                         else cameraPermission.launch(Manifest.permission.CAMERA)
-                    }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Scan Windows QR if the PC cannot reach this phone")
-                    }
-                    scanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    }, icon = Icons.Outlined.QrCodeScanner)
+                    scanError?.let { StatusBanner(StatusKind.ERROR, it) }
                     if (devices.isEmpty()) {
-                        if (permissionDenied) Text("Camera access was denied. Paste the setup link instead.")
-                        TextButton(onClick = { showLink = !showLink }) {
+                        if (permissionDenied) Text("Camera access was denied. Paste the setup link instead.",
+                            style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { showLink = !showLink }, modifier = Modifier.heightIn(min = 48.dp)) {
                             Text(if (showLink) "Hide setup link" else "Use setup link instead")
                         }
                         if (showLink) {
                             OutlinedTextField(link, { link = it }, label = { Text("Setup link from the other device") },
                                 visualTransformation = PasswordVisualTransformation(),
                                 modifier = Modifier.fillMaxWidth(), maxLines = 3)
-                            OutlinedButton(onClick = { joinLink = link; link = "" },
-                                enabled = link.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
-                                Text("Continue pairing")
-                            }
+                            SettingsSecondaryButton("Continue pairing", onClick = { joinLink = link; link = "" },
+                                enabled = link.isNotBlank())
                         }
                     }
                 }
@@ -587,168 +625,146 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         }
     }
 
-    if (devices.isNotEmpty()) {
-        Text("Your sync group", style = MaterialTheme.typography.titleMedium)
-        Text("These devices share one vault. Each keeps its own copy and catches up when connected.",
-            style = MaterialTheme.typography.bodySmall)
-        DeviceSyncState(syncStatus, connectedCount, activeDeviceCount - 1, waitingCount)
-    }
-    if (devices.isNotEmpty()) Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = viewModel::syncDevicesNow, modifier = Modifier.weight(1f)) {
-                    Text("Sync now")
-                }
-                if (LanSyncService.isPaused(context) || notificationDenied ||
-                    syncStatus.phase == DeviceSyncPhase.OFF || syncStatus.phase == DeviceSyncPhase.PAUSED) {
-                    OutlinedButton(onClick = {
-                        if (android.os.Build.VERSION.SDK_INT >= 33 &&
-                            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-                            PackageManager.PERMISSION_GRANTED)
-                            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        else viewModel.resumeDeviceSync()
-                    }, modifier = Modifier.weight(1f)) { Text("Resume auto") }
-                } else {
-                    OutlinedButton(onClick = viewModel::pauseDeviceSync, modifier = Modifier.weight(1f)) {
-                        Text("Pause auto")
-                    }
-                }
-            }
-            val intervalLabel = when (interval) {
-                30_000L -> "30 seconds"
-                60_000L -> "1 minute"
-                300_000L -> "5 minutes"
-                else -> "15 minutes"
-            }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Automatic check", style = MaterialTheme.typography.labelMedium)
-                    Text("Every $intervalLabel", style = MaterialTheme.typography.bodySmall)
-                }
-                TextButton(onClick = { showSchedule = !showSchedule }) {
-                    Text(if (showSchedule) "Done" else "Change")
-                }
-            }
-            if (showSchedule) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                LanSyncService.SYNC_INTERVALS.toList().chunked(2).forEach { options ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        options.forEach { option ->
-                            val label = when (option) {
-                                30_000L -> "30 s"
-                                60_000L -> "1 min"
-                                300_000L -> "5 min"
-                                else -> "15 min"
-                            }
-                            FilterChip(selected = interval == option, onClick = {
-                                interval = option
-                                viewModel.setDeviceSyncInterval(option)
-                            }, label = { Text(label) }, modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-            TextButton(onClick = { requestAutoSyncTile(context) }) {
-                Text("Add Auto sync tile")
-            }
-            viewModel.deviceSyncQueueStatus()?.let { Text(it, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error) }
-            if (notificationDenied) Text("Allow notifications to keep automatic sync active when Nuvori is closed.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        }
-    }
+    // Not paired yet: pairing is the only thing to do, so it comes first.
+    if (devices.isEmpty()) addDeviceCard()
 
-    if (devices.isNotEmpty() && (localDevice?.deviceId == managerDeviceId ||
-            authorityTransfer?.targetDeviceId == localDevice?.deviceId)) Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Transfer management", style = MaterialTheme.typography.titleMedium)
-            val transfer = authorityTransfer
-            when {
-                transfer == null -> {
-                    Text("Transfer this role while both devices can sync. The recipient must accept, then this device completes the handoff.",
-                        style = MaterialTheme.typography.bodySmall)
-                    devices.forEach { device ->
-                        OutlinedButton(onClick = { transferTargetId = device.deviceId },
-                            modifier = Modifier.fillMaxWidth()) {
-                            Text("Transfer to ${device.displayName}")
-                        }
-                    }
-                }
-                localDevice?.deviceId == managerDeviceId -> {
-                    val name = devices.firstOrNull { it.deviceId == transfer.targetDeviceId }?.displayName
-                        ?: "the other device"
-                    Text(if (transfer.accepted) "$name accepted. Sync both devices, then complete the transfer."
-                        else "Waiting for $name to accept. Keep both devices syncing.",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                    if (transfer.accepted) Button(onClick = viewModel::completeAuthorityTransfer,
-                        modifier = Modifier.fillMaxWidth()) { Text("Complete transfer") }
-                    TextButton(onClick = viewModel::cancelAuthorityTransfer) { Text("Cancel transfer") }
-                }
-                transfer.targetDeviceId == localDevice?.deviceId -> {
-                    Text(if (transfer.accepted) "You accepted. Waiting for the current managing device to finish the handoff."
-                        else "The managing device offered you this role. Both devices must finish syncing before you accept.",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                    if (!transfer.accepted) Button(onClick = { acceptTransfer = true },
-                        modifier = Modifier.fillMaxWidth()) { Text("Accept managing role") }
-                }
-            }
-        }
-    }
+    // 1. Status and the main action.
+    if (devices.isNotEmpty()) DeviceSyncState(syncStatus, connectedCount, activeDeviceCount - 1, waitingCount,
+        lastChecked, onSyncNow = { viewModel.syncDevicesNow() })
 
-    if (rejected > 0) Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.error.copy(alpha = .08f))) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Changes need attention", style = MaterialTheme.typography.titleMedium)
-            Text("$rejected incoming changes could not be applied. Update both devices, then retry.",
-                style = MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick = viewModel::retryRejectedSyncChanges) { Text("Retry changes") }
-        }
-    }
+    // 2. Problems next.
+    if (rejected > 0) StatusBanner(kind = StatusKind.ERROR, title = "Changes need attention",
+        message = "$rejected incoming ${if (rejected == 1) "change" else "changes"} could not be applied. Update both devices, then retry.",
+        actionLabel = "Retry changes", onAction = { viewModel.retryRejectedSyncChanges() })
     ConflictInbox(conflicts) { reviewConflictId = it }
 
+    // 3. Devices in this vault.
     if (devices.isNotEmpty()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Devices in this vault", style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f))
-            Text("$activeDeviceCount of $MAX_ACTIVE_SYNC_DEVICES",
-                style = MaterialTheme.typography.labelSmall)
-        }
-        TextButton(onClick = { showAdvanced = !showAdvanced }) {
-            Text(if (showAdvanced) "Hide connection details" else "Show connection details")
-        }
-        if (showAdvanced) {
-            Text("$nearbyCount nearby Nuvori service${if (nearbyCount == 1) "" else "s"} found on Wi-Fi. Nearby does not mean paired.",
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                SettingsHeading("Devices in this vault", Modifier.weight(1f))
+                Text("$activeDeviceCount of $MAX_ACTIVE_SYNC_DEVICES", style = MaterialTheme.typography.labelMedium)
+            }
+            Text("These devices share one vault. Each keeps its own copy and catches up when connected.",
                 style = MaterialTheme.typography.bodySmall)
-            Text("Counts describe known changes at the last contact. Another device may have newer changes until the next check.",
+            TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(if (showAdvanced) "Hide connection details" else "Show connection details")
+            }
+            if (showAdvanced) {
+                Text("$nearbyCount nearby Nuvori service${if (nearbyCount == 1) "" else "s"} found on Wi-Fi. Nearby does not mean paired.",
+                    style = MaterialTheme.typography.bodySmall)
+                Text("Counts describe known changes at the last contact. Another device may have newer changes until the next check.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            localDevice?.let { device ->
+                DeviceSyncSelfCard(device, device.deviceId == managerDeviceId, viewModel::nameThisDevice)
+            }
+            devices.forEach { device ->
+                val (lastContact, lastExchange) = viewModel.deviceSyncContact(device.deviceId)
+                DeviceSyncPeerCard(device = device, isManager = device.deviceId == managerDeviceId,
+                    status = peerStatuses[device.deviceId], lastContact = lastContact,
+                    lastExchange = lastExchange, progress = viewModel.deviceSyncProgress(device.deviceId),
+                    savedAddress = viewModel.deviceSyncAddress(device.deviceId),
+                    canRemove = canRemoveOnlyPeer && localDevice?.deviceId == managerDeviceId,
+                    showRemove = localDevice?.deviceId == managerDeviceId &&
+                        canRemoveOnlyPeer,
+                    onTryAddress = { viewModel.setDeviceSyncAddress(device.deviceId, it) },
+                    onRemove = { removeDeviceId = device.deviceId },
+                    counts = counts.getValue(device.deviceId), advanced = showAdvanced)
+            }
+        }
+    }
+
+    // 4. Automatic sync.
+    if (devices.isNotEmpty()) SettingsSection("Automatic sync",
+        description = "Nuvori checks your paired devices while it can reach them on Wi-Fi.") {
+        SettingsSwitchRow("Automatic sync", autoOn, setAutomatic,
+            description = if (autoOn) "On. Checks every $intervalLabel." else "Paused. Sync now still checks once.")
+        Text("Check every", style = MaterialTheme.typography.labelLarge)
+        LanSyncService.SYNC_INTERVALS.toList().chunked(2).forEach { options ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.forEach { option ->
+                    val label = when (option) {
+                        30_000L -> "30 s"
+                        60_000L -> "1 min"
+                        300_000L -> "5 min"
+                        else -> "15 min"
+                    }
+                    FilterChip(selected = interval == option, onClick = {
+                        interval = option
+                        viewModel.setDeviceSyncInterval(option)
+                    }, label = { Text(label) }, modifier = Modifier.weight(1f),
+                        leadingIcon = if (interval == option) {
+                            { Icon(Icons.Outlined.Check, contentDescription = null,
+                                modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+                        } else null)
+                }
+            }
+        }
+        SettingsSecondaryButton("Add Auto sync tile", onClick = { requestAutoSyncTile(context) },
+            icon = Icons.Outlined.AppShortcut)
+        if (notificationDenied) StatusBanner(kind = StatusKind.WARNING,
+            message = "Allow notifications to keep automatic sync active when Nuvori is closed.",
+            actionLabel = "Allow notifications",
+            onAction = { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) })
+        viewModel.deviceSyncQueueStatus()?.let { StatusBanner(kind = StatusKind.ERROR, message = it) }
+    }
+
+    // 5. Add a device (after the devices people already have).
+    if (devices.isNotEmpty()) addDeviceCard()
+
+    // 6. Transfer management.
+    if (devices.isNotEmpty() && (localDevice?.deviceId == managerDeviceId ||
+            authorityTransfer?.targetDeviceId == localDevice?.deviceId)) SettingsSection("Transfer management") {
+        val transfer = authorityTransfer
+        when {
+            transfer == null -> {
+                Text("Transfer this role while both devices can sync. The recipient must accept, then this device completes the handoff.",
+                    style = MaterialTheme.typography.bodyMedium)
+                devices.forEach { device ->
+                    SettingsSecondaryButton("Transfer to ${device.displayName}",
+                        onClick = { transferTargetId = device.deviceId })
+                }
+            }
+            localDevice?.deviceId == managerDeviceId -> {
+                val name = devices.firstOrNull { it.deviceId == transfer.targetDeviceId }?.displayName
+                    ?: "the other device"
+                if (transfer.accepted) StatusBanner(kind = StatusKind.SUCCESS,
+                    message = "$name accepted. Sync both devices, then complete the transfer.")
+                else StatusBanner(kind = StatusKind.PROGRESS,
+                    message = "Waiting for $name to accept. Keep both devices syncing.")
+                if (transfer.accepted) SettingsPrimaryButton("Complete transfer",
+                    onClick = viewModel::completeAuthorityTransfer)
+                TextButton(onClick = viewModel::cancelAuthorityTransfer,
+                    modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancel transfer") }
+            }
+            transfer.targetDeviceId == localDevice?.deviceId -> {
+                if (transfer.accepted) StatusBanner(kind = StatusKind.PROGRESS,
+                    message = "You accepted. Waiting for the current managing device to finish the handoff.")
+                else StatusBanner(kind = StatusKind.INFO,
+                    message = "The managing device offered you this role. Both devices must finish syncing before you accept.")
+                if (!transfer.accepted) SettingsPrimaryButton("Accept managing role",
+                    onClick = { acceptTransfer = true })
+            }
+        }
+    }
+
+    // 7. Danger zone.
+    if (devices.isNotEmpty()) Card(Modifier.fillMaxWidth(),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = .5f))) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Danger zone", modifier = Modifier.semantics { heading() },
+                style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+            Text("This device keeps its vault copy and starts a separate sync group with new keys. Other devices keep their copies.",
+                style = MaterialTheme.typography.bodyMedium)
+            SettingsDangerButton("Stop sharing on this device", onClick = { leaveGroup = true },
+                icon = Icons.Outlined.LinkOff)
+            if (localDevice?.deviceId != managerDeviceId) Text(
+                "Lost the managing device? Stop sharing here to keep this vault copy, then pair a new empty device from this one.",
                 style = MaterialTheme.typography.bodySmall)
-        }
-        localDevice?.let { device ->
-            DeviceSyncSelfCard(device, device.deviceId == managerDeviceId, viewModel::nameThisDevice)
-        }
-        if (activeDeviceCount > 1) OutlinedButton(onClick = { leaveGroup = true },
-            modifier = Modifier.fillMaxWidth()) { Text("Stop sharing on this device") }
-        if (activeDeviceCount > 1 && localDevice?.deviceId != managerDeviceId) Text(
-            "Lost the managing device? Stop sharing here to keep this vault copy, then pair a new empty device from this one.",
-            style = MaterialTheme.typography.bodySmall)
-        if (activeDeviceCount > 2) Text(
-            "Removing another member while the rest stay together is not available yet. Each device can stop sharing and keep its own copy.",
-            style = MaterialTheme.typography.bodySmall)
-        if (!canHostPairing) Text(
-            "To add a device, start pairing from ${devices.firstOrNull { it.deviceId == managerDeviceId }?.displayName ?: "the managing device"}.",
-            style = MaterialTheme.typography.bodySmall)
-        devices.forEach { device ->
-            val (lastContact, lastExchange) = viewModel.deviceSyncContact(device.deviceId)
-            DeviceSyncPeerCard(device = device, isManager = device.deviceId == managerDeviceId,
-                status = peerStatuses[device.deviceId], lastContact = lastContact,
-                lastExchange = lastExchange, progress = viewModel.deviceSyncProgress(device.deviceId),
-                savedAddress = viewModel.deviceSyncAddress(device.deviceId),
-                canRemove = canRemoveOnlyPeer && localDevice?.deviceId == managerDeviceId,
-                showRemove = localDevice?.deviceId == managerDeviceId &&
-                    canRemoveOnlyPeer,
-                onTryAddress = { viewModel.setDeviceSyncAddress(device.deviceId, it) },
-                onRemove = { removeDeviceId = device.deviceId },
-                counts = counts.getValue(device.deviceId), advanced = showAdvanced)
+            if (activeDeviceCount > 2) Text(
+                "Removing another member while the rest stay together is not available yet. Each device can stop sharing and keep its own copy.",
+                style = MaterialTheme.typography.bodySmall)
         }
     }
 

@@ -2,33 +2,73 @@ package com.privatevault.app.autofill
 
 import android.app.assist.AssistStructure
 import android.text.InputType
-import android.view.View
 import android.view.autofill.AutofillId
-import com.privatevault.app.security.httpsOrigin
 import java.util.Locale
 
-/** Match explicit Autofill hints and unambiguous HTML field names. Never infer from a numeric input alone. */
-internal fun profileField(hints: Set<String>, attributes: Map<String, String>, inputType: Int): ProfileField? {
-    if (attributes["type"]?.lowercase(Locale.ROOT) in setOf("password", "hidden") ||
-        inputType and InputType.TYPE_MASK_VARIATION in setOf(InputType.TYPE_TEXT_VARIATION_PASSWORD,
-            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)) return null
-    val tokens = hints.flatMap { it.lowercase(Locale.ROOT).split(' ') }
-        .map { it.replace(Regex("[^a-z0-9]"), "") }.toSet()
-    val names = listOfNotNull(attributes["autocomplete"], attributes["name"], attributes["id"])
-        .map { it.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]"), "") }
-    fun has(vararg values: String): Boolean = values.any { it in tokens || it in names }
+private val EMAIL_TOKENS = setOf("emailaddress", "email", "emailid")
+private val GIVEN_NAME_TOKENS = setOf("givenname", "firstname", "fname")
+private val FAMILY_NAME_TOKENS = setOf("familyname", "lastname", "lname", "surname")
+private val PHONE_TOKENS = setOf("phone", "tel", "mobile", "mobilenumber", "phonenumber", "telephone", "telnational",
+    "mobilephone", "cellphone")
+private val POSTAL_CODE_TOKENS = setOf("postalcode", "zipcode", "zip", "pincode")
+private val ADDRESS1_TOKENS = setOf("addressline1", "streetaddress", "street", "address1", "addresslineone")
+private val ADDRESS2_TOKENS = setOf("addressline2", "address2", "addresslinetwo")
+private val UNIT_TOKENS = setOf("addressline3", "apartment", "apartmentnumber", "apartmentno", "flat", "flatnumber", "flatno",
+    "suite", "unit", "unitnumber", "unitno")
+private val CITY_TOKENS = setOf("addresslevel2", "city", "town", "locality")
+private val STATE_TOKENS = setOf("addresslevel1", "state", "province", "region")
+private val COUNTRY_TOKENS = setOf("country", "countryname")
+private val NAME_TOKENS = setOf("name", "fullname")
+
+// Purposes that are not stored contact details. Card data, credentials, codes and partial phone numbers must never be
+// filled from a profile, whatever the field is called.
+private val OTHER_PURPOSES = setOf("additionalname", "middlename", "honorificprefix", "honorificsuffix", "nickname", "username",
+    "newusername", "password", "newpassword", "currentpassword", "onetimecode", "2faappotpcode", "smsotpcode", "emailotpcode",
+    "organization", "organizationtitle", "addresslevel3", "addresslevel4", "countrycode", "phonecountrycode", "bday", "bdayday",
+    "bdaymonth", "bdayyear", "sex", "gender", "url", "photo", "impp", "language")
+
+private fun otherPurpose(token: String): Boolean = token in OTHER_PURPOSES || token.startsWith("cc") || token.startsWith("creditcard") ||
+    token.startsWith("transaction") || (token.startsWith("tel") && token !in PHONE_TOKENS)
+
+/** Exact matches only: "name" is a full name, "firstname" is a given name, "username" is neither. */
+private fun matchProfile(values: Set<String>, native: Boolean = false): ProfileField? {
+    fun has(candidates: Set<String>) = candidates.any { it in values }
     return when {
-        has("emailaddress", "email", "emailid") -> ProfileField.EMAIL
-        has("phone", "tel", "mobile", "mobilenumber", "phonenumber", "telephone") -> ProfileField.PHONE
-        has("postalcode", "zipcode", "zip", "pincode") -> ProfileField.POSTAL_CODE
-        has("postaladdress") -> ProfileField.FULL_ADDRESS
-        has("addressline1", "streetaddress", "street", "address1", "addresslineone") -> ProfileField.ADDRESS1
-        has("addressline2", "address2", "addresslinetwo") -> ProfileField.ADDRESS2
-        has("addressline3", "apartment", "apartmentnumber", "apartmentno", "flat", "flatnumber", "flatno", "suite", "unit", "unitnumber", "unitno") -> ProfileField.UNIT
-        has("addresslevel2", "city", "town", "locality") -> ProfileField.CITY
-        has("addresslevel1", "state", "province", "region") -> ProfileField.STATE
-        has("country", "countryname") -> ProfileField.COUNTRY
-        has("name", "fullname", "full_name") -> ProfileField.NAME
+        has(EMAIL_TOKENS) -> ProfileField.EMAIL
+        has(PHONE_TOKENS) -> ProfileField.PHONE
+        has(POSTAL_CODE_TOKENS) -> ProfileField.POSTAL_CODE
+        "postaladdress" in values -> ProfileField.FULL_ADDRESS
+        has(ADDRESS1_TOKENS) || (native && "address" in values) -> ProfileField.ADDRESS1
+        has(ADDRESS2_TOKENS) -> ProfileField.ADDRESS2
+        has(UNIT_TOKENS) -> ProfileField.UNIT
+        has(CITY_TOKENS) -> ProfileField.CITY
+        has(STATE_TOKENS) -> ProfileField.STATE
+        has(COUNTRY_TOKENS) -> ProfileField.COUNTRY
+        // Given and family names are checked before the full name, which only the single stored name can answer.
+        has(GIVEN_NAME_TOKENS) -> ProfileField.GIVEN_NAME
+        has(FAMILY_NAME_TOKENS) -> ProfileField.FAMILY_NAME
+        has(NAME_TOKENS) -> ProfileField.NAME
+        else -> null
+    }
+}
+
+/**
+ * Match explicit Autofill hints and unambiguous HTML field names, in that order. Never infer from a numeric input alone.
+ * A native view's [idEntry] or [hintText] must equal a known name once punctuation is dropped, never merely contain one.
+ */
+internal fun profileField(hints: Set<String>, attributes: Map<String, String>, inputType: Int,
+    idEntry: String? = null, hintText: String? = null): ProfileField? {
+    if (attributes["type"]?.trim()?.lowercase(Locale.ROOT) in setOf("password", "hidden") || isPasswordInputType(inputType)) return null
+    val tokens = purposeTokens(hints, attributes["autocomplete"]).map(::normalizeToken).filter { it.isNotEmpty() }.toSet()
+    if (tokens.any(::otherPurpose)) return null
+    matchProfile(tokens)?.let { return it }
+    val names = listOf(attributes["name"], attributes["id"]).map(::normalizeToken).filter { it.isNotEmpty() }.toSet()
+    val labels = listOf(idEntry, hintText).map(::normalizeToken).filter { it.isNotEmpty() }.toSet()
+    // "cardholder" next to id="name" is still a card field.
+    if ((names + labels).any { it.startsWith("cc") || it.startsWith("card") || it.startsWith("creditcard") }) return null
+    matchProfile(names)?.let { return it }
+    matchProfile(labels, native = true)?.let { return it }
+    return when {
         inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_PHONE -> ProfileField.PHONE
         inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT &&
             inputType and InputType.TYPE_MASK_VARIATION in setOf(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
@@ -38,32 +78,6 @@ internal fun profileField(hints: Set<String>, attributes: Map<String, String>, i
 }
 
 internal fun profileFields(structure: AssistStructure, browser: Boolean): Map<AutofillId, ProfileField>? {
-    val found = linkedMapOf<AutofillId, ProfileField>()
-    val origins = mutableSetOf<String>()
-    var forms = 0
-    var count = 0
-    var unsafe = false
-    fun visit(node: AssistStructure.ViewNode, depth: Int, visibleParent: Boolean = true) {
-        if (++count > 2000 || depth > 40) { unsafe = true; return }
-        if (!node.webDomain.isNullOrBlank()) {
-            val origin = if (node.webScheme == "https") httpsOrigin("https://${node.webDomain}") else null
-            if (node.webScheme != null && origin == null) unsafe = true
-            if (origin != null) origins.add(origin)
-        }
-        if (node.htmlInfo?.tag.equals("form", true)) forms++
-        if (node.htmlInfo?.tag.equals("iframe", true) || node.htmlInfo?.tag.equals("frame", true)) unsafe = true
-        val visible = visibleParent && node.visibility == View.VISIBLE
-        if (visible && node.isEnabled && node.autofillType == View.AUTOFILL_TYPE_TEXT) {
-            val attributes = node.htmlInfo?.attributes.orEmpty().associate { it.first.lowercase(Locale.ROOT) to it.second }
-            val hints = node.autofillHints.orEmpty().toSet() + attributes["autocomplete"].orEmpty().split(' ')
-            if (hints.any { it.equals("one-time-code", true) || it.equals("password", true) || it.equals("new-password", true) }) {
-                // A profile response must not include credential or code fields.
-            } else node.autofillId?.let { id -> profileField(hints, attributes, node.inputType)?.let { found[id] = it } }
-        }
-        for (index in 0 until node.childCount) visit(node.getChildAt(index), depth + 1, visible)
-    }
-    for (index in 0 until structure.windowNodeCount) visit(structure.getWindowNodeAt(index).rootViewNode, 0)
-    if (unsafe || forms > 1 || origins.size > 1 || (browser && origins.size != 1) || found.isEmpty() ||
-        found.values.size != found.values.toSet().size) return null
-    return found
+    val tree = formTree(structure) ?: return null
+    return classifyProfileForm(tree.roots, browser)?.entries?.associate { (index, field) -> tree.ids[index] to field }
 }

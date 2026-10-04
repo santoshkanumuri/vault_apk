@@ -9,6 +9,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PersistableBundle
 import android.service.quicksettings.TileService
 import android.view.WindowManager
@@ -115,6 +117,9 @@ class MainActivity : FragmentActivity() {
         super.onDestroy()
     }
 
+    private fun biometricDismissed(errorCode: Int) = errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+        errorCode == BiometricPrompt.ERROR_USER_CANCELED || errorCode == BiometricPrompt.ERROR_CANCELED
+
     private fun biometricAvailable(): Boolean = BiometricManager.from(this)
         .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
 
@@ -158,6 +163,8 @@ class MainActivity : FragmentActivity() {
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     viewModel.skipDailyBiometric()
+                    if (!biometricDismissed(errorCode))
+                        viewModel.notify("Fingerprint unlock was not turned on. Use the master password next time.", StatusKind.INFO)
                 }
             })
         val info = BiometricPrompt.PromptInfo.Builder()
@@ -170,11 +177,19 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun showBiometricAction(onSuccess: () -> Unit) {
-        val cipher = runCatching { BiometricActionGate().encryptionCipher() }.getOrNull() ?: return
+        val cipher = runCatching { BiometricActionGate().encryptionCipher() }.getOrNull() ?: run {
+            viewModel.notify("Fingerprint check is unavailable on this device.", StatusKind.WARNING)
+            return
+        }
         val prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this),
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     onSuccess()
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    if (!biometricDismissed(errorCode))
+                        viewModel.notify(errString.toString().ifBlank { "Fingerprint check did not complete." }, StatusKind.WARNING)
                 }
             })
         val info = BiometricPrompt.PromptInfo.Builder()
@@ -188,15 +203,22 @@ class MainActivity : FragmentActivity() {
 
     private fun copySecret(label: String, value: String) {
         val clipboard = getSystemService<ClipboardManager>() ?: return
+        val token = java.util.UUID.randomUUID().toString()
         val clip = ClipData.newPlainText(label, value)
-        if (Build.VERSION.SDK_INT >= 33) {
-            clip.description.extras = PersistableBundle().apply {
-                putBoolean("android.content.extra.IS_SENSITIVE", true)
-            }
+        clip.description.extras = PersistableBundle().apply {
+            putBoolean("android.content.extra.IS_SENSITIVE", true)
+            putString("vault_clip_token", token)
         }
-        clipboard.setPrimaryClip(clip)
-        window.decorView.postDelayed({
-            if (clipboard.primaryClip?.getItemAt(0)?.text?.toString() == value) clipboard.clearPrimaryClip()
+        if (runCatching { clipboard.setPrimaryClip(clip) }.isFailure) {
+            viewModel.notify("Could not copy $label.", StatusKind.ERROR)
+            return
+        }
+        // Android may deny background clipboard access. Never erase a newer clipboard item.
+        Handler(Looper.getMainLooper()).postDelayed({
+            runCatching {
+                if (clipboard.primaryClipDescription?.extras?.getString("vault_clip_token") == token) clipboard.clearPrimaryClip()
+            }
         }, 30_000)
+        viewModel.notify("$label copied", StatusKind.SUCCESS)
     }
 }

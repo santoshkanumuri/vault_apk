@@ -38,17 +38,18 @@ internal fun CodeAppDetectionPreference() {
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text("Suggest codes for the previous app", Modifier.weight(1f))
-        Switch(enabled, { enabled = it; prefs.edit().putBoolean("code_app_detection", it).apply() },
-            modifier = Modifier.semantics { contentDescription = "Suggest codes for the previous app" })
-    }
+    SettingsSwitchRow("Suggest codes for the previous app", enabled, {
+        enabled = it
+        prefs.edit().putBoolean("code_app_detection", it).apply()
+    })
     if (enabled) {
         Text("Usage access lets the vault inspect recent app activity when you open the tile. No usage history is stored. Browsers do not identify the website.", style = MaterialTheme.typography.bodySmall)
-        if (!granted) OutlinedButton(onClick = {
-            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:${context.packageName}")))
-        }, modifier = Modifier.fillMaxWidth()) { Text("Allow Usage access") }
-        else Text("Usage access allowed", style = MaterialTheme.typography.bodySmall)
+        if (!granted) {
+            StatusBanner(kind = StatusKind.WARNING, message = "Allow Usage access to put codes for your previous app first.")
+            SettingsSecondaryButton("Allow Usage access", onClick = {
+                context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:${context.packageName}")))
+            })
+        } else StatusChip(StatusKind.SUCCESS, "Usage access allowed")
     }
 }
 

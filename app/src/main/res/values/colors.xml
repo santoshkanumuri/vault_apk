@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="launcher_background">#000000</color>
+    <!-- Autofill suggestions are drawn by the keyboard or system UI, so they follow the device theme. -->
+    <color name="autofill_suggestion_background">#FFFFFF</color>
+    <color name="autofill_suggestion_stroke">#DADCE0</color>
+    <color name="autofill_suggestion_title">#1F1F1F</color>
+    <color name="autofill_suggestion_subtitle">#5F6368</color>
 </resources>

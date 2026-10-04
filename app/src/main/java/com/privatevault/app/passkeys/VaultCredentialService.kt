@@ -148,6 +148,8 @@ internal class PasswordCredentialOperation private constructor(
 @RequiresApi(34)
 internal class PasskeyOperation private constructor(val create: Boolean, val input: JSONObject, val origin: String,
     val clientHash: ByteArray?, private val caller: CallingAppInfo) {
+    /** Package of the requesting app or browser, for the account picker's destination row. */
+    val callerPackage: String get() = caller.packageName
     fun displaySource(context: Context): String {
         val rpId = if (create) input.getJSONObject("rp").getString("id") else input.getString("rpId")
         if (origin.startsWith("https://")) return origin

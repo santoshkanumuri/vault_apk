@@ -78,7 +78,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
             SettingsSwitchRow("Copy linked code after filling", copyLinkedCode, { enabled ->
                 copyLinkedCode = enabled
                 AutofillPreferences.setCopyLinkedCode(context, enabled)
-            }, description = "When you pick a login in the account picker, Nuvori copies its linked authenticator code for the next screen. The clipboard clears after 30 seconds.")
+            }, description = "When you pick a login in the account picker, Nuvori copies its linked authenticator code so you can paste it on the next screen. The copy is marked sensitive.")
         }
         SettingsSection("Everyday details") {
             SettingsSwitchRow("Offer saved details without vault unlock", unlockedProfiles, { enabled ->

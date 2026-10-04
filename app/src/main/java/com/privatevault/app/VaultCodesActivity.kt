@@ -333,13 +333,13 @@ class VaultCodesActivity : FragmentActivity() {
             EntryType.PASSWORD -> {
                 label = if (username) "Username" else "Password"
                 value = if (username) entry.primaryValue else entry.secondaryValue
-                done = if (username) "Username copied" else "Password copied; it clears in 30 seconds."
+                done = if (username) "Username copied" else "Password copied"
             }
             EntryType.AUTHENTICATOR -> {
                 label = "Authenticator code"
                 value = runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod) }
                     .getOrElse { message = "Could not generate this code. Check its settings in the vault."; return }
-                done = "Code copied; it clears in 30 seconds."
+                done = "Code copied"
             }
             else -> return
         }
@@ -651,7 +651,7 @@ class VaultCodesActivity : FragmentActivity() {
             .putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT_EPHEMERAL_DATASET, true))
         // The next sign-in screen usually asks for the linked code. Copy it while this window is still in front.
         if (request.otp == null && request.password != null && request.newPasswords.isEmpty() && entry != null && generated == null) {
-            copyLinkedCode(entry)?.let { toast("Login filled. Code for $it copied; it clears in 30 seconds.", long = true) }
+            copyLinkedCode(entry)?.let { toast("Login filled. Code for $it copied.", long = true) }
         }
         dismissPicker()
     }

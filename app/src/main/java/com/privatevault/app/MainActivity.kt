@@ -219,6 +219,6 @@ class MainActivity : FragmentActivity() {
                 if (clipboard.primaryClipDescription?.extras?.getString("vault_clip_token") == token) clipboard.clearPrimaryClip()
             }
         }, 30_000)
-        viewModel.notify("$label copied. Clears in 30 seconds.", StatusKind.SUCCESS)
+        viewModel.notify("$label copied", StatusKind.SUCCESS)
     }
 }

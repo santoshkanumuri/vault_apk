@@ -14,8 +14,18 @@ import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.util.concurrent.TimeUnit
 
+/** What the phone knows about its watch: names Wear OS can reach now (null when unavailable) and the last send time. */
+data class WatchConnection(val names: List<String>?, val lastSentAt: Long)
+
 class WatchSyncPublisher(private val context: Context) {
     private val mutex = Mutex()
+
+    /** Watches the Wear OS companion reaches right now. Asks the Data Layer only; nothing is sent to the watch. */
+    suspend fun connectedWatches(): List<String>? = withContext(Dispatchers.IO) {
+        runCatching {
+            Tasks.await(Wearable.getNodeClient(context).connectedNodes, 5, TimeUnit.SECONDS).map { it.displayName }.sorted()
+        }.getOrNull()
+    }
 
     suspend fun pair(vaultId: String, vaultKey: ByteArray, entries: List<VaultEntry>) = mutex.withLock {
         withContext(Dispatchers.IO) {

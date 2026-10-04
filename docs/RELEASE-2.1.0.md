@@ -1,6 +1,6 @@
 # Nuvori 2.1.0 preview
 
-Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wear companion is unchanged.
+Phone version code 51 and Wear companion version code 360009. The signed phone APK and AAB are in `downloads/`. Install the watch app from the same release so both use the same signing identity.
 
 ## Autofill
 
@@ -21,6 +21,15 @@ Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wea
 - The picker remembers the Passwords or TOTP tab. Search has a clear button. Tapping a masked code card copies the current code. The countdown bar turns amber in the last 5 seconds and red in the last 2.
 - Copying shows a short confirmation that names the field, never the value.
 
+## Watch
+
+- Watches with up to 8 codes open straight to the list. Larger lists keep the letter index and the dial, and add a **Recent** group with the last codes you opened on the watch.
+- Tap a code to show it full screen. A ring around the edge counts down and turns amber, then red, near the end. In the last 10 seconds the next code appears below. **Copy code** gives a short vibration.
+- Lists show each code's countdown in the same colors. Content keeps a margin on round screens so edges are not clipped.
+- The watch shows when it last received codes from the phone ("Synced 5 min ago"). It no longer rewrites its encrypted copy when the phone sends nothing new.
+- On the phone, **Settings > Watch codes** shows which watch is connected, or that none is, and when the last update was sent. The phone sends codes after each change and each time you unlock Nuvori.
+- The watch sync format is unchanged. A 2.1.0 phone works with a 2.0 watch and the other way round.
+
 ## Feedback and settings
 
 - Saving, updating, and deleting entries, groups, folders, photos, and passkeys shows a colored confirmation. Copying a field shows a confirmation too. Problems stay on screen longer and can be dismissed. Error messages no longer show internal exception text.
@@ -35,6 +44,6 @@ Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wea
 
 ## Verification
 
-- 138 JVM unit tests passed. They cover the new form classifier (login, one-time-code, and profile fields, including unsafe pages that must stay rejected), possible-match ranking, username rules, and password import.
-- Every app source file was type-checked against Compose Multiplatform 1.6.11 with AndroidX stand-ins. There were no new errors compared with 2.0.9.
-- Before publishing, still run: the debug unit and instrumentation suites, vital lint, the signed release APK and AAB build, and autofill checks in Chrome, Brave, and native apps on a phone.
+- 138 JVM unit tests passed for the phone, plus 8 for the shared watch code (codes, countdown, recent list, and sync labels). They cover the new form classifier (login, one-time-code, and profile fields, including unsafe pages that must stay rejected), possible-match ranking, username rules, and password import.
+- Every phone and watch source file was type-checked against Compose Multiplatform 1.6.11 with AndroidX and Wear OS stand-ins. There were no new errors compared with 2.0.9.
+- Before publishing, still run: the debug unit and instrumentation suites (including the watch UI tests on a Wear OS emulator), vital lint, the signed phone and watch release builds, autofill checks in Chrome, Brave, and native apps on a phone, and watch sync on a paired watch.

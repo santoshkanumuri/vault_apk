@@ -24,6 +24,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -38,6 +39,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -59,10 +61,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
@@ -83,6 +88,8 @@ import com.google.android.gms.wearable.Wearable
 import com.privatevault.app.watch.WatchSync
 import com.privatevault.app.security.Totp
 import com.privatevault.app.watch.WatchAccount
+import com.privatevault.app.watch.WatchDisplay
+import com.privatevault.app.watch.CodeUrgency
 import com.privatevault.app.watch.WatchSnapshot
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -95,6 +102,8 @@ class WatchActivity : ComponentActivity() {
     private lateinit var store: WatchStore
     private var snapshot by mutableStateOf<WatchSnapshot?>(null)
     private var secure by mutableStateOf(false)
+    private var syncedAt by mutableLongStateOf(0L)
+    private var recentIds by mutableStateOf<List<String>>(emptyList())
     private val updateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) { reload() }
     }
@@ -111,7 +120,7 @@ class WatchActivity : ComponentActivity() {
             )) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
                     contentColor = MaterialTheme.colorScheme.onBackground) {
-                    WatchCodes(snapshot, secure, ::copyCode)
+                    WatchCodes(snapshot, secure, syncedAt, recentIds, onOpened = ::markUsed, copy = ::copyCode)
                 }
             }
         }
@@ -144,6 +153,14 @@ class WatchActivity : ComponentActivity() {
         val guard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         secure = store.isSecure() && !guard.isKeyguardLocked
         snapshot = if (secure) store.read() else null
+        syncedAt = if (secure) store.syncedAt() else 0L
+        recentIds = if (secure) store.recentIds() else emptyList()
+    }
+
+    private fun markUsed(account: WatchAccount) {
+        if (!secure) return
+        store.markUsed(account.id)
+        recentIds = store.recentIds()
     }
 
     private fun copyCode(account: WatchAccount) {
@@ -159,19 +176,42 @@ class WatchActivity : ComponentActivity() {
     }
 }
 
+private const val RECENT = "Recent"
+private val CodeSoon = Color(0xFFFFC94D)
+private val CodeExpiring = Color(0xFFFFB4AB)
+
 @Composable
-internal fun WatchCodes(snapshot: WatchSnapshot?, secure: Boolean, copy: (WatchAccount) -> Unit) {
+internal fun WatchCodes(snapshot: WatchSnapshot?, secure: Boolean, syncedAt: Long = 0L, recentIds: List<String> = emptyList(),
+    onOpened: (WatchAccount) -> Unit = {}, copy: (WatchAccount) -> Unit) {
     var group by remember(snapshot?.vaultId) { mutableStateOf<String?>(null) }
+    var openId by remember(snapshot?.vaultId) { mutableStateOf<String?>(null) }
     val accounts = snapshot?.accounts.orEmpty()
+    val sorted = remember(accounts) { accounts.sortedWith(compareBy({ it.name.lowercase() }, { it.account.lowercase() })) }
+    val recent = remember(accounts, recentIds) { recentIds.mapNotNull { id -> accounts.firstOrNull { it.id == id } } }
     val letters = accounts.groupingBy(::watchLetter).eachCount().toList()
         .sortedWith(compareBy({ it.first == "#" }, { it.first }))
-    LaunchedEffect(letters) { if (group != "All" && letters.none { it.first == group }) group = null }
+    LaunchedEffect(letters, recent) {
+        if (group == RECENT && recent.isEmpty() || group != "All" && group != RECENT && letters.none { it.first == group }) group = null
+    }
+    val opened = openId?.let { id -> accounts.firstOrNull { it.id == id } }
+    val open: (WatchAccount) -> Unit = { onOpened(it); openId = it.id }
     when {
-        !secure || snapshot == null || accounts.isEmpty() -> WatchEmptyState(secure, snapshot)
-        group == null -> WatchLetterIndex(accounts.size, letters) { group = it }
+        !secure || snapshot == null || accounts.isEmpty() -> WatchEmptyState(secure, snapshot, syncedAt)
+        opened != null -> {
+            BackHandler { openId = null }
+            WatchCodeDetail(opened, copy)
+        }
+        // A short list is quicker to scroll than to search by letter.
+        accounts.size <= WatchDisplay.DIRECT_LIST_LIMIT -> WatchCodeList(null, sorted, syncedAt, open, back = null)
+        group == null -> WatchLetterIndex(accounts.size, recent.size, letters, syncedAt) { group = it }
         else -> {
             BackHandler { group = null }
-            WatchCodeList(group!!, accounts.filter { group == "All" || watchLetter(it) == group }, copy) { group = null }
+            val shown = when (group) {
+                "All" -> sorted
+                RECENT -> recent
+                else -> sorted.filter { watchLetter(it) == group }
+            }
+            WatchCodeList(group, shown, syncedAt, open) { group = null }
         }
     }
 }
@@ -179,42 +219,80 @@ internal fun WatchCodes(snapshot: WatchSnapshot?, secure: Boolean, copy: (WatchA
 private fun watchLetter(account: WatchAccount): String = account.name.trim().firstOrNull()?.uppercaseChar()
     ?.takeIf { it in 'A'..'Z' }?.toString() ?: "#"
 
+/** Round screens clip their corners, so content keeps a margin proportional to the display. */
 @Composable
-private fun WatchEmptyState(secure: Boolean, snapshot: WatchSnapshot?) {
+private fun watchContentPadding(): PaddingValues {
+    val configuration = LocalConfiguration.current
+    return if (configuration.isScreenRound) PaddingValues(horizontal = (configuration.screenWidthDp * .1f).dp,
+        vertical = (configuration.screenHeightDp * .12f).dp)
+    else PaddingValues(horizontal = 12.dp, vertical = 14.dp)
+}
+
+private fun urgencyColor(remaining: Int, calm: Color): Color = when (WatchDisplay.urgency(remaining)) {
+    CodeUrgency.CALM -> calm
+    CodeUrgency.SOON -> CodeSoon
+    CodeUrgency.EXPIRING -> CodeExpiring
+}
+
+/** Seconds since the epoch, ticking only while the screen is in front. */
+@Composable
+private fun rememberEpochSeconds(): Long {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var seconds by remember { mutableLongStateOf(System.currentTimeMillis() / 1_000) }
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) { seconds = System.currentTimeMillis() / 1_000; delay(1_000) }
+        }
+    }
+    return seconds
+}
+
+@Composable
+private fun WatchEmptyState(secure: Boolean, snapshot: WatchSnapshot?, syncedAt: Long) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp),
         verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         WatchBrand()
         Text(when {
             !secure -> "Set a screen lock and unlock your watch to view codes."
             snapshot == null -> "Open Nuvori on your phone, then choose Watch codes to connect."
-            else -> "No codes on this watch. Sync from your phone."
+            else -> "No codes on this watch yet. Codes you add on your phone appear here."
         }, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 12.dp))
+        if (secure && snapshot != null) WatchSyncedLabel(syncedAt, Modifier.padding(top = 8.dp))
     }
 }
 
 @Composable
 private fun WatchBrand() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Image(painterResource(R.drawable.nuvori_logo_transparent), contentDescription = null, modifier = Modifier.size(42.dp))
+        Image(painterResource(R.drawable.nuvori_logo_transparent), contentDescription = null, modifier = Modifier.size(32.dp))
         Column {
-            Text("Nuvori", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+            Text("Nuvori", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             Text("Authenticator", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = .72f))
         }
     }
 }
 
+/** When the phone last sent a new copy, so a stale list is easy to spot. */
 @Composable
-private fun WatchLetterIndex(count: Int, letters: List<Pair<String, Int>>, open: (String) -> Unit) {
-    val options = listOf("All" to count) + letters
+private fun WatchSyncedLabel(syncedAt: Long, modifier: Modifier = Modifier) {
+    val label = WatchDisplay.syncedLabel(System.currentTimeMillis(), syncedAt) ?: return
+    Text(label, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = .6f), modifier = modifier.fillMaxWidth())
+}
+
+@Composable
+private fun WatchLetterIndex(count: Int, recentCount: Int, letters: List<Pair<String, Int>>, syncedAt: Long, open: (String) -> Unit) {
+    val options = (if (recentCount > 0) listOf(RECENT to recentCount) else emptyList()) + listOf("All" to count) + letters
     val listState = rememberLazyListState()
     val focus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
     val threshold = with(LocalDensity.current) { 28.dp.toPx() }
     val accessibilityEnabled = (LocalContext.current.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager)
         .isTouchExplorationEnabled
-    var selected by remember(letters) { mutableIntStateOf(0) }
+    var selected by remember(letters, recentCount) { mutableIntStateOf(0) }
     var dialMoved by remember { mutableStateOf(false) }
     var dialTick by remember { mutableIntStateOf(0) }
     var dialPixels by remember { mutableFloatStateOf(0f) }
@@ -237,6 +315,7 @@ private fun WatchLetterIndex(count: Int, letters: List<Pair<String, Int>>, open:
                     if (next != selected) {
                         selected = next
                         dialMoved = true
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         scope.launch { listState.animateScrollToItem(next + 2) }
                     }
                     dialPixels += if (dialPixels > 0) -threshold else threshold
@@ -249,15 +328,20 @@ private fun WatchLetterIndex(count: Int, letters: List<Pair<String, Int>>, open:
             } } }
             .focusRequester(focus).focusable().testTag("letterIndex"),
         state = listState,
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = watchContentPadding(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { WatchBrand() } }
-        item { Text("Find a code", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = .72f)) }
+        item {
+            Column(Modifier.fillMaxWidth()) {
+                Text("Find a code", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = .72f))
+                WatchSyncedLabel(syncedAt)
+            }
+        }
         itemsIndexed(options, key = { _, item -> item.first }) { index, (letter, total) ->
             val active = dialMoved && selected == index
-            Card(Modifier.fillMaxWidth().heightIn(min = 56.dp)
+            Card(Modifier.fillMaxWidth().heightIn(min = 52.dp)
                 .clickable(onClickLabel = "Open $letter codes", role = Role.Button) { open(letter) }
                 .semantics { contentDescription = "$letter, $total ${if (total == 1) "code" else "codes"}" },
                 colors = CardDefaults.cardColors(containerColor = if (active) MaterialTheme.colorScheme.primaryContainer
@@ -280,14 +364,9 @@ private fun WatchLetterIndex(count: Int, letters: List<Pair<String, Int>>, open:
 }
 
 @Composable
-private fun WatchCodeList(group: String, accounts: List<WatchAccount>, copy: (WatchAccount) -> Unit, back: () -> Unit) {
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var seconds by remember { mutableLongStateOf(System.currentTimeMillis() / 1_000) }
-    LaunchedEffect(lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            while (true) { seconds = System.currentTimeMillis() / 1_000; delay(1_000) }
-        }
-    }
+private fun WatchCodeList(group: String?, accounts: List<WatchAccount>, syncedAt: Long, open: (WatchAccount) -> Unit,
+    back: (() -> Unit)?) {
+    val seconds = rememberEpochSeconds()
     val listState = rememberLazyListState()
     val focus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
@@ -300,29 +379,75 @@ private fun WatchCodeList(group: String, accounts: List<WatchAccount>, copy: (Wa
             }
             .focusRequester(focus).focusable().testTag("codeList"),
         state = listState,
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = watchContentPadding(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item { TextButton(onClick = back, modifier = Modifier.heightIn(min = 48.dp)) { Text("‹ Letters") } }
-        item { Text(if (group == "All") "All codes" else "$group codes", style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
-        items(accounts.sortedWith(compareBy({ it.name.lowercase() }, { it.account.lowercase() })), key = { it.id }) { account ->
-            Card(Modifier.fillMaxWidth().clickable(onClickLabel = "Copy ${account.name} code", role = Role.Button) { copy(account) },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(account.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (account.account.isNotBlank()) Text(account.account, style = MaterialTheme.typography.bodySmall, maxLines = 2,
-                        overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .72f))
-                    val code = Totp.code(account.secret, account.algorithm, account.digits, account.period, seconds)
-                    Text(code.chunked(if (account.digits == 8) 4 else 3).joinToString(" "),
-                        fontSize = if (account.digits == 8) 24.sp else 28.sp, fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                    LinearProgressIndicator(progress = (account.period - seconds % account.period).toFloat() / account.period,
-                        modifier = Modifier.fillMaxWidth())
-                    Text("${account.period - seconds % account.period}s  ·  Tap to copy", style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                }
+        if (back != null) item { TextButton(onClick = back, modifier = Modifier.heightIn(min = 48.dp)) { Text("‹ Letters") } }
+        if (group == null) item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { WatchBrand() } }
+        else item { Text(when (group) { "All" -> "All codes"; RECENT -> "Recent codes"; else -> "$group codes" },
+            style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
+        items(accounts, key = { it.id }) { account -> WatchCodeRow(account, seconds) { open(account) } }
+        item { WatchSyncedLabel(syncedAt, Modifier.padding(top = 4.dp)) }
+    }
+}
+
+@Composable
+private fun WatchCodeRow(account: WatchAccount, seconds: Long, open: () -> Unit) {
+    val remaining = WatchDisplay.remainingSeconds(account.period, seconds)
+    val code = remember(account, seconds / account.period) {
+        Totp.code(account.secret, account.algorithm, account.digits, account.period, seconds)
+    }
+    val accent = urgencyColor(remaining, MaterialTheme.colorScheme.primary)
+    Card(Modifier.fillMaxWidth().clickable(onClickLabel = "Show ${account.name} code", role = Role.Button, onClick = open),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(account.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (account.account.isNotBlank()) Text(account.account, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .72f))
+            Text(WatchDisplay.groupCode(code), fontSize = if (account.digits == 8) 22.sp else 26.sp, fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LinearProgressIndicator(progress = remaining.toFloat() / account.period, color = accent,
+                    modifier = Modifier.weight(1f))
+                Text("${remaining}s", style = MaterialTheme.typography.labelSmall, color = accent)
             }
+        }
+    }
+}
+
+/** One code, as large as the screen allows, with a countdown ring around the edge and the next code near the end. */
+@Composable
+private fun WatchCodeDetail(account: WatchAccount, copy: (WatchAccount) -> Unit) {
+    val seconds = rememberEpochSeconds()
+    val haptics = LocalHapticFeedback.current
+    val remaining = WatchDisplay.remainingSeconds(account.period, seconds)
+    val code = remember(account, seconds / account.period) {
+        Totp.code(account.secret, account.algorithm, account.digits, account.period, seconds)
+    }
+    val next = if (WatchDisplay.showNextCode(remaining)) remember(account, seconds / account.period) {
+        Totp.code(account.secret, account.algorithm, account.digits, account.period, seconds + account.period)
+    } else null
+    val accent = urgencyColor(remaining, MaterialTheme.colorScheme.primary)
+    val grouped = WatchDisplay.groupCode(code)
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("codeDetail"), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(progress = remaining.toFloat() / account.period, color = accent, strokeWidth = 4.dp,
+            modifier = Modifier.fillMaxSize().padding(3.dp).semantics { contentDescription = "$remaining seconds left" })
+        Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(account.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center)
+            if (account.account.isNotBlank()) Text(account.account, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = .72f))
+            Text(grouped, fontSize = if (account.digits == 8) 28.sp else 34.sp, fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace, maxLines = 1, color = accent, textAlign = TextAlign.Center,
+                modifier = Modifier.padding(vertical = 4.dp).semantics { contentDescription = "Code $grouped" })
+            Text(if (next != null) "Next ${WatchDisplay.groupCode(next)}" else "${remaining}s left",
+                style = MaterialTheme.typography.labelMedium, fontFamily = if (next != null) FontFamily.Monospace else null,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = .8f))
+            TextButton(onClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); copy(account) },
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("Copy code") }
         }
     }
 }

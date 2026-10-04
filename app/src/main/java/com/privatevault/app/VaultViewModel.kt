@@ -1210,7 +1210,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun Throwable.userMessage(fallback: String): String = message?.takeIf { it.length < 160 } ?: fallback
 
-    suspend fun hostDevicePairing(password: CharArray) {
+    suspend fun hostDevicePairing(password: CharArray, reverseLink: String? = null) {
         touch()
         try {
             val activeDatabase = requireNotNull(database) { "Unlock your vault before pairing" }
@@ -1228,7 +1228,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             check(database === activeDatabase && sessionKey === activeKey && _status.value is VaultStatus.Unlocked) {
                 "Vault locked during verification. Unlock and try again."
             }
-            devicePairing.host(activeDatabase, activeKey, password)
+            devicePairing.host(activeDatabase, activeKey, password, reverseLink)
         } finally { password.fill('\u0000') }
     }
 

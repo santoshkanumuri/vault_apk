@@ -47,7 +47,8 @@ internal class SyncFrames(input: InputStream, output: OutputStream) {
     }
 }
 
-internal data class HandshakeResult(val peer: DeviceIdentity, val key: ByteArray, val confirmation: String)
+internal data class HandshakeResult(val peer: DeviceIdentity, val key: ByteArray, val confirmation: String,
+    val peerPlatform: String)
 
 /** J-PAKE authenticates the shared secret; its result binds both public device identities. */
 internal fun pairingHandshake(frames: SyncFrames, local: DeviceIdentity, code: CharArray,
@@ -65,10 +66,13 @@ internal fun pairingHandshake(frames: SyncFrames, local: DeviceIdentity, code: C
         addProperty("creator", creator)
         addProperty("device", local.deviceId)
         addProperty("key", local.publicKeyBase64Url)
+        addProperty("platform", "android")
     })
     require(hello.get("protocol").asInt == SYNC_WIRE_VERSION && hello.get("session").asString == sessionId &&
         hello.get("vault").asString == vaultId && hello.get("creator").asBoolean != creator) { "Pairing session mismatch" }
     val peerId = hello.get("device").asString
+    val peerPlatform = hello.get("platform")?.asString ?: "android"
+    require(peerPlatform == "android" || peerPlatform == "windows") { "Unsupported pairing platform" }
     require(peerId.isNotBlank() && peerId.length <= 128 && peerId != local.deviceId)
     val peer = DeviceIdentity(peerId, Base64.getUrlDecoder().decode(hello.get("key").asString))
     require(peer.publicKey.size == DeviceIdentityCrypto.PUBLIC_KEY_BYTES)
@@ -102,7 +106,7 @@ internal fun pairingHandshake(frames: SyncFrames, local: DeviceIdentity, code: C
             target.deviceId, target.publicKeyBase64Url))
     val digest = MessageDigest.getInstance("SHA-256").digest(key)
     val confirmation = digest.take(4).joinToString("") { "%02X".format(it) }.chunked(4).joinToString(" ")
-    return HandshakeResult(peer, key, confirmation)
+    return HandshakeResult(peer, key, confirmation, peerPlatform)
 }
 
 private fun proof(values: Array<BigInteger>) = JsonArray().apply { values.forEach { add(it.toString(16)) } }

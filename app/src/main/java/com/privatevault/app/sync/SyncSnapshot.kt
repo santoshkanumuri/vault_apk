@@ -3,6 +3,10 @@ package com.privatevault.app.sync
 import android.content.Context
 import androidx.annotation.Keep
 import androidx.room.withTransaction
+import com.google.crypto.tink.KeyTemplates
+import com.google.crypto.tink.KeysetHandle
+import com.google.crypto.tink.StreamingAead
+import com.google.crypto.tink.config.TinkConfig
 import com.google.gson.Gson
 import com.privatevault.app.backup.PreparedRestore
 import com.privatevault.app.backup.VaultBackupManager
@@ -38,69 +42,83 @@ internal data class SnapshotSyncState(
 class SyncSnapshot(private val context: Context, private val database: VaultDatabase,
     private val photos: EncryptedPhotoStore) {
     suspend fun export(output: OutputStream, localKey: ByteArray, pairingKey: ByteArray,
-        joiningMember: SyncMembershipEntity): SyncMembershipEventEntity? {
+        joiningMember: SyncMembershipEntity, windowsPeer: Boolean = false): SyncMembershipEventEntity? {
         require(pairingKey.size == 32)
         val staged = File.createTempFile("sync-enrollment-", ".bin", context.cacheDir)
+        val stagingCipher = if (windowsPeer) {
+            TinkConfig.register()
+            KeysetHandle.generateNew(KeyTemplates.get("AES128_GCM_HKDF_1MB"))
+                .getPrimitive(StreamingAead::class.java)
+        } else null
         try {
             val admission = database.withTransaction {
                 FileOutputStream(staged).use { file ->
-                    val vaultId = requireNotNull(database.dao().settings()).vaultId
-                    val group = database.syncDao().vaultState()
-                    require(group?.vaultId == vaultId && group.transportSecret.isNotBlank()) {
-                        "Prepare the sync group before enrolling another phone"
+                    val stored = stagingCipher?.newEncryptingStream(file, STAGING_AAD) ?: file
+                    stored.use { target ->
+                        val vaultId = requireNotNull(database.dao().settings()).vaultId
+                        val group = database.syncDao().vaultState()
+                        require(group?.vaultId == vaultId && group.transportSecret.isNotBlank()) {
+                            "Prepare the sync group before enrolling another phone"
+                        }
+                        require(joiningMember.vaultId == vaultId && joiningMember.status == MemberStatus.ACTIVE.name)
+                        val members = database.syncDao().memberships(vaultId)
+                        val existing = members.firstOrNull { it.deviceId == joiningMember.deviceId }
+                        require(existing == null || existing.status == MemberStatus.ACTIVE.name &&
+                            existing.identityPublicKey == joiningMember.identityPublicKey) {
+                            "Enrolled device identity changed or was removed"
+                        }
+                        require(existing != null || members.count { it.status == MemberStatus.ACTIVE.name } < MAX_ACTIVE_SYNC_DEVICES) {
+                            "This vault already has $MAX_ACTIVE_SYNC_DEVICES active Android devices"
+                        }
+                        val identityStore = AndroidDeviceIdentityStore(context)
+                        val identity = identityStore.getOrCreate()
+                        val history = database.syncDao().membershipEvents(vaultId)
+                        val verified = SyncMembershipManager.verify(history.map { it.toEvent() })
+                        require(verified.managerDeviceId == identity.deviceId &&
+                            joiningMember.addedByDeviceId == identity.deviceId &&
+                            joiningMember.keyEpoch == verified.keyEpoch) { "Only the managing phone can enroll a device" }
+                        val event = if (existing == null) {
+                            require(joiningMember.membershipSequence == history.size + 1L)
+                            SyncMembershipEventEntity.from(SyncMembershipEvent.sign(vaultId,
+                                history.size + 1L, verified.head, MembershipAction.ADD, identity.deviceId,
+                                joiningMember.deviceId, joiningMember.identityPublicKey, verified.keyEpoch,
+                                identityStore::sign))
+                        } else null
+                        val events = if (event == null) history else history + event
+                        SyncMembershipManager.verify(events.map { it.toEvent() })
+                        val contentKey = database.syncContentKey(localKey)
+                        val state = SnapshotSyncState(3, vaultId, encode(contentKey), group.transportSecret,
+                            if (existing == null) members + joiningMember else members,
+                            events,
+                            database.syncDao().deviceHeads(vaultId), database.syncDao().recordStates(),
+                            database.syncDao().operations(), database.syncDao().tombstones(), database.syncDao().conflicts())
+                        contentKey.fill(0)
+                        val plain = Gson().toJson(state).toByteArray(Charsets.UTF_8)
+                        require(plain.size <= MAX_METADATA) { "Sync history is too large for enrollment" }
+                        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+                            init(Cipher.ENCRYPT_MODE, SecretKeySpec(pairingKey, "AES"))
+                            updateAAD(MAGIC)
+                        }
+                        val encrypted = try { cipher.doFinal(plain) } finally { plain.fill(0) }
+                        val data = DataOutputStream(target)
+                        data.write(MAGIC)
+                        data.write(cipher.iv)
+                        data.writeInt(encrypted.size)
+                        data.write(encrypted)
+                        val backup = VaultBackupManager(context, database.dao(), photos)
+                        if (windowsPeer) backup.exportForWindowsPairing(data, localKey)
+                        else {
+                            val password = encode(pairingKey).toCharArray()
+                            try { backup.export(data, password, localKey) }
+                            finally { password.fill('\u0000') }
+                        }
+                        event
                     }
-                    require(joiningMember.vaultId == vaultId && joiningMember.status == MemberStatus.ACTIVE.name)
-                    val members = database.syncDao().memberships(vaultId)
-                    val existing = members.firstOrNull { it.deviceId == joiningMember.deviceId }
-                    require(existing == null || existing.status == MemberStatus.ACTIVE.name &&
-                        existing.identityPublicKey == joiningMember.identityPublicKey) {
-                        "Enrolled device identity changed or was removed"
-                    }
-                    require(existing != null || members.count { it.status == MemberStatus.ACTIVE.name } < MAX_ACTIVE_SYNC_DEVICES) {
-                        "This vault already has $MAX_ACTIVE_SYNC_DEVICES active Android devices"
-                    }
-                    val identityStore = AndroidDeviceIdentityStore(context)
-                    val identity = identityStore.getOrCreate()
-                    val history = database.syncDao().membershipEvents(vaultId)
-                    val verified = SyncMembershipManager.verify(history.map { it.toEvent() })
-                    require(verified.managerDeviceId == identity.deviceId &&
-                        joiningMember.addedByDeviceId == identity.deviceId &&
-                        joiningMember.keyEpoch == verified.keyEpoch) { "Only the managing phone can enroll a device" }
-                    val event = if (existing == null) {
-                        require(joiningMember.membershipSequence == history.size + 1L)
-                        SyncMembershipEventEntity.from(SyncMembershipEvent.sign(vaultId,
-                            history.size + 1L, verified.head, MembershipAction.ADD, identity.deviceId,
-                            joiningMember.deviceId, joiningMember.identityPublicKey, verified.keyEpoch,
-                            identityStore::sign))
-                    } else null
-                    val events = if (event == null) history else history + event
-                    SyncMembershipManager.verify(events.map { it.toEvent() })
-                    val contentKey = database.syncContentKey(localKey)
-                    val state = SnapshotSyncState(3, vaultId, encode(contentKey), group.transportSecret,
-                        if (existing == null) members + joiningMember else members,
-                        events,
-                        database.syncDao().deviceHeads(vaultId), database.syncDao().recordStates(),
-                        database.syncDao().operations(), database.syncDao().tombstones(), database.syncDao().conflicts())
-                    contentKey.fill(0)
-                    val plain = Gson().toJson(state).toByteArray(Charsets.UTF_8)
-                    require(plain.size <= MAX_METADATA) { "Sync history is too large for enrollment" }
-                    val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
-                        init(Cipher.ENCRYPT_MODE, SecretKeySpec(pairingKey, "AES"))
-                        updateAAD(MAGIC)
-                    }
-                    val encrypted = try { cipher.doFinal(plain) } finally { plain.fill(0) }
-                    val data = DataOutputStream(file)
-                    data.write(MAGIC)
-                    data.write(cipher.iv)
-                    data.writeInt(encrypted.size)
-                    data.write(encrypted)
-                    val password = encode(pairingKey).toCharArray()
-                    try { VaultBackupManager(context, database.dao(), photos).export(data, password, localKey) }
-                    finally { password.fill('\u0000') }
-                    event
                 }
             }
-            staged.inputStream().use { it.copyTo(output) }
+            staged.inputStream().use { file ->
+                (stagingCipher?.newDecryptingStream(file, STAGING_AAD) ?: file).use { it.copyTo(output) }
+            }
             return admission
         } finally {
             staged.delete()
@@ -204,6 +222,7 @@ class SyncSnapshot(private val context: Context, private val database: VaultData
     private fun encode(value: ByteArray) = Base64.getUrlEncoder().withoutPadding().encodeToString(value)
     private companion object {
         val MAGIC = "NUVSYNC3".toByteArray(Charsets.US_ASCII)
+        val STAGING_AAD = "nuvori-windows-staging-v1".toByteArray(Charsets.US_ASCII)
         const val MAX_METADATA = 16 * 1024 * 1024
     }
 }

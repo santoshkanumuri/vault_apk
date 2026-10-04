@@ -47,7 +47,31 @@ internal data class PairingInvitation(val address: String, val port: Int, val se
                 result.code.length == 24 && result.code.all { it in '0'..'9' }) { "Invalid pairing link" }
             require(InetAddresses.parseNumericAddress(result.address).let {
                 isPrivateAddress(it) && !it.isLinkLocalAddress
-            }) { "Pair using the same Wi-Fi" }
+            }) { "Pair using a reachable local network" }
+            return result
+        }
+    }
+}
+
+internal data class ReversePairingInvitation(val address: String, val port: Int,
+    val session: String, val code: String) {
+    companion object {
+        fun decode(value: String): ReversePairingInvitation {
+            require(value.length <= 2048 && value.startsWith("nuvori-pair-reverse://v1/")) {
+                "Invalid Windows pairing QR"
+            }
+            val json = JsonParser.parseString(Base64.getUrlDecoder()
+                .decode(value.removePrefix("nuvori-pair-reverse://v1/"))
+                .toString(Charsets.UTF_8)).asJsonObject
+            val result = ReversePairingInvitation(json.get("address").asString,
+                json.get("port").asInt, json.get("session").asString, json.get("code").asString)
+            require(result.port in 1024..65535 && result.session.length in 1..128 &&
+                result.code.length == 24 && result.code.all { it in '0'..'9' }) {
+                "Invalid Windows pairing QR"
+            }
+            require(InetAddresses.parseNumericAddress(result.address).let {
+                isPrivateAddress(it) && !it.isLinkLocalAddress
+            }) { "Invalid Windows pairing QR" }
             return result
         }
     }
@@ -62,7 +86,8 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
     @Volatile private var connection: Socket? = null
     @Volatile private var approval: CompletableDeferred<Boolean>? = null
 
-    fun host(database: VaultDatabase, localKey: ByteArray, masterPassword: CharArray) {
+    fun host(database: VaultDatabase, localKey: ByteArray, masterPassword: CharArray,
+             reverseLink: String? = null) {
         val previous = job
         cancel()
         val key = localKey.copyOf()
@@ -71,32 +96,41 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
             var committedHost = false
             try {
                 previous?.join()
-                val (_, address) = wifi()
+                val (network, address) = wifi()
+                val reverse = reverseLink?.let(ReversePairingInvitation::decode)
                 val identity = AndroidDeviceIdentityStore(context).getOrCreate()
                 val vaultId = requireNotNull(database.dao().settings()).vaultId
                 database.prepareSyncGroup(AndroidDeviceIdentityStore(context))
-                val server = ServerSocket().apply {
+                val server = if (reverse == null) ServerSocket().apply {
                     bind(InetSocketAddress(address, 0))
                     soTimeout = 120_000
-                }
+                } else null
                 listener = server
                 val random = SecureRandom()
-                val invitation = PairingInvitation(address.hostAddress!!, server.localPort, UUID.randomUUID().toString(),
-                    vaultId, CharArray(24) { ('0'.code + random.nextInt(10)).toChar() }.concatToString())
-                mutableState.value = PairingUiState("offering", invitation.encode(),
-                    message = "Scan this link on the other phone within two minutes.")
+                val invitation = PairingInvitation(reverse?.address ?: address.hostAddress!!,
+                    reverse?.port ?: requireNotNull(server).localPort,
+                    reverse?.session ?: UUID.randomUUID().toString(), vaultId,
+                    reverse?.code ?: CharArray(24) { ('0'.code + random.nextInt(10)).toChar() }.concatToString())
+                mutableState.value = if (reverse == null) PairingUiState("offering", invitation.encode(),
+                    message = "Scan this QR on the new device, or copy its link to Windows, within two minutes.")
+                else PairingUiState("connecting", message = "Connecting to Windows on the local networkâ€¦")
                 val deadline = android.os.SystemClock.elapsedRealtime() + 120_000
-                server.use {
-                    repeat(3) {
+                    repeat(if (reverse == null) 3 else 1) {
                         ensureActive()
                         require(android.os.SystemClock.elapsedRealtime() < deadline) { "Pairing expired" }
-                        server.soTimeout = (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1).toInt()
-                        val socket = server.accept()
+                        val socket = if (reverse == null) {
+                            requireNotNull(server).soTimeout = (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1).toInt()
+                            server.accept()
+                        } else Socket().apply {
+                            network.bindSocket(this)
+                            connect(InetSocketAddress(InetAddresses.parseNumericAddress(reverse.address), reverse.port), 10_000)
+                        }
                         connection = socket
                         try {
                             socket.use {
                                 socket.soTimeout = 30_000
                                 val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
+                                if (reverse != null) frames.send(vaultId.toByteArray(Charsets.UTF_8), 128)
                                 val result = pairingHandshake(frames, identity, invitation.code.toCharArray(),
                                     invitation.session, vaultId, true)
                                 try {
@@ -111,12 +145,14 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                             "This vault already has $MAX_ACTIVE_SYNC_DEVICES active Android devices"
                                         }
                                         val member = SyncMembershipEntity.from(DeviceMembership(vaultId, result.peer.deviceId,
-                                            "Android device", result.peer.publicKeyBase64Url, MemberStatus.ACTIVE, identity.deviceId,
+                                            if (result.peerPlatform == "windows") "Windows device" else "Android device",
+                                            result.peer.publicKeyBase64Url, MemberStatus.ACTIVE, identity.deviceId,
                                             database.syncDao().membershipEvents(vaultId).size + 1L, 1))
                                         mutableState.value = PairingUiState("transferring", message = "Sending the encrypted vault copy…")
                                         val admission = SyncChannelOutput(channel).use { output ->
                                             SyncSnapshot(context, database, EncryptedPhotoStore(context))
-                                                .export(output, key, result.key, member)
+                                                .export(output, key, result.key, member,
+                                                    windowsPeer = result.peerPlatform == "windows")
                                         }
                                         require(channel.receive().contentEquals("ready".toByteArray())) { "Enrollment was not prepared" }
                                         ensureActive()
@@ -132,7 +168,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                             LanSyncService.store(context).recordPeerAddress(result.peer.deviceId,
                                                 socket.inetAddress.hostAddress!!)
                                         }
-                                        mutableState.value = PairingUiState("paired", message = "The other phone has the vault copy.")
+                                        mutableState.value = PairingUiState("paired", message = "The new device has the vault copy.")
                                     }
                                 } finally { result.key.fill(0) }
                             }
@@ -145,7 +181,6 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                         } finally { connection = null }
                     }
                     error("Pairing attempts exhausted")
-                }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 if (committedHost) {
@@ -153,7 +188,11 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                     mutableState.value = PairingUiState("enrolled_pending", message =
                         "Enrollment was saved, but final confirmation was lost. If the other device has the vault, use Sync now. If it is still empty, pair that same device again.")
                 } else mutableState.value = PairingUiState("failed", message =
-                    pairingFailure(failure, mutableState.value.stage))
+                    if (reverseLink != null && mutableState.value.stage == "connecting" &&
+                        (failure is ConnectException || failure is SocketTimeoutException ||
+                            failure is java.net.NoRouteToHostException))
+                        "Windows did not answer. Keep its QR open and allow Nuvori through the PC's firewall on this local network."
+                    else pairingFailure(failure, mutableState.value.stage))
             }
             finally { listener?.close(); listener = null; key.fill(0); password.fill('\u0000') }
         }
@@ -236,7 +275,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
         val pending = CompletableDeferred<Boolean>()
         approval = pending
         mutableState.value = PairingUiState("confirm", confirmation = code,
-            message = "Check that both phones show this code, then confirm on each phone.")
+            message = "Check that both devices show this code, then confirm on each device.")
         try { require(withTimeout(30_000) { pending.await() }) }
         finally { approval = null }
         channel.send("approved".toByteArray())
@@ -272,12 +311,12 @@ private fun pairingFailure(failure: Exception, stage: String): String = when {
         "This vault is already paired. Use Sync now instead of scanning the QR again."
     failure.message == "Connect to Wi-Fi to pair" -> "Connect this phone to Wi-Fi and try again."
     failure.message?.startsWith("The master passwords do not match") == true -> failure.message!!
-    failure.message == "Invalid pairing link" || failure.message == "Pair using the same Wi-Fi" ->
+    failure.message == "Invalid pairing link" || failure.message == "Pair using a reachable local network" ->
         "The QR is not a valid local pairing invitation. Generate a new QR on the other phone."
     failure is ConnectException || failure is java.net.NoRouteToHostException ->
-        "QR read, but this phone cannot reach the other phone on Wi-Fi. Keep both on the same network and retry."
+        "QR read, but this device cannot reach the other device on the local network. Check the network route and retry."
     failure is SocketTimeoutException ->
-        "The $stage step timed out. Keep both phones unlocked and retry with a new QR."
+        "The $stage step timed out. Keep both devices unlocked and retry with a new QR."
     failure is EOFException ->
         "The $stage connection closed on the other phone. Check its pairing message and retry."
     failure.message?.contains("active Android devices") == true ||

@@ -1327,19 +1327,29 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun resumeDeviceSync() = securedLaunch {
         lockedSyncStore.publish(requireNotNull(database))
         com.privatevault.app.sync.LanSyncService.start(getApplication(), resume = true)
+        notify("Automatic sync on", StatusKind.SUCCESS)
     }
 
     fun pauseDeviceSync() {
         com.privatevault.app.sync.LanSyncService.pause(getApplication())
+        notify("Automatic sync paused", StatusKind.INFO)
     }
 
     fun setDeviceSyncInterval(interval: Long) {
         com.privatevault.app.sync.LanSyncService.setSyncInterval(getApplication(), interval)
+        val label = when (interval) {
+            30_000L -> "30 seconds"
+            60_000L -> "1 minute"
+            300_000L -> "5 minutes"
+            else -> "15 minutes"
+        }
+        notify("Checks every $label", StatusKind.SUCCESS)
     }
 
     fun syncDevicesNow() = securedLaunch {
         lockedSyncStore.publish(requireNotNull(database))
         com.privatevault.app.sync.LanSyncService.syncNow(getApplication())
+        notify("Checking paired devices…", StatusKind.PROGRESS)
     }
 
     fun setDeviceSyncAddress(deviceId: String, address: String) = securedLaunch {
@@ -1353,9 +1363,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             .save(name.trim(), requireNotNull(sessionKey))
         com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         refresh()
+        notify("Device renamed", StatusKind.SUCCESS)
     }
 
     fun retryRejectedSyncChanges() = securedLaunch {
+        notify("Retrying changes", StatusKind.PROGRESS)
         lockedSyncStore.retryRejected()
         val key = requireNotNull(sessionKey).copyOf()
         try { lockedSyncStore.applyQueued(requireNotNull(database), key) }
@@ -1384,6 +1396,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         db.offerAuthorityTransfer(deviceIdentityStore, deviceId)
         com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         refresh()
+        notify("Management offer sent. The other device must accept it.", StatusKind.INFO)
     }
 
     fun acceptAuthorityTransfer() = securedLaunch {
@@ -1393,6 +1406,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         db.acceptAuthorityTransfer(deviceIdentityStore)
         com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         refresh()
+        notify("Management role accepted. The current manager completes the handoff.", StatusKind.SUCCESS)
     }
 
     fun completeAuthorityTransfer() = securedLaunch {
@@ -1410,6 +1424,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         db.cancelAuthorityTransfer(deviceIdentityStore)
         com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         refresh()
+        notify("Management transfer cancelled", StatusKind.INFO)
     }
 
     fun removeOnlyPairedDevice(deviceId: String) = resetSyncGroup(deviceId)
@@ -1457,6 +1472,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             lockedSyncStore.photoBlobs, getApplication())
             .resolve(id, useIncoming, requireNotNull(sessionKey), expectedVersion)
         refresh()
+        notify("Conflict resolved", StatusKind.SUCCESS)
     }
 
     init {

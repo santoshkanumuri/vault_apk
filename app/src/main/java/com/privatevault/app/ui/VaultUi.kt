@@ -133,6 +133,18 @@ import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.Switch
+import androidx.compose.material.icons.outlined.AppShortcut
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.FileUpload
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.Watch
 import com.privatevault.app.nfc.cardNetwork
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -2054,16 +2066,18 @@ private fun GroupEntryDetails(
 }
 
 @Composable
-private fun SecurityChoices(title: String, explanation: String, selected: Long, choices: List<Pair<Long, String>>, onSelect: (Long) -> Unit) {
-    Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        Text(explanation, style = MaterialTheme.typography.bodySmall)
-        choices.forEach { (value, label) ->
-            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected == value, role = Role.RadioButton, onClick = { onSelect(value) }), verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(selected = selected == value, onClick = null)
-                Text(label, Modifier.padding(start = 8.dp))
+private fun SecurityChoices(title: String, explanation: String, selected: Long, choices: List<Pair<Long, String>>,
+    footnote: String? = null, onSelect: (Long) -> Unit) {
+    SettingsSection(title, description = explanation) {
+        Column(Modifier.fillMaxWidth().selectableGroup()) {
+            choices.forEach { (value, label) ->
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected == value, role = Role.RadioButton, onClick = { onSelect(value) }), verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = selected == value, onClick = null)
+                    Text(label, Modifier.padding(start = 12.dp))
+                }
             }
         }
+        if (footnote != null) Text(footnote, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -2075,6 +2089,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     val savedAuthenticatorEntries by viewModel.entries.collectAsStateWithLifecycle()
     val passkeyTransfer by viewModel.passkeyTransferPreview.collectAsStateWithLifecycle()
     val passwordDuplicateReview by viewModel.passwordDuplicateReview.collectAsStateWithLifecycle()
+    val syncConflicts by viewModel.syncConflicts.collectAsStateWithLifecycle()
+    val rejectedSyncChanges by viewModel.rejectedSyncChanges.collectAsStateWithLifecycle()
     var deletePasskey by remember { mutableStateOf<com.privatevault.app.data.PasskeySummary?>(null) }
     var confirmPasswordDuplicateDelete by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf<String?>(when (initialImportChoice) {
@@ -2185,9 +2201,17 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         if (uri != null) viewModel.previewPasswordImport(uri) else viewModel.touch()
     }
     val browserImportContent: @Composable () -> Unit = {
-        Text("Import passwords", style = MaterialTheme.typography.titleMedium)
-        Text("Choose a password CSV from a browser or password manager, or an unencrypted Bitwarden JSON export. You will review the accounts before saving. Export files contain readable passwords. This does not import passkeys.")
-        OutlinedButton(onClick = { viewModel.externalFlowActive = true; importPasswords.launch(arrayOf("text/*", "application/csv", "application/json", "application/vnd.ms-excel", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("Choose password export") }
+        SettingsSection("Import passwords",
+            description = "Choose a password CSV from a browser or password manager, or an unencrypted Bitwarden JSON export. You will review the accounts before saving. This does not import passkeys.") {
+            StatusBanner(kind = StatusKind.WARNING, message = "Export files contain readable passwords.")
+            val chooseExport = {
+                viewModel.externalFlowActive = true
+                importPasswords.launch(arrayOf("text/*", "application/csv", "application/json", "application/vnd.ms-excel", "application/octet-stream"))
+            }
+            if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT)
+                SettingsPrimaryButton("Choose password export", onClick = chooseExport, icon = Icons.Outlined.Download)
+            else SettingsSecondaryButton("Choose password export", onClick = chooseExport, icon = Icons.Outlined.Download)
+        }
     }
 
     val back: () -> Unit = {
@@ -2200,25 +2224,26 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = 16.dp)) {
           Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
             BackIcon(back)
-            Text(page ?: "Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            Text(page ?: "Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f).semantics { heading() })
           }
           Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().align(Alignment.CenterHorizontally).weight(1f).verticalScroll(pageScroll).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (page == null) {
-                listOf("Security" to "Master password and lock behavior", "Android devices" to "Pair another phone on the same Wi-Fi", "Autofill and codes" to "Password filling, authenticator shortcuts and app suggestions", "Watch codes" to "Sync authenticator codes to a Wear OS watch", "Import authenticator codes" to "Transfer TOTP codes from another app", "Passkeys" to "Website sign-in and encrypted backups", "Backup and import" to "Encrypted backups and password exports", "Appearance" to "Light or black background", "Cards and NFC" to "Optional contactless card scanning", "Help" to "Answers and shortcuts for common tasks", "About" to "Privacy and security limits").forEach { (name, description) ->
-                    Card(Modifier.fillMaxWidth().clickable { page = name }) {
-                        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(name, style = MaterialTheme.typography.titleMedium)
-                            Text(description, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
+                SettingsHub(SettingsHubSummary(
+                    backgroundTimeoutMs = security.backgroundTimeoutMs,
+                    pairedDevices = pairedDevices.count { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name },
+                    syncNeedsAttention = syncConflicts.isNotEmpty() || rejectedSyncChanges > 0,
+                    watchSyncEnabled = security.watchSyncEnabled,
+                    passkeys = passkeys.size,
+                    lightMode = lightMode,
+                    nfcEnabled = nfcEnabled,
+                    nfcSupported = viewModel.nfcSupported,
+                )) { page = it }
             }
             if (page == "Appearance") {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Light mode", Modifier.weight(1f))
-                Switch(checked = lightMode, onCheckedChange = viewModel::setLightMode,
-                    modifier = Modifier.semantics { contentDescription = "Light mode" })
-            }
+                SettingsSection("Theme", description = "Choose how Nuvori looks on this device.") {
+                    SettingsSwitchRow("Light mode", lightMode, viewModel::setLightMode,
+                        description = "Turn off for a black background.")
+                }
             }
             if (page == "Android devices") DeviceSyncSettings(viewModel, copyPairingLink,
                 joiningExisting = initialImportChoice == FirstRunChoice.JOIN)
@@ -2226,177 +2251,208 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 if (destination == "Vault") close() else page = destination
             }
             if (page == "Passkeys") {
-                Text("Create passkeys from a supported website in Chrome or Brave. They are encrypted with your vault and included in backups. Deleting one here does not remove its registration on the website.")
-                if (android.os.Build.VERSION.SDK_INT >= 34) {
-                    OutlinedButton(onClick = {
-                        runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Enable Nuvori for passwords and passkeys") }
-                } else Text("Creating and using passkeys requires Android 14 or newer. Stored passkeys remain included in backups.")
-                OutlinedButton(
-                    enabled = !transferBusy,
-                    onClick = {
-                        transferBusy = true
-                        viewModel.externalFlowActive = true
-                        transferScope.launch {
-                            try {
-                                val manager = androidx.credentials.providerevents.ProviderEventsManager.create(context)
-                                val request = androidx.credentials.providerevents.transfer.ImportCredentialsRequest(
-                                    credentialTypes = setOf(androidx.credentials.providerevents.transfer.CredentialTypes.CREDENTIAL_TYPE_PUBLIC_KEY),
-                                    knownExtensions = emptySet()
-                                )
-                                val response = manager.importCredentials(context, request)
-                                viewModel.previewCredentialTransfer(
-                                    response.response.responseJson,
-                                    response.callingAppInfo.packageName
-                                )
-                            } catch (error: androidx.credentials.providerevents.exception.ImportCredentialsException) {
-                                viewModel.credentialTransferFailed(
-                                    error is androidx.credentials.providerevents.exception.ImportCredentialsCancellationException
-                                )
-                            } catch (_: Exception) {
-                                viewModel.credentialTransferFailed(false)
-                            } finally {
-                                viewModel.externalFlowActive = false
-                                transferBusy = false
-                                viewModel.touch()
+                SettingsSection("Set up passkeys",
+                    description = "Create passkeys from a supported website in Chrome or Brave. They are encrypted with your vault and included in backups. Deleting one here does not remove its registration on the website.") {
+                    if (android.os.Build.VERSION.SDK_INT >= 34) {
+                        SettingsPrimaryButton("Enable Nuvori for passwords and passkeys", icon = Icons.Outlined.Key, onClick = {
+                            runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
+                        })
+                    } else StatusBanner(kind = StatusKind.INFO,
+                        message = "Creating and using passkeys requires Android 14 or newer. Stored passkeys remain included in backups.")
+                }
+                SettingsSection("Import from another manager",
+                    description = "Android will show managers that support secure credential transfer. Browsers are listed only when their credential provider offers an export.") {
+                    SettingsSecondaryButton(if (transferBusy) "Waiting for password manager…" else "Import passkeys from another manager",
+                        icon = Icons.Outlined.Download, enabled = !transferBusy, onClick = {
+                            transferBusy = true
+                            viewModel.externalFlowActive = true
+                            transferScope.launch {
+                                try {
+                                    val manager = androidx.credentials.providerevents.ProviderEventsManager.create(context)
+                                    val request = androidx.credentials.providerevents.transfer.ImportCredentialsRequest(
+                                        credentialTypes = setOf(androidx.credentials.providerevents.transfer.CredentialTypes.CREDENTIAL_TYPE_PUBLIC_KEY),
+                                        knownExtensions = emptySet()
+                                    )
+                                    val response = manager.importCredentials(context, request)
+                                    viewModel.previewCredentialTransfer(
+                                        response.response.responseJson,
+                                        response.callingAppInfo.packageName
+                                    )
+                                } catch (error: androidx.credentials.providerevents.exception.ImportCredentialsException) {
+                                    viewModel.credentialTransferFailed(
+                                        error is androidx.credentials.providerevents.exception.ImportCredentialsCancellationException
+                                    )
+                                } catch (_: Exception) {
+                                    viewModel.credentialTransferFailed(false)
+                                } finally {
+                                    viewModel.externalFlowActive = false
+                                    transferBusy = false
+                                    viewModel.touch()
+                                }
                             }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
-                ) { Text(if (transferBusy) "Waiting for password manager…" else "Import passkeys from another manager") }
-                Text("Android will show managers that support secure credential transfer. Browsers are listed only when their credential provider offers an export.", style = MaterialTheme.typography.bodySmall)
-                Text("Supports ES256 passkeys for websites and native apps that use Android Credential Manager. Apps using legacy FIDO APIs, enterprise attestation, or unsupported extensions cannot offer Nuvori.", style = MaterialTheme.typography.bodySmall)
-                if (passkeys.isEmpty()) Text("No passkeys saved yet.")
-                passkeys.forEach { key ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(key.rpId, style = MaterialTheme.typography.titleMedium)
-                            Text(key.username)
-                            TextButton(onClick = { deletePasskey = key }) { Text("Delete passkey", color = MaterialTheme.colorScheme.error) }
+                        })
+                    Text("Supports ES256 passkeys for websites and native apps that use Android Credential Manager. Apps using legacy FIDO APIs, enterprise attestation, or unsupported extensions cannot offer Nuvori.", style = MaterialTheme.typography.bodySmall)
+                }
+                SettingsSection("Saved passkeys",
+                    description = if (passkeys.isEmpty()) null else "${passkeys.size} in this vault.") {
+                    if (passkeys.isEmpty()) Text("No passkeys saved yet.")
+                    passkeys.forEachIndexed { index, passkey ->
+                        if (index > 0) HorizontalDivider()
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(passkey.rpId, style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(passkey.username, style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            IconButton(onClick = { deletePasskey = passkey }, modifier = Modifier.size(48.dp)) {
+                                Icon(Icons.Outlined.DeleteOutline, contentDescription = "Delete passkey for ${passkey.rpId}",
+                                    tint = MaterialTheme.colorScheme.error)
+                            }
                         }
                     }
                 }
             }
-            if (page == "Cards and NFC") NfcPreference(nfcEnabled, viewModel.nfcSupported, viewModel::setNfcEnabled)
+            if (page == "Cards and NFC") SettingsSection("Contactless cards") {
+                NfcPreference(nfcEnabled, viewModel.nfcSupported, viewModel::setNfcEnabled)
+            }
             if (page == "Import authenticator codes") {
-                Text("In Google Authenticator, choose Transfer accounts, then Export accounts. Scan every QR page before importing. A second device may be needed to display the codes.")
-                Text("You can also scan a standard TOTP setup QR, choose a Zoho OneAuth encrypted JSON export, or import a text file with one otpauth://totp link per line. Microsoft Authenticator does not provide a compatible account export.", style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = {
-                    if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) authenticatorScanner = true
-                    else authenticatorPermission.launch(android.Manifest.permission.CAMERA)
-                }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Scan transfer QR") }
-                OutlinedButton(onClick = { viewModel.externalFlowActive = true; authenticatorImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Choose QR image") }
-                OutlinedButton(onClick = { viewModel.externalFlowActive = true; authenticatorFile.launch(arrayOf("application/json", "text/plain", "text/*", "application/octet-stream")) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Choose OneAuth JSON or TOTP text file") }
-                Text("Plaintext TOTP files contain readable setup keys. Delete them after checking the imported codes.", style = MaterialTheme.typography.bodySmall)
-                authenticatorError?.let { Text(it, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }, color = MaterialTheme.colorScheme.error) }
+                SettingsSection("Choose an export",
+                    description = "In Google Authenticator, choose Transfer accounts, then Export accounts. Scan every QR page before importing. A second device may be needed to display the codes.") {
+                    SettingsPrimaryButton("Scan transfer QR", icon = Icons.Outlined.QrCodeScanner, onClick = {
+                        if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) authenticatorScanner = true
+                        else authenticatorPermission.launch(android.Manifest.permission.CAMERA)
+                    })
+                    SettingsSecondaryButton("Choose QR image", icon = Icons.Outlined.PhotoLibrary,
+                        onClick = { viewModel.externalFlowActive = true; authenticatorImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
+                    SettingsSecondaryButton("Choose OneAuth JSON or TOTP text file", icon = Icons.Outlined.Description,
+                        onClick = { viewModel.externalFlowActive = true; authenticatorFile.launch(arrayOf("application/json", "text/plain", "text/*", "application/octet-stream")) })
+                    Text("You can also scan a standard TOTP setup QR, choose a Zoho OneAuth encrypted JSON export, or import a text file with one otpauth://totp link per line. Microsoft Authenticator does not provide a compatible account export.", style = MaterialTheme.typography.bodySmall)
+                    StatusBanner(kind = StatusKind.WARNING, message = "Plaintext TOTP files contain readable setup keys. Delete them after checking the imported codes.")
+                    authenticatorError?.let { StatusBanner(kind = StatusKind.ERROR, message = it) }
+                }
                 if (authenticatorPages.isNotEmpty()) {
                     val expected = authenticatorPages.values.first().batchSize
-                    Text("${authenticatorPages.size} of $expected QR ${if (expected == 1) "page" else "pages"} scanned", style = MaterialTheme.typography.titleMedium)
-                    val accounts = authenticatorPages.toSortedMap().values.flatMap { it.accounts }
-                    val statuses = com.privatevault.app.security.authenticatorImportStatuses(savedAuthenticatorEntries.map { it.entry }, accounts)
-                    accounts.zip(statuses).forEach { (account, status) ->
-                        val label = when (status) {
-                            com.privatevault.app.security.AuthenticatorImportStatus.NEW -> "New"
-                            com.privatevault.app.security.AuthenticatorImportStatus.ALREADY_SAVED -> "Already saved"
-                            com.privatevault.app.security.AuthenticatorImportStatus.CONFLICT -> "Different setup key, skipped"
+                    SettingsSection("${authenticatorPages.size} of $expected QR ${if (expected == 1) "page" else "pages"} scanned") {
+                        val accounts = authenticatorPages.toSortedMap().values.flatMap { it.accounts }
+                        val statuses = com.privatevault.app.security.authenticatorImportStatuses(savedAuthenticatorEntries.map { it.entry }, accounts)
+                        accounts.zip(statuses).forEach { (account, status) ->
+                            val label = when (status) {
+                                com.privatevault.app.security.AuthenticatorImportStatus.NEW -> "New"
+                                com.privatevault.app.security.AuthenticatorImportStatus.ALREADY_SAVED -> "Already saved"
+                                com.privatevault.app.security.AuthenticatorImportStatus.CONFLICT -> "Different setup key, skipped"
+                            }
+                            Text("${account.issuer.ifBlank { account.account }} · ${account.account} · $label")
                         }
-                        Text("${account.issuer.ifBlank { account.account }} · ${account.account} · $label")
+                        if (authenticatorPages.size < expected)
+                            StatusBanner(kind = StatusKind.INFO, message = "Scan the remaining QR pages to continue.")
+                        Text("Review these accounts before saving. Imported codes do not remove them from the original app. Check a code on each website before deleting the original.", style = MaterialTheme.typography.bodySmall)
+                        SettingsPrimaryButton("Import codes", icon = Icons.Outlined.Check, enabled = authenticatorPages.size == expected, onClick = {
+                            viewModel.importAuthenticatorAccounts(accounts)
+                            authenticatorPages = emptyMap()
+                        })
+                        TextButton(onClick = { authenticatorPages = emptyMap(); authenticatorError = null },
+                            modifier = Modifier.heightIn(min = 48.dp)) { Text("Clear scanned pages") }
                     }
-                    Text("Review these accounts before saving. Imported codes do not remove them from the original app. Check a code on each website before deleting the original.", style = MaterialTheme.typography.bodySmall)
-                    Button(enabled = authenticatorPages.size == expected, onClick = {
-                        viewModel.importAuthenticatorAccounts(accounts)
-                        authenticatorPages = emptyMap()
-                    }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Import codes") }
-                    TextButton(onClick = { authenticatorPages = emptyMap(); authenticatorError = null }) { Text("Clear scanned pages") }
                 }
             }
             if (page == "Autofill and codes") {
                 AutofillPreference(viewModel::refreshAutofillCopy)
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Vault codes tile", modifier = Modifier.semantics { heading() },
-                            style = MaterialTheme.typography.titleMedium)
-                        Text("Search and copy passwords or TOTP codes from Quick Settings after unlocking. The tile works with any Autofill provider.",
-                            style = MaterialTheme.typography.bodySmall)
-                        OutlinedButton(onClick = { requestVaultCodesTile(context) },
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Add Vault codes tile") }
-                    }
+                SettingsSection("Vault codes tile",
+                    description = "Search and copy passwords or TOTP codes from Quick Settings after unlocking. The tile works with any Autofill provider.") {
+                    SettingsSecondaryButton("Add Vault codes tile", icon = Icons.Outlined.AppShortcut,
+                        onClick = { requestVaultCodesTile(context) })
                 }
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Suggested codes", modifier = Modifier.semantics { heading() },
-                            style = MaterialTheme.typography.titleMedium)
-                        Text("When you open the tile, Nuvori can put codes for your previous app first.",
-                            style = MaterialTheme.typography.bodySmall)
-                        CodeAppDetectionPreference()
-                    }
+                SettingsSection("Suggested codes",
+                    description = "When you open the tile, Nuvori can put codes for your previous app first.") {
+                    CodeAppDetectionPreference()
                 }
             }
             if (page == "Watch codes") {
-                Text("Use your codes on a Wear OS watch", style = MaterialTheme.typography.titleMedium)
-                Text("Install Nuvori on the watch and connect it to this phone. The watch keeps an encrypted copy of your authenticator accounts so it can show codes without the phone. The watch must have a screen lock.")
-                Text("Nuvori sends updated accounts after you add, edit, or delete a code. Changes reach the watch when it reconnects. Until then, the watch may show an older list.", style = MaterialTheme.typography.bodySmall)
-                Text("Sync may use Google's encrypted Wear OS relay when Bluetooth is unavailable. Only authenticator accounts are sent.", style = MaterialTheme.typography.bodySmall)
-                Button(onClick = viewModel::connectWatch, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-                    Text(if (security.watchSyncEnabled) "Sync codes now" else "Connect watch and sync codes")
+                SettingsSection("Codes on your watch",
+                    description = "Install Nuvori on the watch and connect it to this phone. The watch keeps an encrypted copy of your authenticator accounts so it can show codes without the phone. The watch must have a screen lock.") {
+                    if (security.watchSyncEnabled) StatusBanner(kind = StatusKind.SUCCESS, title = "Watch sync is on",
+                        message = "Codes are sent to your watch after you add, edit, or delete one.")
+                    else StatusBanner(kind = StatusKind.INFO, title = "Watch sync is off",
+                        message = "Connect a Wear OS watch to see your authenticator codes there.")
+                    SettingsPrimaryButton(if (security.watchSyncEnabled) "Sync codes now" else "Connect watch and sync codes",
+                        icon = Icons.Outlined.Watch, onClick = viewModel::connectWatch)
+                    if (security.watchSyncEnabled) {
+                        SettingsDangerButton("Remove codes from watch", icon = Icons.Outlined.DeleteOutline,
+                            onClick = viewModel::removeWatchCodes)
+                        Text("A disconnected watch keeps its current codes until it reconnects and receives the removal.", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
-                if (security.watchSyncEnabled) {
-                    OutlinedButton(onClick = viewModel::removeWatchCodes, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Remove codes from watch") }
-                    Text("A disconnected watch keeps its current codes until it reconnects and receives the removal.", style = MaterialTheme.typography.bodySmall)
+                SettingsSection("How watch sync works") {
+                    Text("Nuvori sends updated accounts after you add, edit, or delete a code. Changes reach the watch when it reconnects. Until then, the watch may show an older list.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Sync may use Google's encrypted Wear OS relay when Bluetooth is unavailable. Only authenticator accounts are sent.", style = MaterialTheme.typography.bodySmall)
                 }
             }
             if (page == "Backup and import") {
-            if (initialImportChoice == FirstRunChoice.RESTORE)
-                Text("Next: restore your encrypted backup. Enter the password used when you made it, then choose the .pvault file. Review its contents before replacing this new vault.")
-            if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT)
-                Text("Next: choose a password CSV or an unencrypted Bitwarden JSON export. Review the accounts before saving them to your vault. Passkeys are not included.")
-            if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT) { browserImportContent(); HorizontalDivider() }
-            (if (initialImportChoice == FirstRunChoice.RESTORE) listOf("restore", "export") else listOf("export", "restore")).forEach { kind ->
-                FilledTonalButton(onClick = { action = kind }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-                    Text(if (kind == "export") "Export encrypted backup" else "Restore encrypted backup")
+                val restoreFirst = initialImportChoice == FirstRunChoice.RESTORE
+                if (restoreFirst) StatusBanner(kind = StatusKind.INFO,
+                    message = "Next: restore your encrypted backup. Enter the password used when you made it, then choose the .pvault file. Review its contents before replacing this new vault.")
+                if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT) {
+                    StatusBanner(kind = StatusKind.INFO,
+                        message = "Next: choose a password CSV or an unencrypted Bitwarden JSON export. Review the accounts before saving them to your vault. Passkeys are not included.")
+                    browserImportContent()
+                }
+                SettingsSection("Encrypted backup",
+                    description = "Save your vault to a .pvault file protected by a password, or restore one. A restore is checked and reviewed before it replaces anything.") {
+                    (if (restoreFirst) listOf("restore", "export") else listOf("export", "restore")).forEach { kind ->
+                        val isExport = kind == "export"
+                        val label = if (isExport) "Export encrypted backup" else "Restore encrypted backup"
+                        val icon = if (isExport) Icons.Outlined.FileUpload else Icons.Outlined.Restore
+                        if (isExport != restoreFirst) SettingsPrimaryButton(label, icon = icon, onClick = { action = kind })
+                        else SettingsSecondaryButton(label, icon = icon, onClick = { action = kind })
+                    }
+                    Text("A cloud file provider may upload an encrypted backup outside this app.", style = MaterialTheme.typography.bodySmall)
+                }
+                if (initialImportChoice != FirstRunChoice.BROWSER_IMPORT) browserImportContent()
+                SettingsSection("Exact duplicate passwords",
+                    description = "Find password entries whose saved fields, tags, folders, and app or website links match exactly. Entry IDs and activity dates are ignored. Entries with photos are never included.") {
+                    SettingsSecondaryButton("Check for exact duplicates", icon = Icons.Outlined.ContentCopy,
+                        onClick = viewModel::checkPasswordDuplicates)
                 }
             }
-            Text("A cloud file provider may upload an encrypted backup outside this app.", style = MaterialTheme.typography.bodySmall)
-            if (initialImportChoice != FirstRunChoice.BROWSER_IMPORT) { HorizontalDivider(); browserImportContent() }
-            HorizontalDivider()
-            Text("Exact duplicate passwords", style = MaterialTheme.typography.titleMedium)
-            Text("Find password entries whose saved fields, tags, folders, and app or website links match exactly. Entry IDs and activity dates are ignored. Entries with photos are never included.")
-            OutlinedButton(onClick = viewModel::checkPasswordDuplicates,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Check for exact duplicates") }
-            }
             if (page == "Security") {
+                SettingsPrimaryButton("Lock now", icon = Icons.Outlined.Lock,
+                    onClick = { viewModel.lock(LockReason.MANUAL); close() })
                 SecurityChoices("Auto-lock after leaving the app", "The vault locks after you switch apps. Screen-off always locks immediately.",
-                    security.backgroundTimeoutMs, listOf(0L to "Immediately", 10_000L to "10 seconds", 30_000L to "30 seconds", 60_000L to "1 minute", 300_000L to "5 minutes"), viewModel::setBackgroundTimeout)
+                    security.backgroundTimeoutMs, backgroundLockChoices, onSelect = viewModel::setBackgroundTimeout)
                 SecurityChoices("Auto-lock after inactivity while open", "The countdown starts after your last interaction. Leaving the app never extends it.",
-                    security.inactivityTimeoutMs, listOf(60_000L to "1 minute", 300_000L to "5 minutes", 900_000L to "15 minutes", 1_800_000L to "30 minutes"), viewModel::setInactivityTimeout)
+                    security.inactivityTimeoutMs, listOf(60_000L to "1 minute", 300_000L to "5 minutes", 900_000L to "15 minutes", 1_800_000L to "30 minutes"),
+                    onSelect = viewModel::setInactivityTimeout)
                 SecurityChoices("Require the master password again", "Fingerprint is required for every biometric unlock. This controls how long the protected vault key remains available for fingerprint unlock.",
-                    security.masterPasswordIntervalMs, listOf(0L to "Every unlock", 86_400_000L to "After 1 day", 604_800_000L to "After 1 week", 2_592_000_000L to "After 1 month")) { value ->
+                    security.masterPasswordIntervalMs, listOf(0L to "Every unlock", 86_400_000L to "After 1 day", 604_800_000L to "After 1 week", 2_592_000_000L to "After 1 month"),
+                    footnote = "Changing this interval ends the current fingerprint session. Enter your master password after the next lock to start a new one.") { value ->
                     if (value >= 604_800_000L) { pendingInterval = value; page = "Confirm interval" }
                     else viewModel.setMasterPasswordInterval(value)
                 }
-                Text("Changing this interval ends the current fingerprint session. Enter your master password after the next lock to start a new one.", style = MaterialTheme.typography.bodySmall)
-                if (pairedDevices.any { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name })
-                    Text("Paired devices must keep the same master password. Remove paired devices before changing it.",
-                        style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = { action = "password" },
-                    enabled = pairedDevices.none { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Change master password") }
-                OutlinedButton(onClick = { viewModel.lock(LockReason.MANUAL); close() }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Lock now") }
+                val hasPairedDevices = pairedDevices.any { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name }
+                SettingsSection("Master password", description = "Existing backup files keep their original passwords.") {
+                    if (hasPairedDevices) StatusBanner(kind = StatusKind.WARNING,
+                        message = "Paired devices must keep the same master password. Remove paired devices before changing it.")
+                    SettingsSecondaryButton("Change master password", icon = Icons.Outlined.Key, enabled = !hasPairedDevices,
+                        onClick = { action = "password" })
+                }
             }
             if (page == "Confirm interval") {
-                Text("Confirm longer fingerprint access", style = MaterialTheme.typography.titleLarge)
-                Text("Nuvori cannot reset your master password. If you forget it, your vault cannot be recovered.")
-                if (pendingInterval == 2_592_000_000L) Text("Anyone who can pass the device biometric may unlock the vault for up to 30 days.")
-                Button(onClick = { pendingInterval?.let(viewModel::setMasterPasswordInterval); pendingInterval = null; page = "Security" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Confirm") }
-                OutlinedButton(onClick = { pendingInterval = null; page = "Security" }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Cancel") }
+                SettingsSection("Confirm longer fingerprint access") {
+                    StatusBanner(kind = StatusKind.WARNING,
+                        message = "Nuvori cannot reset your master password. If you forget it, your vault cannot be recovered.")
+                    if (pendingInterval == 2_592_000_000L) StatusBanner(kind = StatusKind.WARNING,
+                        message = "Anyone who can pass the device biometric may unlock the vault for up to 30 days.")
+                    SettingsPrimaryButton("Confirm", onClick = { pendingInterval?.let(viewModel::setMasterPasswordInterval); pendingInterval = null; page = "Security" })
+                    SettingsSecondaryButton("Cancel", onClick = { pendingInterval = null; page = "Security" })
+                }
             }
             if (page == "About") {
-                Text("Nuvori", style = MaterialTheme.typography.titleLarge)
-                Text("Yours, by design", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                Text("Local encrypted storage. No account or cloud sync. Keep encrypted backups and recovery codes somewhere safe. This app has not undergone an independent security audit.")
-                TextButton(onClick = { showPrivacy = true }) { Text("Privacy policy") }
+                SettingsSection("Nuvori") {
+                    Text("Yours, by design", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    Text("Local encrypted storage. No account or cloud sync. Keep encrypted backups and recovery codes somewhere safe. This app has not undergone an independent security audit.")
+                    TextButton(onClick = { showPrivacy = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Privacy policy") }
+                }
             }
           }
         }
@@ -2587,10 +2643,16 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
 @Composable
 private fun SecretField(label: String, value: String, onValue: (String) -> Unit) {
     var visible by remember { mutableStateOf(false) }
+    val name = label.replaceFirstChar { it.lowercase() }
     OutlinedTextField(
         value, onValue, label = { Text(label) }, singleLine = true,
         visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
-        trailingIcon = { TextButton(onClick = { visible = !visible }) { Text(if (visible) "Hide" else "Show") } },
+        trailingIcon = {
+            IconButton(onClick = { visible = !visible }) {
+                Icon(if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                    contentDescription = if (visible) "Hide $name" else "Show $name")
+            }
+        },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth()
     )
 }
@@ -2650,16 +2712,9 @@ private fun cardInk(background: Color): Color {
 
 @Composable
 private fun NfcPreference(enabled: Boolean, supported: Boolean, change: (Boolean) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("NFC card import", Modifier.weight(1f))
-            Switch(checked = enabled, onCheckedChange = change, enabled = supported,
-                modifier = Modifier.semantics { contentDescription = "Enable NFC card import" })
-        }
-        Text(if (supported) "Optional. Off means no card scanning. When on, tap the NFC icon in the Card label field. No CVV or payments."
-            else "This phone has no NFC reader. You can still enter cards manually.",
-            style = MaterialTheme.typography.bodySmall)
-    }
+    SettingsSwitchRow("NFC card import", enabled, change, enabled = supported,
+        description = if (supported) "Optional. Off means no card scanning. When on, tap the NFC icon in the Card label field. No CVV or payments."
+            else "This phone has no NFC reader. You can still enter cards manually.")
 }
 private const val CARD_ASPECT_RATIO = 1.586f
 private fun maskCard(number: String): String {

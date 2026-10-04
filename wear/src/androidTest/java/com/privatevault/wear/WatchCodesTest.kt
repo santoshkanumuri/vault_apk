@@ -19,14 +19,17 @@ import com.privatevault.app.watch.WatchAccount
 import com.privatevault.app.watch.WatchSnapshot
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 
 class WatchCodesTest {
     @get:Rule val compose = createComposeRule()
 
-    private val snapshot = WatchSnapshot("sample", listOf(
+    private val small = WatchSnapshot("sample", listOf(
         account("a", "Amazon"), account("g", "Google"), account("h", "GitHub"),
     ))
+    // More than WatchDisplay.DIRECT_LIST_LIMIT accounts, so the letter index opens first.
+    private val snapshot = WatchSnapshot("sample", small.accounts + (1..7).map { account("z$it", "Zoom $it") })
 
     @Test fun setupMessageUsesVisibleTextOnDarkBackground() {
         compose.setContent { MaterialTheme(colorScheme = darkColorScheme()) { WatchCodes(null, true) {} } }
@@ -43,7 +46,7 @@ class WatchCodesTest {
 
     @Test fun letterCountsOpenOnlyMatchingCodesAndAllOpensEverything() {
         compose.setContent { MaterialTheme { WatchCodes(snapshot, true) {} } }
-        compose.onNodeWithContentDescription("All, 3 codes").assertExists()
+        compose.onNodeWithContentDescription("All, 10 codes").assertExists()
         compose.onNodeWithTag("letterIndex").performScrollToNode(hasContentDescription("A, 1 code"))
         compose.onNodeWithContentDescription("A, 1 code").assertExists()
         compose.onNodeWithTag("letterIndex").performScrollToNode(hasContentDescription("G, 2 codes"))
@@ -51,7 +54,7 @@ class WatchCodesTest {
         compose.onNodeWithText("G codes").assertExists()
         compose.onNodeWithText("Amazon").assertDoesNotExist()
         compose.onNodeWithText("‹ Letters").performClick()
-        compose.onNodeWithContentDescription("All, 3 codes").performClick()
+        compose.onNodeWithContentDescription("All, 10 codes").performClick()
         compose.onNodeWithText("All codes").assertExists()
     }
 
@@ -77,6 +80,24 @@ class WatchCodesTest {
             rotateToScrollVertically(5_000f)
         }
         compose.onNodeWithText("Account 9").assertExists()
+    }
+
+    @Test fun smallVaultOpensStraightToCodesAndTapShowsOneCode() {
+        var copied: WatchAccount? = null
+        compose.setContent { MaterialTheme { WatchCodes(small, true) { copied = it } } }
+        compose.onNodeWithContentDescription("All, 3 codes").assertDoesNotExist()
+        compose.onNodeWithText("Amazon").assertExists().performClick()
+        compose.onNodeWithTag("codeDetail").assertExists()
+        compose.onNodeWithText("Copy code").performClick()
+        compose.runOnIdle { assertEquals("a", copied?.id) }
+    }
+
+    @Test fun recentCodesAppearFirstInTheIndex() {
+        compose.setContent { MaterialTheme { WatchCodes(snapshot, true, recentIds = listOf("g", "missing")) {} } }
+        compose.onNodeWithContentDescription("Recent, 1 code").assertExists().performClick()
+        compose.onNodeWithText("Recent codes").assertExists()
+        compose.onNodeWithText("Google").assertExists()
+        compose.onNodeWithText("Amazon").assertDoesNotExist()
     }
 
     private fun account(id: String, name: String) = WatchAccount(id, name, "person@example.com",

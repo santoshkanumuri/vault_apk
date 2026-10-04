@@ -125,7 +125,7 @@ internal fun SettingsHub(summary: SettingsHubSummary, open: (String) -> Unit) {
         SettingsHubGroup("Sync") {
             val pairedChip = if (summary.pairedDevices == 0) StatusKind.NEUTRAL to "Not paired"
                 else StatusKind.NEUTRAL to "${summary.pairedDevices} ${if (summary.pairedDevices == 1) "device" else "devices"}"
-            SettingsHubRow("Android devices", "Sync with another phone on Wi-Fi", Icons.Outlined.Devices,
+            SettingsHubRow("Android devices", "Pair another phone or a Windows PC", Icons.Outlined.Devices,
                 if (summary.syncNeedsAttention) listOf(pairedChip, StatusKind.ERROR to "Needs attention")
                 else listOf(pairedChip)) { open("Android devices") }
             SettingsHubDivider()

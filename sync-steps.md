@@ -77,7 +77,7 @@ The release is ready when three Android devices can join one logical vault, edit
 
 ### Follow-up work
 
-- Windows pairing, LAN exchange, incoming item application, and the remaining vault item types. The Windows SQLCipher vault now records cards, logins, authenticator codes, security questions, contact autofill profiles, and notes as Android-compatible signed local changes. It can verify and stage a bounded incoming operation batch, but these changes do not cross devices yet.
+- Windows pairing, LAN exchange, and migration of existing Windows items into an Android vault. The Windows SQLCipher vault can edit cards, logins, authenticator codes, security questions, contact autofill profiles, notes, folders, and local photos. It verifies signed Android enrollment metadata and can atomically import the logical snapshot into an empty Windows vault. The importer is not connected to pairing, photo changes are not signed for sync, and changes do not cross devices yet.
 - Internet relay, cloud hosting, and cross-network discovery.
 - Recovery Card creation and Recovery Card restore.
 - Browser extension integration.

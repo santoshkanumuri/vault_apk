@@ -90,6 +90,19 @@ class VaultBackupManager(
         }
     }
 
+    /** Plain logical backup body for the already authenticated and encrypted pairing channel. */
+    suspend fun exportForWindowsPairing(output: OutputStream, vaultKey: ByteArray) {
+        val snapshot = dao.backupSnapshot()
+        val metadata = serialize(snapshot)
+        try {
+            WindowsPortableBackupWriter.write(output, metadata, snapshot.photos.map { photo ->
+                WindowsPortablePhoto(photo.id) { photoStore.decryptedBytes(photo.encryptedFileName, vaultKey) }
+            })
+        } finally {
+            metadata.fill(0)
+        }
+    }
+
     suspend fun prepareRestore(input: InputStream, password: CharArray, vaultKey: ByteArray): PreparedRestore {
         val data = DataInputStream(input)
         val magic = ByteArray(MAGIC.size).also(data::readFully)
@@ -316,6 +329,49 @@ class VaultBackupManager(
     )
     private fun VaultGroup.toJson() = JSONObject().put("id", id).put("name", name).put("notes", notes).put("folderType", folderType?.name ?: "")
     private fun VaultPhoto.toJson() = JSONObject().put("id", id).put("entryId", entryId).put("isCover", isCover).put("addedAt", addedAt)
+}
+
+internal data class WindowsPortablePhoto(val id: String, val readBytes: () -> ByteArray)
+
+internal object WindowsPortableBackupWriter {
+    private const val MAX_METADATA = 16 * 1024 * 1024
+    private const val MAX_PHOTO = 128L * 1024 * 1024
+    private const val MAX_BODY = 512L * 1024 * 1024
+    private const val MAX_PHOTO_COUNT = 0xffff_ffffL
+
+    fun write(output: OutputStream, metadata: ByteArray, photos: List<WindowsPortablePhoto>) {
+        require(metadata.size in 1..MAX_METADATA) { "Invalid portable backup metadata size" }
+        require(photos.size.toLong() <= MAX_PHOTO_COUNT) { "Too many portable backup photos" }
+        val ids = HashSet<String>(photos.size)
+        photos.forEach { photo ->
+            require(photo.id.matches(Regex("[A-Za-z0-9-]{1,128}")) && ids.add(photo.id)) {
+                "Invalid or duplicate photo ID"
+            }
+        }
+
+        val data = DataOutputStream(output)
+        data.write("NUVPORT1".toByteArray(Charsets.US_ASCII))
+        data.writeInt(metadata.size)
+        data.write(metadata)
+        data.writeInt(photos.size)
+        var totalSize = metadata.size.toLong()
+        photos.forEach { photo ->
+            val id = photo.id.toByteArray(Charsets.US_ASCII)
+            val bytes = photo.readBytes()
+            try {
+                totalSize += bytes.size.toLong()
+                require(bytes.size in 1..MAX_PHOTO && totalSize <= MAX_BODY) {
+                    "Portable backup photo data exceeds size limits"
+                }
+                data.writeShort(id.size)
+                data.write(id)
+                data.writeLong(bytes.size.toLong())
+                data.write(bytes)
+            } finally {
+                bytes.fill(0)
+            }
+        }
+    }
 }
 
 data class BackupData(

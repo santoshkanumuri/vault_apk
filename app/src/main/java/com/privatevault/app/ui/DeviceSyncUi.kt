@@ -52,6 +52,8 @@ import com.privatevault.app.sync.SyncConflictReview
 import com.privatevault.app.sync.SyncConflictSide
 import com.privatevault.app.sync.DevicePeerStatus
 import com.privatevault.app.sync.PeerSyncCounts
+import com.privatevault.app.sync.PairingInvitation
+import com.privatevault.app.sync.ReversePairingInvitation
 import com.privatevault.app.data.SyncMembershipEntity
 import com.privatevault.app.sync.isPrivateAddress
 import kotlinx.coroutines.delay
@@ -451,6 +453,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     var joining by remember { mutableStateOf(false) }
     var reviewConflictId by rememberSaveable { mutableStateOf<String?>(null) }
     var scanner by remember { mutableStateOf(false) }
+    var scanWindowsQr by remember { mutableStateOf(false) }
+    var reverseLink by remember { mutableStateOf<String?>(null) }
+    var scanError by remember { mutableStateOf<String?>(null) }
     var permissionDenied by remember { mutableStateOf(false) }
     var notificationDenied by remember { mutableStateOf(
         android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -537,7 +542,11 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     }
                     Image(bitmap.asImageBitmap(), "Temporary pairing QR code",
                         Modifier.widthIn(max = 320.dp).fillMaxWidth().aspectRatio(1f))
-                    Text("Use this link on an empty device with the same master password. Confirm the matching code before the vault copy begins.",
+                    val phoneAddress = remember(state.invitation) {
+                        PairingInvitation.decode(state.invitation).address
+                    }
+                    Text("Phone Wi-Fi address: $phoneAddress", style = MaterialTheme.typography.bodySmall)
+                    Text("On another Android phone, start with an empty vault. On Windows, scan this QR with the PC camera or use Copy link. The phone and PC must be able to reach each other across their local networks. Enter this phone's master password on Windows, then confirm the matching code before copying the vault.",
                         style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         SettingsSecondaryButton("Copy link", onClick = { copyLink(state.invitation) },
@@ -580,14 +589,23 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     if (canCreate || devices.isEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (canCreate) SettingsPrimaryButton(
                             if (activeDeviceCount < MAX_ACTIVE_SYNC_DEVICES) "Create QR" else "Reconnect",
-                            onClick = { passwordError = null; verifyPairing = true },
+                            onClick = { reverseLink = null; passwordError = null; verifyPairing = true },
                             modifier = Modifier.weight(1f), icon = Icons.Outlined.QrCode, fill = false)
                         if (devices.isEmpty()) SettingsSecondaryButton("Scan QR", onClick = {
+                            scanWindowsQr = false
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                                 PackageManager.PERMISSION_GRANTED) scanner = true
                             else cameraPermission.launch(Manifest.permission.CAMERA)
                         }, modifier = Modifier.weight(1f), icon = Icons.Outlined.QrCodeScanner, fill = false)
                     }
+                    if (canCreate) SettingsSecondaryButton("Scan Windows QR if the PC cannot reach this phone", onClick = {
+                        scanWindowsQr = true
+                        scanError = null
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                            PackageManager.PERMISSION_GRANTED) scanner = true
+                        else cameraPermission.launch(Manifest.permission.CAMERA)
+                    }, icon = Icons.Outlined.QrCodeScanner)
+                    scanError?.let { StatusBanner(StatusKind.ERROR, it) }
                     if (devices.isEmpty()) {
                         if (permissionDenied) Text("Camera access was denied. Paste the setup link instead.",
                             style = MaterialTheme.typography.bodySmall)
@@ -756,9 +774,17 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             reviewConflictId = null
         }
     }
-    if (scanner) QrScanner(onResult = { value -> scanner = false; joinLink = value },
-        close = { scanner = false }, title = "Scan Nuvori pairing QR",
-        help = "Scan the QR shown on the other device. Keep both devices unlocked on the same Wi-Fi.")
+    if (scanner) QrScanner(onResult = { value ->
+        scanner = false
+        if (scanWindowsQr) {
+            if (runCatching { ReversePairingInvitation.decode(value) }.isSuccess) {
+                reverseLink = value
+                passwordError = null
+                verifyPairing = true
+            } else scanError = "Scan the Windows QR shown in Nuvori's Sync page."
+        } else joinLink = value
+    }, close = { scanner = false }, title = if (scanWindowsQr) "Scan Windows pairing QR" else "Scan Nuvori pairing QR",
+        help = "Scan the QR shown on the other device. Keep both devices unlocked on reachable local networks.")
     if (joinLink != null) AlertDialog(
         onDismissRequest = {
             if (joining) return@AlertDialog
@@ -869,7 +895,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         }) { Text("Accept") } },
         dismissButton = { TextButton(onClick = { acceptTransfer = false }) { Text("Cancel") } })
     if (verifyPairing) AlertDialog(
-        onDismissRequest = { if (!verifyingPassword) { verifyPairing = false; pairingPassword = "" } },
+        onDismissRequest = { if (!verifyingPassword) { verifyPairing = false; pairingPassword = ""; reverseLink = null } },
         title = { Text("Verify before connecting") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -889,7 +915,8 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                 verifyingPassword = true
                 scope.launch {
                     try {
-                        viewModel.hostDevicePairing(password)
+                        viewModel.hostDevicePairing(password, reverseLink)
+                        reverseLink = null
                         verifyPairing = false
                     } catch (cancelled: kotlinx.coroutines.CancellationException) {
                         throw cancelled
@@ -901,7 +928,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             }) { Text("Verify and connect") }
         },
         dismissButton = {
-            TextButton(enabled = !verifyingPassword, onClick = { verifyPairing = false; pairingPassword = "" }) {
+            TextButton(enabled = !verifyingPassword, onClick = { verifyPairing = false; pairingPassword = ""; reverseLink = null }) {
                 Text("Cancel")
             }
         })

@@ -74,16 +74,16 @@ private data class IntroPage(
 )
 
 private val introPages = listOf(
-    IntroPage(Icons.Outlined.CreditCard, "Your essentials, together",
+    IntroPage(NuvoriIcons.Card, "Your essentials, together",
         "Keep cards, logins, authenticator codes, questions, and notes in one place.",
-        listOf(Icons.Outlined.CreditCard to "Cards and photos", Icons.Outlined.Key to "Passwords and passkeys", Icons.Outlined.Timer to "Authenticator codes")),
-    IntroPage(Icons.Outlined.Lock, "Private by design",
+        listOf(NuvoriIcons.Card to "Cards and photos", NuvoriIcons.Password to "Passwords and passkeys", NuvoriIcons.Code to "Authenticator codes")),
+    IntroPage(NuvoriIcons.Lock, "Private by design",
         "Your vault works offline. You can choose to share encrypted changes with your own devices over local Wi-Fi, without an account or cloud sync.",
-        listOf(Icons.Outlined.Password to "A master password protects your vault", Icons.Outlined.Fingerprint to "Fingerprint access after setup", Icons.Outlined.CloudOff to "No cloud account")),
-    IntroPage(Icons.Outlined.Devices, "One vault on your devices",
+        listOf(NuvoriIcons.Password to "A master password protects your vault", NuvoriIcons.Passkey to "Fingerprint access after setup", Icons.Outlined.CloudOff to "No cloud account")),
+    IntroPage(NuvoriIcons.Devices, "One vault on your devices",
         "Pair an empty device on the same Wi-Fi, confirm its code, then give it a copy of your vault. Later changes catch up when the devices connect again.",
-        listOf(Icons.Outlined.Password to "Use the same master password on both devices",
-            Icons.Outlined.Security to "Pairing verifies the device before copying data"))
+        listOf(NuvoriIcons.Password to "Use the same master password on both devices",
+            NuvoriIcons.Shield to "Pairing verifies the device before copying data"))
 )
 
 @OptIn(ExperimentalAnimationApi::class)
@@ -124,17 +124,17 @@ internal fun OnboardingScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         item.points.forEach { (icon, label) -> IntroPoint(icon, label) }
                     } else {
-                        IntroIcon(Icons.Outlined.Security)
+                        IntroIcon(NuvoriIcons.Shield)
                         Text("Ready to start?", style = MaterialTheme.typography.headlineLarge,
                             modifier = Modifier.semantics { heading() })
                         Text("Choose what to do after you create your master password.",
                             style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            ChoiceRow(FirstRunChoice.NEW, choice, Icons.Outlined.Key, "New vault", "Start with an empty vault") { choice = it }
-                            ChoiceRow(FirstRunChoice.JOIN, choice, Icons.Outlined.Devices,
+                            ChoiceRow(FirstRunChoice.NEW, choice, NuvoriIcons.Password, "New vault", "Start with an empty vault") { choice = it }
+                            ChoiceRow(FirstRunChoice.JOIN, choice, NuvoriIcons.Devices,
                                 "Join an existing vault", "Scan the managing device's QR after setup") { choice = it }
-                            ChoiceRow(FirstRunChoice.RESTORE, choice, Icons.Outlined.Backup, "Restore a backup", "Use an encrypted .pvault file") { choice = it }
-                            ChoiceRow(FirstRunChoice.BROWSER_IMPORT, choice, Icons.Outlined.Password, "Import browser passwords", "Choose a Chrome or Brave CSV") { choice = it }
+                            ChoiceRow(FirstRunChoice.RESTORE, choice, NuvoriIcons.History, "Restore a backup", "Use an encrypted .pvault file") { choice = it }
+                            ChoiceRow(FirstRunChoice.BROWSER_IMPORT, choice, NuvoriIcons.Password, "Import browser passwords", "Choose a Chrome or Brave CSV") { choice = it }
                         }
                         TextButton(onClick = onPrivacy) { Text("Privacy policy") }
                     }
@@ -142,7 +142,7 @@ internal fun OnboardingScreen(
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (page > 0) OutlinedIconButton(onClick = { onPageChange(page - 1) }, modifier = Modifier.size(52.dp)) {
-                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Previous page")
+                    Icon(NuvoriIcons.Back, contentDescription = "Previous page")
                 }
                 else Spacer(Modifier.size(52.dp))
                 Spacer(Modifier.weight(1f))

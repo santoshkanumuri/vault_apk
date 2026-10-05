@@ -192,7 +192,7 @@ class SyncSnapshot(private val context: Context, private val database: VaultData
         require(state.members.count { it.status == MemberStatus.ACTIVE.name } in 2..MAX_ACTIVE_SYNC_DEVICES) {
             "Too many active Android devices"
         }
-        state.members.forEach { require(it.vaultId == vaultId && it.keyEpoch == 1L); it.toMembership().validate() }
+        state.members.forEach { require(it.vaultId == vaultId && it.keyEpoch >= 1L); it.toMembership().validate() }
         require(state.members.size == verified.members.size && state.members.all { stored ->
             verified.members.any { it.deviceId == stored.deviceId &&
                 it.identityPublicKey == stored.identityPublicKey && it.status == stored.status &&

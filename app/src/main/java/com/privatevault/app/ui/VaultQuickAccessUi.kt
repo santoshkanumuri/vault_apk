@@ -57,9 +57,9 @@ internal fun ColumnScope.VaultQuickAccessContent(
     }
     OutlinedTextField(search, { search = it },
         label = { Text(if (passwords) "Search passwords" else "Search TOTP accounts") },
-        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+        leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null) },
         trailingIcon = if (search.isEmpty()) null else {
-            { IconButton(onClick = { search = "" }) { Icon(Icons.Outlined.Close, contentDescription = "Clear search") } }
+            { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = "Clear search") } }
         },
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),

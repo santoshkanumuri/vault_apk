@@ -105,43 +105,52 @@ internal data class SettingsHubSummary(
     val lightMode: Boolean,
     val nfcEnabled: Boolean,
     val nfcSupported: Boolean,
+    val transferPending: Boolean = false,
+    val membershipNotice: MembershipNotice? = null,
 )
 
 @Composable
 internal fun SettingsHub(summary: SettingsHubSummary, open: (String) -> Unit) {
     val autofillEnabled = rememberAutofillServiceEnabled()
+    val membershipNotice = summary.membershipNotice
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
         SettingsHubGroup("Security") {
-            SettingsHubRow("Security", "Lock now, auto-lock and master password", Icons.Outlined.Security,
+            SettingsHubRow("Security", "Lock now, auto-lock and master password", NuvoriIcons.Lock,
                 listOf(StatusKind.NEUTRAL to autoLockStatus(summary.backgroundTimeoutMs))) { open("Security") }
         }
         SettingsHubGroup("Autofill and passkeys") {
-            SettingsHubRow("Autofill and codes", "Fill logins and open codes quickly", Icons.Outlined.Password,
+            SettingsHubRow("Autofill and codes", "Fill logins and open codes quickly", NuvoriIcons.Password,
                 listOf(if (autofillEnabled) StatusKind.SUCCESS to "On" else StatusKind.WARNING to "Off")) { open("Autofill and codes") }
             SettingsHubDivider()
-            SettingsHubRow("Passkeys", "Website sign-in and encrypted backups", Icons.Outlined.Key,
+            SettingsHubRow("Passkeys", "Website sign-in and encrypted backups", NuvoriIcons.Passkey,
                 listOf(StatusKind.NEUTRAL to if (summary.passkeys == 0) "None saved" else "${summary.passkeys} saved")) { open("Passkeys") }
         }
         SettingsHubGroup("Sync") {
             val pairedChip = if (summary.pairedDevices == 0) StatusKind.NEUTRAL to "Not paired"
                 else StatusKind.NEUTRAL to "${summary.pairedDevices} ${if (summary.pairedDevices == 1) "device" else "devices"}"
-            SettingsHubRow("Android devices", "Pair another phone or a Windows PC", Icons.Outlined.Devices,
-                if (summary.syncNeedsAttention) listOf(pairedChip, StatusKind.ERROR to "Needs attention")
-                else listOf(pairedChip)) { open("Android devices") }
+            SettingsHubRow("Devices & sync", "Pair a phone or a Windows PC", NuvoriIcons.Devices,
+                listOfNotNull(pairedChip,
+                    if (summary.syncNeedsAttention) StatusKind.ERROR to "Needs attention" else null,
+                    if (summary.transferPending) StatusKind.INFO to "Role transfer" else null,
+                    when (membershipNotice?.kind) {
+                        MembershipNotice.Kind.REMOVED -> StatusKind.WARNING to "Removed"
+                        MembershipNotice.Kind.LEFT -> StatusKind.NEUTRAL to "Left group"
+                        null -> null
+                    })) { open("Android devices") }
             SettingsHubDivider()
-            SettingsHubRow("Watch codes", "Show authenticator codes on Wear OS", Icons.Outlined.Watch,
+            SettingsHubRow("Watch codes", "Show authenticator codes on Wear OS", NuvoriIcons.Watch,
                 listOf(if (summary.watchSyncEnabled) StatusKind.SUCCESS to "On" else StatusKind.NEUTRAL to "Off")) { open("Watch codes") }
         }
         SettingsHubGroup("Backup and data") {
-            SettingsHubRow("Backup and import", "Encrypted backups and password exports", Icons.Outlined.Backup) { open("Backup and import") }
+            SettingsHubRow("Backup and import", "Encrypted backups and password exports", NuvoriIcons.Import) { open("Backup and import") }
             SettingsHubDivider()
-            SettingsHubRow("Import authenticator codes", "Move codes from another app", Icons.Outlined.QrCodeScanner) { open("Import authenticator codes") }
+            SettingsHubRow("Import authenticator codes", "Move codes from another app", NuvoriIcons.Code) { open("Import authenticator codes") }
         }
         SettingsHubGroup("App") {
-            SettingsHubRow("Appearance", "Light or black background", Icons.Outlined.Palette,
+            SettingsHubRow("Appearance", "Light or black background", if (summary.lightMode) NuvoriIcons.Sun else NuvoriIcons.Moon,
                 listOf(StatusKind.NEUTRAL to if (summary.lightMode) "Light" else "Dark")) { open("Appearance") }
             SettingsHubDivider()
-            SettingsHubRow("Cards and NFC", "Optional contactless card scanning", Icons.Outlined.Contactless,
+            SettingsHubRow("Cards and NFC", "Optional contactless card scanning", NuvoriIcons.Nfc,
                 listOf(when {
                     !summary.nfcSupported -> StatusKind.NEUTRAL to "No NFC"
                     summary.nfcEnabled -> StatusKind.SUCCESS to "NFC on"
@@ -149,9 +158,9 @@ internal fun SettingsHub(summary: SettingsHubSummary, open: (String) -> Unit) {
                 })) { open("Cards and NFC") }
         }
         SettingsHubGroup("Support") {
-            SettingsHubRow("Help", "Answers and shortcuts for common tasks", Icons.AutoMirrored.Outlined.HelpOutline) { open("Help") }
+            SettingsHubRow("Help", "Answers and shortcuts for common tasks", NuvoriIcons.Question) { open("Help") }
             SettingsHubDivider()
-            SettingsHubRow("About", "Privacy and security limits", Icons.Outlined.Info) { open("About") }
+            SettingsHubRow("About", "Privacy and security limits", NuvoriIcons.Info) { open("About") }
         }
     }
 }
@@ -161,20 +170,20 @@ private fun SettingsHubGroup(title: String, rows: @Composable ColumnScope.() -> 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, modifier = Modifier.padding(horizontal = 4.dp).semantics { heading() },
             style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-        Card(Modifier.fillMaxWidth()) { Column(content = rows) }
+        HairlineCard(Modifier.fillMaxWidth()) { Column(content = rows) }
     }
 }
 
 @Composable
 private fun SettingsHubDivider() {
-    HorizontalDivider(Modifier.padding(start = 70.dp), color = MaterialTheme.colorScheme.outlineVariant)
+    HorizontalDivider(Modifier.padding(start = 66.dp), color = MaterialTheme.colorScheme.hairline)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsHubRow(title: String, description: String, icon: ImageVector,
     chips: List<Pair<StatusKind, String>> = emptyList(), onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(role = Role.Button, onClick = onClick)
+    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).tappable(pressedScale = .985f, onClick = onClick)
         .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         SettingsIconBadge(icon)
@@ -186,17 +195,17 @@ private fun SettingsHubRow(title: String, description: String, icon: ImageVector
             Text(description, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
         }
-        Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(NuvoriIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
     }
 }
 
-/** Round tinted icon used at the start of hub rows and device cards. */
+/** Tinted icon square used at the start of hub rows and device cards (Windows `row-icon`). */
 @Composable
 internal fun SettingsIconBadge(icon: ImageVector, modifier: Modifier = Modifier) {
-    Box(modifier.size(40.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+    Box(modifier.size(36.dp).background(MaterialTheme.colorScheme.primaryContainer, NuvoriShapes.Control),
         contentAlignment = Alignment.Center) {
         Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.size(22.dp))
+            modifier = Modifier.size(20.dp))
     }
 }
 
@@ -204,9 +213,10 @@ internal fun SettingsIconBadge(icon: ImageVector, modifier: Modifier = Modifier)
 @Composable
 internal fun SettingsSection(title: String, modifier: Modifier = Modifier, description: String? = null,
     content: @Composable ColumnScope.() -> Unit) {
-    Card(modifier.fillMaxWidth()) {
+    HairlineCard(modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(title, modifier = Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium)
+            Text(title, modifier = Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
             if (description != null) Text(description, style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             content()
@@ -246,13 +256,13 @@ private fun SettingsButtonLabel(text: String, icon: ImageVector?) {
 }
 
 private fun Modifier.settingsButtonSize(fill: Boolean): Modifier =
-    (if (fill) fillMaxWidth() else this).heightIn(min = 52.dp)
+    (if (fill) fillMaxWidth() else this).heightIn(min = 48.dp)
 
 /** The main action of a card. Filled. */
 @Composable
 internal fun SettingsPrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
     icon: ImageVector? = null, enabled: Boolean = true, fill: Boolean = true) {
-    Button(onClick = onClick, modifier = modifier.settingsButtonSize(fill), enabled = enabled) {
+    Button(onClick = onClick, modifier = modifier.settingsButtonSize(fill), enabled = enabled, shape = NuvoriShapes.Control) {
         SettingsButtonLabel(text, icon)
     }
 }
@@ -261,7 +271,7 @@ internal fun SettingsPrimaryButton(text: String, onClick: () -> Unit, modifier: 
 @Composable
 internal fun SettingsSecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
     icon: ImageVector? = null, enabled: Boolean = true, fill: Boolean = true) {
-    OutlinedButton(onClick = onClick, modifier = modifier.settingsButtonSize(fill), enabled = enabled) {
+    OutlinedButton(onClick = onClick, modifier = modifier.settingsButtonSize(fill), enabled = enabled, shape = NuvoriShapes.Control) {
         SettingsButtonLabel(text, icon)
     }
 }
@@ -271,7 +281,7 @@ internal fun SettingsSecondaryButton(text: String, onClick: () -> Unit, modifier
 internal fun SettingsDangerButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
     icon: ImageVector? = null, enabled: Boolean = true, fill: Boolean = true) {
     val error = MaterialTheme.colorScheme.error
-    OutlinedButton(onClick = onClick, modifier = modifier.settingsButtonSize(fill), enabled = enabled,
+    OutlinedButton(onClick = onClick, modifier = modifier.settingsButtonSize(fill), enabled = enabled, shape = NuvoriShapes.Control,
         colors = ButtonDefaults.outlinedButtonColors(contentColor = error),
         border = BorderStroke(1.dp, error.copy(alpha = if (enabled) .7f else .24f))) {
         SettingsButtonLabel(text, icon)

@@ -406,15 +406,15 @@ class LockedSyncExchangeTest {
                     val server = pool.submit {
                         listener.accept().use { socket ->
                             socket.soTimeout = 15_000
-                            LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()), storeA, true) {
-                                serverPeer = it
+                            LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()), storeA, true) { id, _ ->
+                                serverPeer = id
                             }
                         }
                     }
                     Socket("127.0.0.1", listener.localPort).use { socket ->
                         socket.soTimeout = 15_000
-                        LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()), storeB, false) {
-                            clientPeer = it
+                        LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()), storeB, false) { id, _ ->
+                            clientPeer = id
                         }
                     }
                     server.get(20, TimeUnit.SECONDS)

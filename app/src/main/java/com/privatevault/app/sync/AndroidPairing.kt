@@ -147,7 +147,9 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                     val member = SyncMembershipEntity.from(DeviceMembership(vaultId, result.peer.deviceId,
                                         if (result.peerPlatform == "windows") "Windows device" else "Android device",
                                         result.peer.publicKeyBase64Url, MemberStatus.ACTIVE, identity.deviceId,
-                                        database.syncDao().membershipEvents(vaultId).size + 1L, 1))
+                                        database.syncDao().membershipEvents(vaultId).size + 1L,
+                                        SyncMembershipManager.verify(database.syncDao().membershipEvents(vaultId)
+                                            .map { it.toEvent() }).keyEpoch))
                                     mutableState.value = PairingUiState("transferring", message = "Sending the encrypted vault copy…")
                                     val admission = SyncChannelOutput(channel).use { output ->
                                         SyncSnapshot(context, database, EncryptedPhotoStore(context))

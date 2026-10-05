@@ -2,6 +2,9 @@ package com.privatevault.app
 
 import com.privatevault.app.sync.removeOnlyPairedDevice
 import com.privatevault.app.sync.leaveSyncGroup
+import com.privatevault.app.sync.leaveRemovedSyncGroup
+import com.privatevault.app.sync.prepareLeaveNotice
+import com.privatevault.app.sync.removeSyncMember
 import com.privatevault.app.sync.offerAuthorityTransfer
 import com.privatevault.app.sync.acceptAuthorityTransfer
 import com.privatevault.app.sync.completeAuthorityTransfer
@@ -144,6 +147,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val authorityTransfer = _authorityTransfer.asStateFlow()
     private val _canHostDevicePairing = MutableStateFlow(false)
     val canHostDevicePairing = _canHostDevicePairing.asStateFlow()
+    /** Set after a verified removal by the managing device; stays until [dismissRemovedNotice]. */
+    private val _removedNotice = MutableStateFlow<com.privatevault.app.sync.SyncRemovalNotice?>(null)
+    val removedNotice = _removedNotice.asStateFlow()
+    /** This device left a group and is still telling the managing device (retried for up to 30 days). */
+    private val _pendingLeave = MutableStateFlow(false)
+    val pendingLeave = _pendingLeave.asStateFlow()
+    /** Items changed by other devices; see [com.privatevault.app.sync.RemoteEntryChanges]. */
+    val remoteEntryChanges = com.privatevault.app.sync.RemoteEntryChanges.changes
+    fun remoteChangeRevision(): Long = com.privatevault.app.sync.RemoteEntryChanges.revision()
+    fun acknowledgeRemoteEntryChange(entryId: String) = com.privatevault.app.sync.RemoteEntryChanges.acknowledge(entryId)
     fun deviceSyncProgress(deviceId: String): String {
         val mirror = lockedSyncStore.snapshot() ?: return "No sync status yet"
         val local = mirror.heads.firstOrNull { it.deviceId == mirror.localDeviceId }?.sequence ?: 0L
@@ -468,6 +481,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Shows a short confirmation or problem report. Never include passwords, codes, keys or card numbers. */
     internal fun notify(text: String, kind: StatusKind = StatusKind.INFO) { _notice.value = UserNotice(text, kind) }
+    /** Same as [notify], with a cheap follow-up such as Undo offered on the snackbar. */
+    internal fun notify(text: String, kind: StatusKind, actionLabel: String, onAction: () -> Unit) {
+        _notice.value = UserNotice(text, kind, actionLabel = actionLabel, onAction = onAction)
+    }
     private val _requestDailyBiometric = MutableStateFlow(false)
     val requestDailyBiometric = _requestDailyBiometric.asStateFlow()
 
@@ -670,11 +687,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
         val retained = _entries.value.flatMap { it.photos }.flatMap { listOf(it.encryptedFileName, it.encryptedThumbnailFileName) }.toSet()
         photoStore.cleanupAbandonedRestore(retained)
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { com.privatevault.app.sync.PhotoOrphanSweeper(db, photoStore).sweep() }
+        }
         touch()
         incomingSyncJob?.cancel()
         incomingSyncJob = viewModelScope.launch {
+            completeRemovalIfNeeded(db)
             while (database === db && _status.value is VaultStatus.Unlocked) {
                 kotlinx.coroutines.delay(5_000)
+                completeRemovalIfNeeded(db)
                 val membershipWaiting = lockedSyncStore.hasPendingMembership(db)
                 if (lockedSyncStore.queuedCount() == 0 && !membershipWaiting) continue
                 val syncKey = sessionKey?.copyOf() ?: break
@@ -714,6 +736,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun lock(reason: LockReason) {
         incomingSyncJob?.cancel()
+        com.privatevault.app.sync.RemoteEntryChanges.clear()
         devicePairing.cancel()
         cancelPasswordImport()
         cancelPasswordDuplicateReview()
@@ -878,12 +901,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
-    fun toggleFavorite(entry: VaultEntry) = securedLaunch("Could not update favorites.") {
+    fun toggleFavorite(entry: VaultEntry): Job = securedLaunch("Could not update favorites.") {
         val current = requireNotNull(dao().entry(entry.id)) { "Entry is missing" }
         val favorite = !current.entry.favorite
         saveLocalEntry(current.entry.copy(favorite = favorite), current.groups.map { it.id }.toSet())
         refresh()
-        notify(if (favorite) "Added to favorites" else "Removed from favorites", StatusKind.SUCCESS)
+        notify(if (favorite) "Added to favorites" else "Removed from favorites", StatusKind.SUCCESS, "Undo") {
+            if (_status.value is VaultStatus.Unlocked) toggleFavorite(current.entry)
+        }
     }
 
     fun duplicateEntry(item: EntryWithDetails) = securedLaunch("Could not create a copy.") {
@@ -1221,6 +1246,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             AuthorityTransferState(it, membership.transferAccepted)
         }
         _canHostDevicePairing.value = canHostPairing
+        _removedNotice.value = lockedSyncStore.removalNotice()
+        _pendingLeave.value = lockedSyncStore.pendingLeave() != null
         _syncConflicts.value = conflicts
         _rejectedSyncChanges.value = lockedSyncStore.rejectedCount()
         if (syncDatabase.syncDao().activeMembershipCount(vaultId) > 1 &&
@@ -1453,18 +1480,86 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 "A sync was still finishing. Review it, then retry removal"
             }
             requireNotNull(database).let {
-                if (deviceId == null) it.leaveSyncGroup(deviceIdentityStore)
-                else it.removeOnlyPairedDevice(deviceIdentityStore, deviceId)
-                lockedSyncStore.clear()
+                if (deviceId == null) {
+                    // Sign the leave request for the old group before leaving it locally.
+                    val mirror = lockedSyncStore.snapshot()
+                    val addresses = mirror?.peerAddresses?.filterKeys { id -> id !in mirror.clientOnlyPeers }
+                        ?.values?.toList().orEmpty()
+                    val vaultId = requireNotNull(it.dao().settings()).vaultId
+                    val notice = it.prepareLeaveNotice(deviceIdentityStore, addresses,
+                        com.privatevault.app.sync.LanSyncService.syncPort(vaultId))
+                    it.leaveSyncGroup(deviceIdentityStore)
+                    lockedSyncStore.clear()
+                    lockedSyncStore.savePendingLeave(notice)
+                }
+                else {
+                    it.removeOnlyPairedDevice(deviceIdentityStore, deviceId)
+                    lockedSyncStore.clear()
+                }
                 lockedSyncStore.publish(it)
             }
         } finally {
             if (!wasPaused) com.privatevault.app.sync.LanSyncService.allowFutureSync(getApplication())
             else com.privatevault.app.sync.LanSyncService.refreshPausedNotification(getApplication())
         }
+        if (deviceId == null && !wasPaused) runCatching { com.privatevault.app.sync.LanSyncService.start(getApplication()) }
         _securitySettings.value = requireNotNull(dao().settings())
         refresh()
-        notify("This device now has a separate sync group and keeps its vault copy. Pair a new empty device when ready; pair the watch again for codes.", StatusKind.SUCCESS)
+        if (deviceId == null) notify("This device left the sync group and keeps its items. The managing device is told when it can be reached.", StatusKind.SUCCESS)
+        else notify("This device now has a separate sync group and keeps its vault copy. Pair a new empty device when ready; pair the watch again for codes.", StatusKind.SUCCESS)
+    }
+
+    /**
+     * The managing device removes [deviceId] with a signed REMOVE. No approval from that device is
+     * needed; it keeps its own copy and learns of the removal the next time it reaches any member.
+     */
+    fun removeSyncDevice(deviceId: String) = securedLaunch("Could not remove that device.") {
+        val db = requireNotNull(database)
+        val key = requireNotNull(sessionKey).copyOf()
+        try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                // Bring in membership events the service received while locked, then sign on top of them.
+                lockedSyncStore.applyQueued(db, key)
+                db.removeSyncMember(deviceIdentityStore, deviceId)
+                lockedSyncStore.publish(db)
+            }
+        } finally { key.fill(0) }
+        refresh()
+        runCatching { com.privatevault.app.sync.LanSyncService.start(getApplication()) }
+        notify("Device removed. It keeps its own copy and will see that it was removed.", StatusKind.SUCCESS)
+    }
+
+    fun dismissRemovedNotice() {
+        lockedSyncStore.dismissRemovalNotice()
+        _removedNotice.value = null
+    }
+
+    /** After a verified removal, leave the old group locally: items stay, sync state is reset. */
+    private var removalLeaveFailedFor: com.privatevault.app.data.VaultDatabase? = null
+    private suspend fun completeRemovalIfNeeded(db: com.privatevault.app.data.VaultDatabase) {
+        val notice = lockedSyncStore.removalNotice() ?: return
+        if (notice.leftLocally || database !== db || _status.value !is VaultStatus.Unlocked ||
+            removalLeaveFailedFor === db) return
+        val vaultId = db.dao().settings()?.vaultId ?: return
+        if (notice.vaultId != vaultId || !lockedSyncStore.verifiedRemovalOf(vaultId)) return
+        val key = sessionKey?.copyOf() ?: return
+        try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                // Apply what already arrived from the old group, then detach. Items are kept.
+                runCatching { lockedSyncStore.applyQueued(db, key) }
+                db.leaveRemovedSyncGroup(deviceIdentityStore)
+                lockedSyncStore.clear()
+                lockedSyncStore.recordRemoval(notice.copy(leftLocally = true))
+                lockedSyncStore.publish(db)
+            }
+            _securitySettings.value = requireNotNull(db.dao().settings())
+            refresh()
+            notify("This device was removed from the sync group. Your items stay on this device.", StatusKind.WARNING)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) {
+            removalLeaveFailedFor = db
+            notify("This device was removed from the sync group. Unlock again to finish leaving.", StatusKind.WARNING)
+        } finally { key.fill(0) }
     }
 
     fun resolveSyncConflict(id: String, useIncoming: Boolean, expectedVersion: String) = securedLaunch {

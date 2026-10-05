@@ -19,6 +19,32 @@ data class SyncConflictSide(val description: String, val device: String, val rep
 data class SyncConflictReview(val id: String, val type: String, val current: SyncConflictSide,
     val incoming: SyncConflictSide, val currentVersion: String)
 
+/**
+ * Version arithmetic shared by conflict detection and resolution. Ordering never uses wall-clock
+ * time, so every device reaches the same relation for the same pair of versions regardless of the
+ * order in which the operations arrived.
+ */
+internal object ConflictVersions {
+    /** How an incoming version relates to this device's record ([local] null when unseen). */
+    fun incomingRelation(incoming: RecordVersion, local: RecordVersion?): VersionRelation =
+        if (local == null) VersionRelation.AFTER else incoming.relationTo(local)
+
+    /** The pointwise maximum of both histories plus one step for the resolving device. */
+    fun resolution(local: RecordVersion, remote: RecordVersion, resolverDeviceId: String): RecordVersion {
+        val counters = (local.counters.keys + remote.counters.keys).associateWith {
+            maxOf(local.counters[it] ?: 0, remote.counters[it] ?: 0)
+        }.toMutableMap()
+        counters[resolverDeviceId] = Math.addExact(counters[resolverDeviceId] ?: 0L, 1L)
+        return RecordVersion(counters)
+    }
+
+    /** A later change settles an open conflict when it includes both reviewed versions. */
+    fun settles(change: RecordVersion, conflictLocal: RecordVersion, conflictRemote: RecordVersion): Boolean =
+        listOf(conflictLocal, conflictRemote).all {
+            change.relationTo(it) in setOf(VersionRelation.AFTER, VersionRelation.EQUAL)
+        }
+}
+
 /** A choice creates a signed operation whose version includes both reviewed histories. */
 internal class SyncConflictResolver(private val database: VaultDatabase, private val identity: AndroidDeviceIdentityStore,
     private val photoBlobs: PhotoSyncBlobs? = null, private val context: Context? = null) {
@@ -62,10 +88,7 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
         val selected = if (useIncoming) operations.first { it.hash == conflict.remoteChangeHash }
             else operations.first { RecordVersion.parse(it.recordVersionJson) == local }
         val device = identity.getOrCreate()
-        val counters = (local.counters.keys + remote.counters.keys).associateWith {
-            maxOf(local.counters[it] ?: 0, remote.counters[it] ?: 0)
-        }.toMutableMap()
-        counters[device.deviceId] = Math.addExact(counters[device.deviceId] ?: 0L, 1L)
+        val resolution = ConflictVersions.resolution(local, remote, device.deviceId)
         val head = dao.deviceHead(selected.vaultId, device.deviceId)
         val mutation = UUID.randomUUID().toString()
         val key = database.syncContentKey(localKey)
@@ -89,9 +112,9 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
         val change = SyncChangeRecord.createSigned(selected.vaultId, device.deviceId,
             Math.addExact(head?.sequence ?: 0L, 1L), head?.hash ?: GENESIS_HASH, mutation,
             selected.entityType, selected.entityId, if (selected.kind == "delete") ChangeKind.DELETE else ChangeKind.UPSERT,
-            state.revision, RecordVersion(counters), Instant.now().toString(), encoder.encodeToString(encrypted),
+            state.revision, resolution, Instant.now().toString(), encoder.encodeToString(encrypted),
             encoder.encodeToString(nonce), identity::sign)
-        check(IncomingEntryChangeApplier(database, photoBlobs, context).apply(SyncOperationEntity(change.mutationId, change.formatVersion,
+        check(IncomingEntryChangeApplier(database, photoBlobs, context, announceRemoteChanges = false).apply(SyncOperationEntity(change.mutationId, change.formatVersion,
             change.vaultId, change.deviceId, change.sequence, change.previousHash, change.entityType, change.entityId,
             change.kind.name.lowercase(), change.baseRevision, change.recordVersion.toJson(), change.occurredAtUtc,
             change.payloadCiphertext, change.payloadNonce, change.deviceSignature, change.hash), localKey) == IncomingResult.APPLIED)

@@ -14,7 +14,8 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 internal data class PhotoBlobRef(val hash: String, val size: Long)
-internal class MissingPhotoBlobException(val hash: String) : Exception("Photo data is still transferring")
+internal class MissingPhotoBlobException(val hash: String, val photoId: String = "", val entryId: String = "") :
+    Exception("Photo data is still transferring")
 internal class PhotoStorageFullException : Exception("Free space is too low to receive this photo")
 
 /** The files here are encrypted with the shared content key, never a phone's local vault key. */

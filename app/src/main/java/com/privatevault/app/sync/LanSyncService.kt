@@ -186,7 +186,8 @@ class LanSyncService : Service() {
         pairedCount = if (localIsActive) (activeMembers - 1).coerceAtLeast(0) else 0
         mutablePeerStatus.update { states -> states.filterKeys { it in activeIds } }
         updateNotification()
-        if (!localIsActive || activeMembers < 2) {
+        val membershipWork = runCatching { store(this).hasMembershipWork() }.getOrDefault(false)
+        if ((!localIsActive || activeMembers < 2) && !membershipWork) {
             setStatus(DeviceSyncPhase.OFF, if (mirror != null && !localIsActive)
                 "This device is no longer in the active sync group."
                 else "Pair a device to start syncing.")
@@ -260,7 +261,11 @@ class LanSyncService : Service() {
                         it.status == MemberStatus.ACTIVE.name && it.deviceId != current.localDeviceId
                     }
                     activePeers.forEach { peer ->
-                        if (mutablePeerStatus.value[peer.deviceId]?.phase !in setOf(
+                        if (peer.deviceId in current.clientOnlyPeers) {
+                            if (mutablePeerStatus.value[peer.deviceId] == null)
+                                setPeerStatus(peer.deviceId, DeviceSyncPhase.WAITING,
+                                    "This PC connects to this phone when it syncs.")
+                        } else if (mutablePeerStatus.value[peer.deviceId]?.phase !in setOf(
                                 DeviceSyncPhase.ATTENTION, DeviceSyncPhase.TRANSFERRING))
                             setPeerStatus(peer.deviceId, DeviceSyncPhase.SEARCHING,
                                 "Looking for this device on Wi-Fi.")
@@ -319,7 +324,10 @@ class LanSyncService : Service() {
                         }
                     }
                     current.peerAddresses.forEach { (deviceId, hint) ->
-                        if (current.members.none { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name } ||
+                        // A Windows PC never listens; dialing it would only hold the exchange lock
+                        // while the PC is trying to reconnect for its next batch.
+                        if (deviceId in current.clientOnlyPeers ||
+                            current.members.none { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name } ||
                             lastAuthenticated[deviceId]?.let {
                                 it >= passStartedAt
                             } == true)
@@ -351,8 +359,10 @@ class LanSyncService : Service() {
                             } finally { connections.remove(socket); socket.close() }
                         }
                     }
+                    deliverPendingLeave(network)
                     activePeers.forEach { peer ->
-                        if ((lastAuthenticated[peer.deviceId] ?: -1L) < passStartedAt &&
+                        if (peer.deviceId !in current.clientOnlyPeers &&
+                            (lastAuthenticated[peer.deviceId] ?: -1L) < passStartedAt &&
                             mutablePeerStatus.value[peer.deviceId]?.phase in setOf(
                                 DeviceSyncPhase.SEARCHING, DeviceSyncPhase.CONNECTING))
                             setPeerStatus(peer.deviceId, DeviceSyncPhase.WAITING,
@@ -361,7 +371,11 @@ class LanSyncService : Service() {
                     val interval = syncInterval(this@LanSyncService)
                     val delayMs = if (needsRetry) retryDelayMs.coerceAtMost(interval) else interval
                     retryDelayMs = if (needsRetry) (retryDelayMs * 2).coerceAtMost(interval) else 5_000L
-                    withTimeoutOrNull(delayMs + kotlin.random.Random.nextLong(5000)) { signals.receive() }
+                    if (withTimeoutOrNull(delayMs + kotlin.random.Random.nextLong(5000)) { signals.receive() } != null) {
+                        // Coalesce a burst of saves (or saves during a running exchange) into one pass.
+                        delay(FOLLOW_UP_DEBOUNCE_MS)
+                        while (signals.tryReceive().isSuccess) Unit
+                    }
                 }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -385,11 +399,16 @@ class LanSyncService : Service() {
     private fun transfer(socket: Socket, server: Boolean): Boolean {
         connections.add(socket)
         var peerId: String? = null
+        val locks = TransferLocks()
         try {
             socket.use {
-                socket.soTimeout = 30_000
+                // Until the peer proves group membership, keep the exchange lock only briefly.
+                socket.soTimeout = PRE_AUTH_TIMEOUT_MS
                 LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()),
-                    store(this), server) { authenticatedId ->
+                    store(this), server) { authenticatedId, platform ->
+                    socket.soTimeout = SESSION_TIMEOUT_MS
+                    locks.acquire()
+                    runCatching { store(this).recordPeerPlatform(authenticatedId, platform) }
                     peerId = authenticatedId
                     lastAuthenticated[authenticatedId] = android.os.SystemClock.elapsedRealtime()
                     if (manualAttempt) manualProgressAt = android.os.SystemClock.elapsedRealtime()
@@ -432,13 +451,93 @@ class LanSyncService : Service() {
             if (manualAttempt) manualProgressAt = android.os.SystemClock.elapsedRealtime()
             setStatus(DeviceSyncPhase.RECEIVED, "More changes remain. Another check will continue the transfer.")
             peerId?.let { setPeerStatus(it, DeviceSyncPhase.RECEIVED, "More changes remain; another check is queued.") }
+            // The connecting side continues; a Windows PC reconnects for its next batch by itself.
+            if (!server) signals.trySend(Unit)
+        } catch (removed: LanSyncExchange.RemovedFromGroup) {
+            recordRemoval(removed.notice)
+            return true
+        } catch (_: LanSyncExchange.MembershipCaughtUp) {
+            setStatus(DeviceSyncPhase.SEARCHING, "The sync group changed. Reconnecting with the new keys.")
             signals.trySend(Unit)
+        } catch (_: LanSyncExchange.MembershipMessageServed) {
+            return true
         } catch (_: Exception) {
             setStatus(DeviceSyncPhase.ATTENTION, "The connection closed before the check finished. Retrying on Wi-Fi.")
             peerId?.let { setPeerStatus(it, DeviceSyncPhase.ATTENTION, "Connection closed before the check finished.") }
         }
-        finally { connections.remove(socket) }
+        finally { connections.remove(socket); locks.release() }
         return false
+    }
+
+    private fun recordRemoval(notice: RemovalNotice.Removed) {
+        val mirror = runCatching { store(this).snapshot() }.getOrNull()
+        val name = mirror?.members?.firstOrNull { it.deviceId == notice.issuerDeviceId }?.displayName
+            ?.takeIf { it.isNotBlank() && it != "Android device" && it != "This device" }.orEmpty()
+        runCatching {
+            store(this).recordRemoval(SyncRemovalNotice(mirror?.vaultId.orEmpty(), notice.issuerDeviceId, name,
+                System.currentTimeMillis()))
+        }
+        mutableRemovalEvents.value = mutableRemovalEvents.value + 1
+        setStatus(DeviceSyncPhase.ATTENTION,
+            "This device was removed from the sync group. Your items stay on this device.")
+        clearConnectedPeers("Removed from the sync group.")
+        stopSelf()
+    }
+
+    /** Retries a signed leave request on discovered devices and saved addresses of the old group. */
+    private suspend fun deliverPendingLeave(network: Network) {
+        val notice = runCatching { store(this).pendingLeave() }.getOrNull() ?: return
+        if (System.currentTimeMillis() - notice.lastAttemptAt < LEAVE_RETRY_MS) return
+        runCatching { store(this).recordLeaveAttempt() }
+        val targets = endpoints.values.map { it.address to it.port } + notice.addresses.mapNotNull { hint ->
+            runCatching { android.net.InetAddresses.parseNumericAddress(hint) }.getOrNull()
+                ?.takeIf { isPrivateAddress(it) && !it.isLinkLocalAddress }?.let { it to notice.port }
+        }
+        for ((address, port) in targets.distinct()) {
+            val reply = exchange.withLock {
+                val socket = Socket()
+                connections.add(socket)
+                try {
+                    network.bindSocket(socket)
+                    socket.connect(InetSocketAddress(address, port), 3000)
+                    socket.soTimeout = PRE_AUTH_TIMEOUT_MS
+                    LanSyncExchange.sendLeave(SyncFrames(socket.getInputStream(), socket.getOutputStream()), notice)
+                } catch (_: Exception) { null }
+                finally { connections.remove(socket); runCatching { socket.close() } }
+            }
+            if (reply == MembershipWire.LEFT) {
+                runCatching { store(this).clearPendingLeave() }
+                mutableRemovalEvents.value = mutableRemovalEvents.value + 1
+                return
+            }
+        }
+    }
+
+    /** A partial wake lock and a high-performance Wi-Fi lock for one authenticated exchange. */
+    private inner class TransferLocks {
+        private var wake: android.os.PowerManager.WakeLock? = null
+        private var wifi: WifiManager.WifiLock? = null
+
+        @Suppress("DEPRECATION")
+        fun acquire() {
+            if (wake != null) return
+            wake = runCatching {
+                getSystemService(android.os.PowerManager::class.java)
+                    .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "nuvori:sync-transfer")
+                    .apply { setReferenceCounted(false); acquire(TRANSFER_LOCK_MS) }
+            }.getOrNull()
+            wifi = runCatching {
+                getSystemService(WifiManager::class.java)
+                    .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "nuvori:sync-transfer")
+                    .apply { setReferenceCounted(false); acquire() }
+            }.getOrNull()
+        }
+
+        fun release() {
+            runCatching { wake?.let { if (it.isHeld) it.release() } }
+            runCatching { wifi?.let { if (it.isHeld) it.release() } }
+            wake = null; wifi = null
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -556,6 +655,14 @@ class LanSyncService : Service() {
 
     companion object {
         internal fun syncPort(vaultId: String): Int = 20_000 + Math.floorMod(vaultId.hashCode(), 30_000)
+        private const val PRE_AUTH_TIMEOUT_MS = 15_000
+        private const val SESSION_TIMEOUT_MS = 30_000
+        private const val FOLLOW_UP_DEBOUNCE_MS = 750L
+        private const val LEAVE_RETRY_MS = 60_000L
+        private const val TRANSFER_LOCK_MS = 15L * 60 * 1000
+        private val mutableRemovalEvents = MutableStateFlow(0)
+        /** Ticks when this device learns it was removed or its leave request is confirmed. */
+        val membershipEvents = mutableRemovalEvents.asStateFlow()
         private const val CHANNEL = "device-sync"
         private const val TYPE = "_nuvori-sync._tcp."
         private const val PAUSE = "com.privatevault.app.PAUSE_SYNC"

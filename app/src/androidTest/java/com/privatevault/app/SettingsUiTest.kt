@@ -35,7 +35,7 @@ class SettingsUiTest {
         compose.onNodeWithText("2 devices").assertExists()
         compose.onNodeWithText("Needs attention").assertExists()
         compose.onNodeWithText("3 saved").assertExists()
-        compose.onNodeWithText("Android devices").performScrollTo().performClick()
+        compose.onNodeWithText("Devices & sync").performScrollTo().performClick()
         compose.runOnIdle { assertEquals("Android devices", opened.value) }
         compose.onNodeWithText("About").performScrollTo().performClick()
         compose.runOnIdle { assertEquals("About", opened.value) }

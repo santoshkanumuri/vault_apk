@@ -44,6 +44,7 @@ class LocalEntryChangeWriter(
             val settings = database.dao().settings() ?: error("Vault settings are missing")
             require(settings.vaultId.isNotBlank()) { "Vault ID is missing" }
             database.requireLocalSyncAuthor(settings.vaultId, identity.deviceId)
+            if (kind == ChangeKind.DELETE) deletePhotosOf(entry.id, alreadyDeleted, vaultKey)
             val syncDao = database.syncDao()
             val head = syncDao.deviceHead(settings.vaultId, identity.deviceId)
             val state = syncDao.recordState(ENTITY_TYPE, savedEntry.id)
@@ -105,6 +106,20 @@ class LocalEntryChangeWriter(
                 ),
             )
         }
+    }
+
+    /**
+     * Signs a delete for each photo of a deleted entry before the entry's own delete, so every device
+     * drops the photos and their transfer data, and a late photo change resolves against a tombstone.
+     */
+    private suspend fun deletePhotosOf(entryId: String, alreadyDeleted: Boolean, vaultKey: ByteArray) {
+        val photoWriter = LocalPhotoChangeWriter(database, identityStore, null, null)
+        if (!alreadyDeleted) database.dao().entry(entryId)?.photos.orEmpty()
+            .sortedBy { it.id }.forEach { photoWriter.delete(it, vaultKey) }
+        else database.syncDao().attachmentsForOwner("entry", entryId).sortedBy { it.attachmentId }.forEach {
+            if (database.dao().photo(it.attachmentId) == null) photoWriter.recordDeleted(it.attachmentId, entryId, vaultKey)
+        }
+        database.syncDao().deleteAttachmentManifestsForOwner("entry", entryId)
     }
 
     private fun encryptPayload(

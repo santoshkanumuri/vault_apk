@@ -798,7 +798,7 @@ class VaultCodesActivity : FragmentActivity() {
             if (icon != null) Image(icon, contentDescription = null, modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)))
             else if (destination.packageName != null) AccountLetterAvatar(destination.name, size = 32.dp)
             else Box(Modifier.size(32.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer), contentAlignment = Alignment.Center) {
-                Icon(Icons.Outlined.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(18.dp))
+                Icon(NuvoriIcons.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(18.dp))
             }
             Column(Modifier.weight(1f)) {
                 Text(destination.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -840,7 +840,7 @@ class VaultCodesActivity : FragmentActivity() {
                 loginFill?.takeIf { it.embeddedWebView }?.let { EmbeddedBrowserWarning(it) }
                 if (fingerprint) FilledTonalButton(onClick = onFingerprint, enabled = !busy,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                    Icon(Icons.Outlined.Fingerprint, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                    Icon(NuvoriIcons.Passkey, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
                     Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                     Text("Use fingerprint")
                 }
@@ -851,7 +851,7 @@ class VaultCodesActivity : FragmentActivity() {
                     keyboardActions = KeyboardActions(onDone = { keyboard?.hide(); onSubmit() }),
                     trailingIcon = {
                         IconButton(onClick = { shown = !shown }) {
-                            Icon(if (shown) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                            Icon(if (shown) NuvoriIcons.EyeOff else NuvoriIcons.Eye,
                                 contentDescription = if (shown) "Hide master password" else "Show master password")
                         }
                     },
@@ -1118,7 +1118,7 @@ class VaultCodesActivity : FragmentActivity() {
 private fun PickerKeyBadge() {
     Box(Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer).clearAndSetSemantics { },
         contentAlignment = Alignment.Center) {
-        Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+        Icon(NuvoriIcons.Password, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
     }
 }
 

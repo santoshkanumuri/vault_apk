@@ -19,29 +19,34 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+/** [blobs] and [photos] are needed only to save a photo; deletions work without them. */
 internal class LocalPhotoChangeWriter(private val database: VaultDatabase,
-    private val identity: AndroidDeviceIdentityStore, private val blobs: PhotoSyncBlobs,
-    private val photos: EncryptedPhotoStore) {
+    private val identity: AndroidDeviceIdentityStore, private val blobs: PhotoSyncBlobs?,
+    private val photos: EncryptedPhotoStore?) {
 
     suspend fun save(photo: VaultPhoto, vaultKey: ByteArray) = write(photo, vaultKey, ChangeKind.UPSERT)
     suspend fun delete(photo: VaultPhoto, vaultKey: ByteArray) = write(photo, vaultKey, ChangeKind.DELETE)
+    /** Signs the delete of a photo whose row is already gone, for example with its entry. */
+    suspend fun recordDeleted(photoId: String, entryId: String, vaultKey: ByteArray) =
+        write(VaultPhoto(photoId, entryId, ""), vaultKey, ChangeKind.DELETE, alreadyDeleted = true)
     suspend fun setCover(photo: VaultPhoto, vaultKey: ByteArray) =
         write(photo.copy(isCover = true), vaultKey, ChangeKind.UPSERT, coverOnly = true)
 
     private suspend fun write(photo: VaultPhoto, vaultKey: ByteArray, kind: ChangeKind,
-        coverOnly: Boolean = false) {
+        coverOnly: Boolean = false, alreadyDeleted: Boolean = false) {
         require(vaultKey.size == 32)
         val device = identity.getOrCreate()
         val settings = requireNotNull(database.dao().settings())
         val vaultId = settings.vaultId
         val ref = if (kind == ChangeKind.UPSERT && !coverOnly) {
+            val blobs = requireNotNull(blobs)
             val known = database.syncDao().attachment(photo.id)
             if (known?.encryptedFileName == photo.encryptedFileName &&
                 blobs.has(PhotoBlobRef(known.ciphertextHash, known.sizeBytes)))
                 PhotoBlobRef(known.ciphertextHash, known.sizeBytes)
             else {
                 val key = database.syncContentKey(vaultKey)
-                try { blobs.create(photos, photo.encryptedFileName, vaultKey, key, vaultId, photo.id) }
+                try { blobs.create(requireNotNull(photos), photo.encryptedFileName, vaultKey, key, vaultId, photo.id) }
                 finally { key.fill(0) }
             }
         } else null
@@ -49,7 +54,9 @@ internal class LocalPhotoChangeWriter(private val database: VaultDatabase,
             database.requireLocalSyncAuthor(vaultId, device.deviceId)
             val dao = database.syncDao()
             val existing = database.dao().photo(photo.id)
-            if (kind == ChangeKind.DELETE) require(existing == photo) { "Photo changed before deletion" }
+            if (kind == ChangeKind.DELETE) require(if (alreadyDeleted) existing == null else existing == photo) {
+                "Photo changed before deletion"
+            }
             else if (coverOnly) require(existing != null && existing.entryId == photo.entryId) { "Photo is missing" }
             else require(existing == null || existing.entryId == photo.entryId) { "Photo owner changed" }
             val savedPhoto = photo.copy(isCover = existing?.isCover ?: photo.isCover)
@@ -88,7 +95,8 @@ internal class LocalPhotoChangeWriter(private val database: VaultDatabase,
                 mutation, entityType, entityId, kind, state?.revision ?: 0L, version,
                 Instant.now().toString(), encoder.encodeToString(encrypted), encoder.encodeToString(nonce), identity::sign)
             if (kind == ChangeKind.DELETE) {
-                database.dao().deletePhoto(photo)
+                if (!alreadyDeleted) database.dao().deletePhoto(photo)
+                dao.deleteAttachmentManifest(photo.id)
                 dao.upsertTombstone(SyncTombstoneEntity(mutation, "photo", photo.id,
                     device.deviceId, change.sequence, version.toJson(), change.occurredAtUtc, change.hash))
             } else if (coverOnly) database.dao().setPhotoCover(requireNotNull(existing).copy(isCover = true))

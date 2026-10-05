@@ -243,6 +243,15 @@ abstract class SyncDao {
     @Query("SELECT * FROM sync_attachment_manifests WHERE attachmentId = :id")
     abstract suspend fun attachment(id: String): SyncAttachmentManifestEntity?
 
+    @Query("SELECT * FROM sync_attachment_manifests WHERE ownerEntityType = :ownerType AND ownerEntityId = :ownerId")
+    abstract suspend fun attachmentsForOwner(ownerType: String, ownerId: String): List<SyncAttachmentManifestEntity>
+
+    @Query("DELETE FROM sync_attachment_manifests WHERE attachmentId = :id")
+    abstract suspend fun deleteAttachmentManifest(id: String)
+
+    @Query("DELETE FROM sync_attachment_manifests WHERE ownerEntityType = :ownerType AND ownerEntityId = :ownerId")
+    abstract suspend fun deleteAttachmentManifestsForOwner(ownerType: String, ownerId: String)
+
     @Query("SELECT COUNT(*) FROM sync_memberships WHERE vaultId = :vaultId AND status = 'ACTIVE'")
     abstract suspend fun activeMembershipCount(vaultId: String): Int
 

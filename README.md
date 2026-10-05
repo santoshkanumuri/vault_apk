@@ -31,7 +31,7 @@ The screenshots contain synthetic demonstration data only.
 
 **[Download Nuvori 2.1.0 phone preview APK](downloads/nuvori-v2.1.0-phone.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.1.0.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.1.0.md) · [2.1.1 notes (build from source)](docs/RELEASE-2.1.1.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 

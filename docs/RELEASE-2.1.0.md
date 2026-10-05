@@ -1,11 +1,6 @@
 # Nuvori 2.1.0 preview
 
-Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wear companion uses version 2.1.0, code 360010; signed watch downloads are now available too.
-
-- [Install the phone APK](../downloads/nuvori-v2.1.0-phone.apk?raw=true)
-- [Download the phone AAB for Google Play](../downloads/nuvori-v2.1.0-phone.aab?raw=true)
-- [R8 mapping for crash reports](../downloads/nuvori-v2.1.0-phone-mapping.zip)
-- [SHA-256 checksums](../downloads/SHA256SUMS.txt)
+Phone version code 51. The Wear companion used version 2.1.0, code 360010. This page records the older release; its binaries and mappings have been removed. See the [current downloads](../README.md#download) and [2.1.1 release notes](RELEASE-2.1.1.md).
 
 ## Autofill
 
@@ -56,7 +51,7 @@ Phone version code 51. The signed phone APK and AAB are in `downloads/`. The Wea
 ## Watch build
 
 - Fixed the Google Play outdated SDK warning for `androidx.fragment:fragment:1.1.0`. Play Services Wearable brought in the old version; the watch now explicitly uses Fragment 1.8.2, matching the phone. The release dependency graph and the rebuilt AAB's dependency metadata both confirm 1.8.2.
-- [Watch APK](../downloads/nuvori-v2.1.0-watch.apk?raw=true), [watch AAB](../downloads/nuvori-v2.1.0-watch.aab?raw=true), and [R8 mapping](../downloads/nuvori-v2.1.0-watch-mapping.zip) were built from the current checkout on October 4, 2026. Package `com.application.private_vault`, version 2.1.0, code 360010. The watch version code was increased from 360009 for the Fragment dependency fix.
+- The watch APK, AAB, and R8 mapping were built on October 4, 2026. Package `com.application.private_vault`, version 2.1.0, code 360010. The watch version code was increased from 360009 for the Fragment dependency fix. These artifacts have been superseded by 2.1.1.
 - The signed, minified watch APK and AAB builds passed. Watch release lint passed with zero errors and 17 warnings. The three shared watch protocol tests passed; the watch module has no JVM unit tests.
 - Both signatures verified and match the phone release certificate. All 84 watch AAB payload entries verified as signed. APK ZIP alignment passed. The watch archives contain no native libraries. JDK `jarsigner` reports the same self-signed certificate, timestamp, and ZIP streaming-order warnings as the phone bundle.
 - The matching R8 mapping is archived and included in the AAB. Checksums cover all retained download files. Watch instrumentation tests and paired-device setup remain pending because no device was connected. See the [watch setup guide](WATCH-COMPANION.md).

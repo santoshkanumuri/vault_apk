@@ -2,6 +2,10 @@
 
 Phone version 2.1.1, code 52. Wear companion version 2.1.1, code 360011. Package `com.application.private_vault`; build both with the existing release key so they update 2.1.0 in place. Build steps are in [PUBLISHING.md](PUBLISHING.md).
 
+- Phone: [APK](../downloads/nuvori-v2.1.1-phone.apk?raw=true), [AAB](../downloads/nuvori-v2.1.1-phone.aab?raw=true), and [R8 mapping](../downloads/nuvori-v2.1.1-phone-mapping.zip).
+- Watch: [APK](../downloads/nuvori-v2.1.1-watch.apk?raw=true), [AAB](../downloads/nuvori-v2.1.1-watch.aab?raw=true), and [R8 mapping](../downloads/nuvori-v2.1.1-watch-mapping.zip).
+- [SHA-256 checksums](../downloads/SHA256SUMS.txt).
+
 ## Home and navigation
 
 - A new home screen puts the important things first: search, then anything that needs attention, then your favorites and recently opened items, live codes, categories, and quick actions.
@@ -69,6 +73,9 @@ Phone version 2.1.1, code 52. Wear companion version 2.1.1, code 360011. Package
 - Built October 5, 2026 from `main` after merging the watch redesign and the phone refresh.
 - 261 phone JVM tests and 8 shared watch tests passed, with no failures or skipped tests. New coverage includes resuming after a dropped connection (3,250 changes; photos resuming from a partial file), Windows-created entries and photos, orphan photo cleanup, conflict convergence in every arrival order, removal notices, signed leave requests, and the shared membership vectors.
 - The instrumentation sources compile. They did not run because no Android device was connected.
-- `:app:lintRelease` and `:wear:lintRelease` passed with no errors. The signed, minified phone and watch release APK and AAB builds passed.
+- `:app:lintRelease` passed with zero errors and 76 warnings; `:wear:lintRelease` passed with zero errors and 20 warnings. The signed, minified phone and watch release APK and AAB builds passed.
 - The release APKs identify `com.application.private_vault` 2.1.1, code 52 (phone) and code 360011 (watch). `apksigner verify` passed, and both signer certificates match the 2.1.0 phone APK (SHA-256 `c88756b1…6db79d9`).
+- Both AAB manifests have the same expected package and versions. All 576 phone and 84 watch AAB payload entries verified as signed with the existing release certificate. Both bundles' dependency metadata identifies Fragment 1.8.2.
+- APK ZIP alignment and the phone's native 16 KB ELF alignment passed. Watch archives contain no native libraries. Archive integrity, mappings embedded in the AABs, mapping ZIPs, and all six retained download checksums were verified.
+- Older packages and mappings were removed. Module build outputs were cleaned, including debug and test packages. A workspace-wide audit finds only the four 2.1.1 APK/AAB downloads. Verification reports remain in `build/release-2.1.1-verification/`.
 - Before publishing, still test on physical devices: pairing and sync with Windows (edits, photos, a dropped connection), removing a device and leaving the group, a managing-role transfer, autofill in Chrome, Brave and native apps, and watch sync.

@@ -28,7 +28,7 @@ For each new Google Play upload, update `versionCode` in `wear/build.gradle.kts`
 
 Watch outputs are `wear/build/outputs/apk/release/wear-release.apk`, `wear/build/outputs/bundle/release/wear-release.aab`, and `wear/build/outputs/mapping/release/mapping.txt`. Verify their versions and signatures, and confirm the signer matches the phone release. Watch setup and device testing are described in the [companion guide](WATCH-COMPANION.md).
 
-Watch code 360010 updates the old Fragment dependency brought in by Play Services Wearable to 1.8.2. Check the resolved release dependency before building future updates:
+The watch keeps Fragment 1.8.2 to override the old dependency brought in by Play Services Wearable. Check the resolved release dependency before building future updates:
 
 ```powershell
 .\gradlew.bat :wear:dependencyInsight --dependency androidx.fragment:fragment --configuration releaseRuntimeClasspath
@@ -51,6 +51,8 @@ Run `:app:connectedDebugAndroidTest` with a test device connected. Check autofil
 Copy the verified outputs to `downloads/nuvori-v2.1.1-phone.apk` and `downloads/nuvori-v2.1.1-phone.aab`. Archive the matching `mapping.txt` as `downloads/nuvori-v2.1.1-phone-mapping.zip` to decode crash reports after build outputs are cleaned. Keep the current phone and watch APKs and AABs in `downloads/` and remove superseded versions.
 
 Keep the watch outputs as `downloads/nuvori-v2.1.1-watch.apk`, `downloads/nuvori-v2.1.1-watch.aab`, and `downloads/nuvori-v2.1.1-watch-mapping.zip`. Each mapping archive must match its own APK and AAB.
+
+The delivered 2.1.1 packages are kept only in `downloads/`. After verification and copying the packages and mappings, `:app:clean :wear:clean :watchcommon:clean` cleared module build outputs, including debug and test packages. Build-output paths above are recreated when you build again. Verification reports are retained in `build/release-2.1.1-verification/`.
 
 Refresh `downloads/SHA256SUMS.txt` to list only release files actually present:
 

@@ -31,15 +31,13 @@ private val accountAvatarPalette = listOf(
 internal fun accountAvatarColor(seed: String): Color =
     accountAvatarPalette[(seed.trim().lowercase().hashCode() and Int.MAX_VALUE) % accountAvatarPalette.size]
 
-/** Decorative: the title is always read from the text next to it. */
+/**
+ * Decorative: the title is always read from the text next to it. Uses the shared tinted letter avatar so an
+ * account looks the same in autofill, the codes picker, the main app and on Windows.
+ */
 @Composable
-internal fun AccountLetterAvatar(title: String, modifier: Modifier = Modifier, size: Dp = 40.dp) {
-    val letter = title.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "•"
-    Box(modifier.size(size).clip(CircleShape).background(accountAvatarColor(title)).clearAndSetSemantics { },
-        contentAlignment = Alignment.Center) {
-        Text(letter, color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-    }
-}
+internal fun AccountLetterAvatar(title: String, modifier: Modifier = Modifier, size: Dp = 40.dp) =
+    NuvoriAvatar(title, modifier, size)
 
 /** The saved login's website without the scheme, or null when it is not a usable HTTPS address. */
 internal fun accountSiteLabel(entry: VaultEntry): String? =

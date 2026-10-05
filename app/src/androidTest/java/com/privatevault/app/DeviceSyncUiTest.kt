@@ -69,7 +69,7 @@ class DeviceSyncUiTest {
         ).use { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).readBytes() }
         compose.onNodeWithText("Connection help").performClick()
         compose.onNodeWithText("Device Wi-Fi IP address").assertExists()
-        compose.onNodeWithText("Remove device").performScrollTo().performClick()
+        compose.onNodeWithText("Remove Living room tablet").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(true, removed.value) }
     }
 

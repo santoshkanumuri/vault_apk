@@ -65,6 +65,13 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRailItemDefaults
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -214,6 +221,12 @@ internal val VaultColors = darkColorScheme(
     onSurface = Color(0xFFF0F4ED),
     onSurfaceVariant = Color(0xFFBEC9BB),
     outline = Color(0xFF879184),
+    outlineVariant = Color(0xFF2A332A),
+    surfaceContainerLowest = Color(0xFF050705),
+    surfaceContainerLow = Color(0xFF0A0D0A),
+    surfaceContainer = Color(0xFF0C100C),
+    surfaceContainerHigh = Color(0xFF131913),
+    surfaceContainerHighest = Color(0xFF192019),
     error = Color(0xFFFFB4AB)
 )
 
@@ -234,6 +247,12 @@ internal val VaultLightColors = lightColorScheme(
     onSurface = Color(0xFF181D17),
     onSurfaceVariant = Color(0xFF424940),
     outline = Color(0xFF727970),
+    outlineVariant = Color(0xFFD3DBD0),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFFFFFFF),
+    surfaceContainer = Color(0xFFFFFFFF),
+    surfaceContainerHigh = Color(0xFFEEF2EB),
+    surfaceContainerHighest = Color(0xFFE7EDE4),
     error = Color(0xFFB3261E)
 )
 
@@ -245,18 +264,30 @@ private fun DeleteButton(onClick: () -> Unit, modifier: Modifier = Modifier, ena
     }
 }
 
-internal enum class VaultTab(val label: String, val glyph: String, val type: EntryType?) {
-    HOME("Home", "H", null),
-    CARDS("Cards", "▣", EntryType.CARD),
-    QUESTIONS("Questions", "?", EntryType.QUESTION),
-    NOTES("Notes", "N", EntryType.NOTE),
-    PASSWORDS("Passwords", "●", EntryType.PASSWORD),
-    AUTHENTICATOR("Codes", "", EntryType.AUTHENTICATOR),
-    MORE("More", "", null),
-    AUTOFILL("Autofill details", "", EntryType.AUTOFILL)
+internal enum class VaultTab(val label: String, val type: EntryType?) {
+    HOME("Home", null),
+    CARDS("Cards", EntryType.CARD),
+    QUESTIONS("Questions", EntryType.QUESTION),
+    NOTES("Notes", EntryType.NOTE),
+    PASSWORDS("Passwords", EntryType.PASSWORD),
+    AUTHENTICATOR("Codes", EntryType.AUTHENTICATOR),
+    MORE("More", null),
+    AUTOFILL("Autofill details", EntryType.AUTOFILL)
 }
 
-private val navigationTabs = listOf(VaultTab.HOME, VaultTab.CARDS, VaultTab.PASSWORDS, VaultTab.AUTHENTICATOR, VaultTab.MORE)
+/** Shared Lucide icon for each destination; the same glyphs as the Windows sidebar. */
+internal val VaultTab.icon: androidx.compose.ui.graphics.vector.ImageVector get() = when (this) {
+    VaultTab.HOME -> NuvoriIcons.Home
+    VaultTab.MORE -> NuvoriIcons.More
+    else -> type!!.icon
+}
+
+/** Destinations reached through More keep More selected in the bottom bar. */
+private val VaultTab.navigationOwner: VaultTab get() = when (this) {
+    VaultTab.QUESTIONS, VaultTab.NOTES, VaultTab.AUTOFILL -> VaultTab.MORE
+    else -> this
+}
+
 
 
 @Composable
@@ -274,23 +305,24 @@ fun PrivateVaultApp(
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     val requestDailyBiometric by viewModel.requestDailyBiometric.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    var noticeKind by remember { mutableStateOf(StatusKind.INFO) }
     var showPrivacy by remember { mutableStateOf(false) }
     var onboardingPage by rememberSaveable { mutableIntStateOf(0) }
     var showSetup by rememberSaveable { mutableStateOf(false) }
     var firstRunChoice by rememberSaveable { mutableStateOf(FirstRunChoice.NEW) }
     LaunchedEffect(notice) {
         notice?.let { shown ->
-            noticeKind = shown.kind
             // Errors stay until dismissed, warnings and long explanations stay longer; confirmations dismiss themselves.
-            val persistent = shown.kind == StatusKind.ERROR || shown.kind == StatusKind.WARNING || shown.text.length > 90
-            snackbar.showSnackbar(shown.text, withDismissAction = persistent, duration = when {
-                shown.kind == StatusKind.ERROR -> SnackbarDuration.Indefinite
-                persistent -> SnackbarDuration.Long
-                else -> SnackbarDuration.Short
-            })
+            val result = snackbar.showSnackbar(shown.visuals())
             viewModel.clearNotice(shown)
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) shown.onAction?.invoke()
         }
+    }
+    // Acknowledge unlocking, unless something more important is already being said.
+    var wasUnlocked by remember { mutableStateOf(status is VaultStatus.Unlocked) }
+    LaunchedEffect(status) {
+        val unlocked = status is VaultStatus.Unlocked
+        if (unlocked && !wasUnlocked && viewModel.notice.value == null) viewModel.notify("Vault unlocked", StatusKind.SUCCESS)
+        wasUnlocked = unlocked
     }
     LaunchedEffect(requestDailyBiometric) {
         if (requestDailyBiometric) onEnableDailyBiometric()
@@ -314,8 +346,9 @@ fun PrivateVaultApp(
                             firstRunChoice, { firstRunChoice = FirstRunChoice.NEW },
                             openSyncSettings, onSyncSettingsOpened)
                 }
-                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()) { data ->
-                    NoticeSnackbar(data, noticeKind)
+                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
+                    .padding(bottom = if (status is VaultStatus.Unlocked) 64.dp else 0.dp)) { data ->
+                    NoticeSnackbar(data)
                 }
                 if (status is VaultStatus.Locked || status is VaultStatus.NeedsSetup && showSetup)
                     TextButton(onClick = { showPrivacy = true }, modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding()) { Text("Privacy policy") }
@@ -436,28 +469,38 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
     val categoryFolders = if (tab == VaultTab.CARDS) emptyList() else groups.filter { it.folderType == tab.type }
     val selectedFolder = categoryFolders.firstOrNull { it.id == selectedFolderId }
     val screenTitle = when (tab) {
-        VaultTab.HOME -> "Nuvori"
-        VaultTab.CARDS -> "Card Wallet"
-        VaultTab.QUESTIONS -> "Security Questions"
+        VaultTab.HOME -> "Home"
+        VaultTab.CARDS -> "Cards"
+        VaultTab.QUESTIONS -> "Security questions"
         VaultTab.PASSWORDS -> "Passwords"
         VaultTab.NOTES -> "Notes"
-        VaultTab.AUTHENTICATOR -> "Authenticator"
+        VaultTab.AUTHENTICATOR -> "Codes"
         VaultTab.MORE -> "More"
         VaultTab.AUTOFILL -> "Autofill details"
     }
-    val shown = entries
-        .filter { item -> tab.type == null || item.entry.type == tab.type }
-        .filter { item -> tab == VaultTab.CARDS || searchQuery.isBlank() || searchableText(item).contains(searchQuery, true) }
-        .let { list -> if (tab == VaultTab.CARDS) list.sortedBy { it.entry.sortOrder } else when (sortBy) {
-            "Name" -> list.sortedBy { it.entry.title.lowercase(Locale.ROOT) }
-            "Oldest" -> list.sortedBy { it.entry.createdAt }
-            else -> list.sortedByDescending { it.entry.updatedAt }
-        } }
+    val shown = remember(entries, tab, searchQuery, sortBy) { entriesForTab(entries, tab, searchQuery, sortBy) }
     val selected = entries.firstOrNull { it.entry.id == selectedId }
     val editorOpen = addType != null || editing != null
+    // Scroll positions live here, one per destination, so switching tabs or opening an item and coming back
+    // returns to the same place. Expanded state inside each tab survives through the saveable state holder.
+    val listStates = rememberTabListStates()
+    val cardScroll = rememberSaveable(saver = androidx.compose.foundation.ScrollState.Saver) { androidx.compose.foundation.ScrollState(0) }
+    val tabStates = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    val scope = rememberCoroutineScope()
+    val reduceMotion = rememberReduceMotion()
+    val slide = slideDistancePx()
+    val homeSync = rememberHomeSync(viewModel)
+    val membershipNotice = rememberMembershipNotice(viewModel)
+    var showScanImport by remember { mutableStateOf(false) }
+    val appContext = LocalContext.current
+    SyncAcknowledgementEffect(viewModel)
+    MembershipNoticesEffect(viewModel)
     val navigate: (() -> Unit) -> Unit = { action ->
         if (editorOpen) pendingNavigation = action else action()
     }
+    val openSettings: (String?) -> Unit = { page -> navigate {
+        settingsPage = page; settingsOpenToken++; showSettings = true
+    } }
     LaunchedEffect(openSyncSettings) {
         if (openSyncSettings) {
             navigate {
@@ -470,8 +513,31 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
     }
     val selectEntry: (String) -> Unit = { id -> navigate { selectedId = id; viewModel.markOpened(id) } }
     val selectTab: (Int) -> Unit = { index -> navigate {
-        tabIndex = index; selectedId = null; selectedFolderId = null; search = ""
+        val target = VaultTab.entries[index]
+        if (target == tab && selectedId == null) {
+            // Tapping the current destination again goes back to its top.
+            when {
+                search.isNotEmpty() -> search = ""
+                selectedFolderId != null -> selectedFolderId = null
+                else -> scope.launch {
+                    listStates.getValue(tab).animateScrollToItem(0)
+                    if (tab == VaultTab.CARDS) cardScroll.animateScrollTo(0)
+                }
+            }
+        } else {
+            tabIndex = index; selectedId = null; selectedFolderId = null; search = ""
+        }
     } }
+    val lockVault: () -> Unit = {
+        viewModel.notify("Vault locked", StatusKind.SUCCESS)
+        viewModel.lock(LockReason.MANUAL)
+    }
+    val syncNow: () -> Unit = {
+        if (homeSync.pairedDevices == 0) {
+            viewModel.notify("Pair a phone or PC to sync.", StatusKind.INFO)
+            openSettings("Android devices")
+        } else { SyncRequests.request(); viewModel.syncDevicesNow() }
+    }
     BackHandler(enabled = !showSettings && !showGroups && !editorOpen &&
         (selectedId != null || search.isNotEmpty() || tab != VaultTab.HOME)) {
         if (selectedId != null) selectedId = null
@@ -496,75 +562,136 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
     }
     // Keep the draft when resizing moves the editor between the pane and the full screen.
     val movableEditor = remember { movableContentOf<@Composable () -> Unit> { content -> content() } }
+    val openCategory: (EntryType) -> Unit = { type -> navigate {
+        tabIndex = VaultTab.entries.first { it.type == type }.ordinal
+        selectedId = null
+        selectedFolderId = null
+    } }
     val homeContent: @Composable (Modifier) -> Unit = { modifier ->
-        if (searchQuery.isBlank()) Dashboard(shown, selectEntry, { type -> navigate {
-            tabIndex = VaultTab.entries.first { it.type == type }.ordinal
-            selectedId = null
-            selectedFolderId = null
-        } }, modifier, passkeys.size, { navigate {
-            settingsPage = "Passkeys"; showSettings = true
-        } }, groups.count { it.folderType == null }, { showGroups = true })
-        else GlobalSearchResults(shown, groups.filter { it.folderType != null &&
-            (it.name.contains(searchQuery, true) || it.notes.contains(searchQuery, true)) }, searchQuery,
-            { folder -> navigate { tabIndex = VaultTab.entries.first { it.type == folder.folderType }.ordinal; selectedFolderId = folder.id; search = "" } },
-            selectEntry, modifier)
-    }
-    val collectionContent: @Composable (Modifier) -> Unit = { modifier ->
-        Box(modifier) {
-            when (tab) {
-                VaultTab.HOME -> homeContent(Modifier.fillMaxSize())
-                VaultTab.MORE -> MoreScreen(groups.count { it.folderType == null }, entries, { showGroups = true },
-                    { selectTab(VaultTab.QUESTIONS.ordinal) }, { selectTab(VaultTab.NOTES.ordinal) },
-                    { selectTab(VaultTab.AUTOFILL.ordinal) }, { showSettings = true })
-                else -> CategoryCollection(tab, shown, categoryFolders, selectedFolder, if (tab == VaultTab.CARDS) "" else searchQuery, sortBy,
-                    { sortBy = it }, { id -> navigate { selectedFolderId = id; selectedId = null } },
-                    { folderToEdit = it; folderName = it?.name.orEmpty(); showFolderEditor = true },
-                    { folderToDelete = it }, selectedId, selectEntry, onCopySecret, onBiometricAction, Modifier.fillMaxSize())
+        AnimatedContent(searchQuery.isBlank(), modifier, label = "home search",
+            transitionSpec = { NuvoriMotion.fadeThrough(this, reduceMotion) }) { browsing ->
+            if (browsing) HomeScreen(entries, selectEntry, openCategory, Modifier.fillMaxSize(),
+                passkeyCount = passkeys.size, openPasskeys = { openSettings("Passkeys") },
+                groupCount = groups.count { it.folderType == null }, openGroups = { showGroups = true },
+                sync = homeSync, membershipNotice = membershipNotice,
+                dismissMembershipNotice = { membershipNotice?.let { dismissMembershipNotice(viewModel, it, appContext) } }, listState = listStates.getValue(VaultTab.HOME),
+                openDevices = { openSettings("Android devices") }, copy = onCopySecret, authenticate = onBiometricAction,
+                onAdd = { navigate { showQuickAdd = true } }, onSyncNow = syncNow, onScanImport = { showScanImport = true })
+            else {
+                val results = remember(entries, searchQuery) { entriesForTab(entries, VaultTab.HOME, searchQuery, "Default") }
+                GlobalSearchResults(results, groups.filter { it.folderType != null &&
+                    (it.name.contains(searchQuery, true) || it.notes.contains(searchQuery, true)) }, searchQuery,
+                    { folder -> navigate { tabIndex = VaultTab.entries.first { it.type == folder.folderType }.ordinal; selectedFolderId = folder.id; search = "" } },
+                    selectEntry, Modifier.fillMaxSize())
             }
         }
     }
+    val tabContent: @Composable (VaultTab) -> Unit = { shownTab ->
+        when (shownTab) {
+            VaultTab.HOME -> homeContent(Modifier.fillMaxSize())
+            VaultTab.MORE -> MoreScreen(groups.count { it.folderType == null }, entries, { showGroups = true },
+                { selectTab(VaultTab.QUESTIONS.ordinal) }, { selectTab(VaultTab.NOTES.ordinal) },
+                { selectTab(VaultTab.AUTOFILL.ordinal) }, { openSettings(null) },
+                devices = { openSettings("Android devices") }, passkeys = { openSettings("Passkeys") },
+                help = { openSettings("Help") }, lock = lockVault, passkeyCount = passkeys.size,
+                listState = listStates.getValue(VaultTab.MORE))
+            else -> {
+                // Each tab computes its own list so an outgoing tab never shows the incoming tab's items.
+                val tabEntries = if (shownTab == tab) shown
+                    else remember(entries, shownTab) { entriesForTab(entries, shownTab, "", sortBy) }
+                val tabFolders = if (shownTab == VaultTab.CARDS) emptyList() else groups.filter { it.folderType == shownTab.type }
+                val tabFolder = if (shownTab == tab) selectedFolder else null
+                CategoryCollection(shownTab, tabEntries, tabFolders, tabFolder,
+                    if (shownTab == VaultTab.CARDS || shownTab != tab) "" else searchQuery, sortBy,
+                    { sortBy = it }, { id -> navigate { selectedFolderId = id; selectedId = null } },
+                    { folderToEdit = it; folderName = it?.name.orEmpty(); showFolderEditor = true },
+                    { folderToDelete = it }, selectedId, selectEntry, onCopySecret, onBiometricAction, Modifier.fillMaxSize(),
+                    listState = listStates.getValue(shownTab), cardScroll = cardScroll,
+                    onAdd = { navigate { addType = shownTab.type } })
+            }
+        }
+    }
+    val collectionContent: @Composable (Modifier) -> Unit = { modifier ->
+        AnimatedContent(tab, modifier, label = "destination",
+            transitionSpec = { NuvoriMotion.fadeThrough(this, reduceMotion) }) { shownTab ->
+            tabStates.SaveableStateProvider(shownTab.name) {
+                Box(Modifier.fillMaxSize()) { tabContent(shownTab) }
+            }
+        }
+    }
+    var lastSelected by remember { mutableStateOf<EntryWithDetails?>(null) }
+    if (selected != null) lastSelected = selected
+    var backProgress by remember { mutableFloatStateOf(0f) }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 840.dp
-        if (wide || !editorOpen) Scaffold(
+        val covered = !wide && (editorOpen || selected != null)
+        Scaffold(
+            modifier = if (covered) Modifier.clearAndSetSemantics { } else Modifier,
             containerColor = MaterialTheme.colorScheme.background,
-            bottomBar = { if (!wide) VaultNavigation(tabIndex, selectTab) }
+            bottomBar = { if (!wide) NuvoriBottomBar(tab, selectTab) }
         ) { padding ->
             Row(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
-                if (wide) VaultRail(tabIndex, selectTab) { page -> navigate {
-                    settingsPage = page; showSettings = true
-                } }
+                if (wide) VaultRail(tabIndex, selectTab, openSettings, lockVault)
                 Column(Modifier.weight(1f).fillMaxHeight()) {
-                    VaultToolbar(
-                        if (wide && tab == VaultTab.HOME) "Home" else screenTitle, search, { search = it },
+                    if (tab == VaultTab.HOME) HomeHeader(entries.size, search, { search = it }, lockVault)
+                    else VaultToolbar(
+                        screenTitle, search, { search = it },
                         showSearch = tab != VaultTab.MORE && tab != VaultTab.CARDS,
-                        addDescription = if (tab == VaultTab.HOME) "Quick add" else "Add ${tab.type?.label() ?: "entry"}",
-                        onAdd = { navigate { if (tab.type == null) showQuickAdd = true else addType = tab.type!! } }
+                        addDescription = "Add ${tab.type?.label() ?: "entry"}",
+                        onAdd = if (tab.type == null) null else {{ navigate { addType = tab.type!! } }},
+                        onLock = lockVault
                     )
                     if (wide && (tab != VaultTab.MORE || editorOpen)) {
                         Row(Modifier.fillMaxSize()) {
                             collectionContent(Modifier.weight(.9f).fillMaxHeight().testTag("entryListPane"))
-                            VerticalDivider(Modifier.fillMaxHeight().width(1.dp))
+                            VerticalDivider(Modifier.fillMaxHeight().width(1.dp), color = MaterialTheme.colorScheme.hairline)
                             Box(Modifier.weight(1.1f).fillMaxHeight().testTag("entryDetailPane")) {
                                 if (editorOpen) movableEditor(editorContent)
-                                else if (selected != null) EntryDetail(selected, viewModel, onCopySecret, onBiometricAction,
-                                    { editing = selected.entry }, { selectedId = null }, Modifier.fillMaxSize(), widePane = true)
-                                else EmptyDetail(Modifier.fillMaxSize())
+                                else AnimatedContent(selected?.entry?.id, Modifier.fillMaxSize(), label = "wide detail",
+                                    transitionSpec = { NuvoriMotion.sharedAxis(this, true, slide, reduceMotion) }) { id ->
+                                    val item = entries.firstOrNull { it.entry.id == id }
+                                    if (item != null) EntryDetail(item, viewModel, onCopySecret, onBiometricAction,
+                                        { editing = item.entry }, { selectedId = null }, Modifier.fillMaxSize(), widePane = true)
+                                    else EmptyDetail(Modifier.fillMaxSize())
+                                }
                             }
                         }
                     } else collectionContent(Modifier.fillMaxSize())
                 }
             }
         }
-        if (!wide && selected != null && !editorOpen) {
-            BackHandler { selectedId = null }
-            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        // Item details slide in over the list; the list underneath keeps its scroll position.
+        androidx.compose.animation.AnimatedVisibility(!wide && selected != null && !editorOpen,
+            enter = NuvoriMotion.enter(true, slide, reduceMotion), exit = NuvoriMotion.exit(false, slide, reduceMotion)) {
+            androidx.activity.compose.PredictiveBackHandler(enabled = !wide && selected != null && !editorOpen) { progress ->
+                try {
+                    progress.collect { backProgress = it.progress }
+                    selectedId = null
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    backProgress = 0f
+                    throw cancelled
+                }
+            }
+            LaunchedEffect(Unit) { backProgress = 0f }
+            Surface(Modifier.fillMaxSize().graphicsLayer {
+                val p = backProgress
+                translationX = p * 48.dp.toPx()
+                scaleX = 1f - p * .06f; scaleY = 1f - p * .06f
+                if (p > 0f) { clip = true; shape = RoundedCornerShape(16.dp * p) }
+            }, color = MaterialTheme.colorScheme.background) {
                 Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-                    EntryDetail(selected, viewModel, onCopySecret, onBiometricAction, { editing = selected.entry }, { selectedId = null }, Modifier.fillMaxSize())
+                    lastSelected?.let { item ->
+                        val current = entries.firstOrNull { it.entry.id == item.entry.id } ?: item
+                        EntryDetail(current, viewModel, onCopySecret, onBiometricAction, { editing = current.entry }, { selectedId = null }, Modifier.fillMaxSize())
+                    }
                 }
             }
         }
-        if (!wide && editorOpen) movableEditor(editorContent)
+        androidx.compose.animation.AnimatedVisibility(!wide && editorOpen,
+            enter = NuvoriMotion.enter(true, slide, reduceMotion), exit = NuvoriMotion.exit(false, slide, reduceMotion)) {
+            movableEditor(editorContent)
+        }
     }
     pendingNavigation?.let { action ->
         AlertDialog(onDismissRequest = { pendingNavigation = null },
@@ -575,21 +702,32 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
             }) { Text("Discard") } },
             dismissButton = { TextButton(onClick = { pendingNavigation = null }) { Text("Keep editing") } })
     }
-    if (showGroups) GroupManager(
-        groups = groups.filter { it.folderType == null },
-        entries = entries,
-        viewModel = viewModel,
-        copy = onCopySecret,
-        authenticate = onBiometricAction,
-        openEntry = { id -> showGroups = false; selectEntry(id) },
-        close = { showGroups = false }
-    )
-    if (showSettings) key(settingsOpenToken) {
-        SettingsDialog(viewModel, initialImportChoice,
-            copyPairingLink = { value -> onCopySecret("Pairing link", value) }, initialPage = settingsPage) {
-            showSettings = false; initialImportChoice = null; settingsPage = null
+    androidx.compose.animation.AnimatedVisibility(showGroups,
+        enter = NuvoriMotion.enter(true, slide, reduceMotion), exit = NuvoriMotion.exit(false, slide, reduceMotion)) {
+        GroupManager(
+            groups = groups.filter { it.folderType == null },
+            entries = entries,
+            viewModel = viewModel,
+            copy = onCopySecret,
+            authenticate = onBiometricAction,
+            openEntry = { id -> showGroups = false; selectEntry(id) },
+            close = { showGroups = false }
+        )
+    }
+    androidx.compose.animation.AnimatedVisibility(showSettings,
+        enter = NuvoriMotion.enter(true, slide, reduceMotion), exit = NuvoriMotion.exit(false, slide, reduceMotion)) {
+        key(settingsOpenToken) {
+            SettingsDialog(viewModel, initialImportChoice,
+                copyPairingLink = { value -> onCopySecret("Pairing link", value) }, initialPage = settingsPage) {
+                showSettings = false; initialImportChoice = null; settingsPage = null
+            }
         }
     }
+    if (showScanImport) ScanImportSheet(onDismiss = { showScanImport = false },
+        scanCode = { showScanImport = false; navigate { addType = EntryType.AUTHENTICATOR } },
+        importCodes = { showScanImport = false; openSettings("Import authenticator codes") },
+        importPasswords = { showScanImport = false; openSettings("Backup and import") },
+        restoreBackup = { showScanImport = false; openSettings("Backup and import") })
     if (showFolderEditor && tab.type != null && tab.type != EntryType.CARD) AlertDialog(properties = wideDialogProperties,
         onDismissRequest = { showFolderEditor = false },
         title = { Text(if (folderToEdit == null) "New folder" else "Rename folder") },
@@ -728,117 +866,49 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
             confirmButton = { Button(onClick = viewModel::confirmRestore) { Text("Replace vault") } },
             dismissButton = { TextButton(onClick = viewModel::cancelRestore) { Text("Cancel") } })
     }
-    if (showQuickAdd) AlertDialog(
-        modifier = wideDialogModifier,
-        properties = wideDialogProperties,
-        onDismissRequest = { showQuickAdd = false },
-        title = { Text("Quick add") },
-        text = {
-            LazyColumn(Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(EntryType.entries) { type ->
-                    FilledTonalButton(
-                        onClick = { addType = type; showQuickAdd = false },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                    ) { Text("Add ${type.label()}") }
-                }
-            }
-        },
-        confirmButton = {}
-    )
+    if (showQuickAdd) AddTypeSheet(onDismiss = { showQuickAdd = false }) { type ->
+        showQuickAdd = false
+        navigate { addType = type }
+    }
 }
+
+/** Items for one destination: filtered by type and search, sorted as chosen. Cards keep their wallet order. */
+internal fun entriesForTab(entries: List<EntryWithDetails>, tab: VaultTab, searchQuery: String, sortBy: String): List<EntryWithDetails> =
+    entries
+        .filter { item -> tab.type == null || item.entry.type == tab.type }
+        .filter { item -> tab == VaultTab.CARDS || searchQuery.isBlank() || searchableText(item).contains(searchQuery, true) }
+        .let { list -> if (tab == VaultTab.CARDS) list.sortedBy { it.entry.sortOrder } else when (sortBy) {
+            "Name" -> list.sortedBy { it.entry.title.lowercase(Locale.ROOT) }
+            "Oldest" -> list.sortedBy { it.entry.createdAt }
+            else -> list.sortedByDescending { it.entry.updatedAt }
+        } }
+
+/** One saved scroll position per destination. Called in a fixed order, so it is safe to use in composition. */
+@Composable
+private fun rememberTabListStates(): Map<VaultTab, androidx.compose.foundation.lazy.LazyListState> =
+    VaultTab.entries.associateWith { tab ->
+        key(tab) { rememberSaveable(saver = androidx.compose.foundation.lazy.LazyListState.Saver) { androidx.compose.foundation.lazy.LazyListState() } }
+    }
 
 @Composable
 private fun VaultToolbar(title: String, search: String, onSearch: (String) -> Unit, showSearch: Boolean,
-    addDescription: String, onAdd: () -> Unit) {
-    val keyboard = LocalSoftwareKeyboardController.current
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    addDescription: String, onAdd: (() -> Unit)?, onLock: () -> Unit) {
+    Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(title, Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            IconButton(onClick = onAdd, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Add, addDescription) }
-        }
-        if (showSearch) OutlinedTextField(
-            search,
-            onSearch,
-            label = { Text(if (title == "Nuvori" || title == "Home") "Search vault" else "Search ${title.lowercase(Locale.ROOT)}") },
-            leadingIcon = { Icon(Icons.Outlined.Search, null) },
-            trailingIcon = if (search.isNotEmpty()) {{
-                IconButton(onClick = { onSearch("") }, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Outlined.Close, contentDescription = "Clear search")
-                }
-            }} else null,
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
-        )
-    }
-}
-
-@Composable
-internal fun Dashboard(entries: List<EntryWithDetails>, select: (String) -> Unit,
-    openCategory: (EntryType) -> Unit, modifier: Modifier, passkeyCount: Int = 0,
-    openPasskeys: () -> Unit = {}, groupCount: Int = 0, openGroups: () -> Unit = {}) {
-    val cards = entries.filter { it.entry.type == EntryType.CARD }
-    val passwords = entries.count { it.entry.type == EntryType.PASSWORD }
-    val codes = entries.count { it.entry.type == EntryType.AUTHENTICATOR }
-    val questions = entries.count { it.entry.type == EntryType.QUESTION }
-    val notes = entries.count { it.entry.type == EntryType.NOTE }
-    val autofill = entries.count { it.entry.type == EntryType.AUTOFILL }
-    val favorites = entries.filter { it.entry.favorite }.sortedByDescending { it.entry.updatedAt }.take(5)
-    val expiring = cards.filter { expiryState(it.entry.tertiaryValue) != ExpiryState.OK }.sortedBy { expirySortKey(it.entry.tertiaryValue) }
-    val recent = entries.filter { it.entry.lastOpenedAt > 0 }.sortedByDescending { it.entry.lastOpenedAt }.take(5)
-    LazyColumn(modifier, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item { VaultSummary(listOf(
-            SummaryItem("Cards", cards.size, EntryType.CARD, Color(0xFF5BC760)),
-            SummaryItem("Passwords", passwords, EntryType.PASSWORD, Color(0xFF7DB7FF)),
-            SummaryItem("Codes", codes, EntryType.AUTHENTICATOR, Color(0xFF83CBD6)),
-            SummaryItem("Passkeys", passkeyCount, null, Color(0xFF72D0BC)),
-            SummaryItem("Questions", questions, EntryType.QUESTION, Color(0xFFF2C778)),
-            SummaryItem("Notes", notes, EntryType.NOTE, Color(0xFFC8B2F2)),
-            SummaryItem("Autofill", autofill, EntryType.AUTOFILL, Color(0xFFEE9BC8)),
-            SummaryItem("Groups", groupCount, null, Color(0xFF9CAFE8), isGroup = true)
-        ), openCategory, openPasskeys, openGroups) }
-        if (favorites.isNotEmpty()) item { DashboardSection("Favorites", favorites, select) }
-        if (expiring.isNotEmpty()) item { DashboardSection("Needs attention", expiring, select, showExpiry = true) }
-        if (recent.isNotEmpty()) item { DashboardSection("Recently opened", recent, select) }
-        if (favorites.isEmpty() && recent.isEmpty()) item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Your dashboard is ready", fontWeight = FontWeight.SemiBold)
-                    Text("Open entries or mark favorites and they will appear here.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .7f))
-                }
+                fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (onAdd != null) FilledTonalButton(onClick = onAdd, shape = NuvoriShapes.Control,
+                contentPadding = PaddingValues(start = 12.dp, end = 16.dp),
+                modifier = Modifier.heightIn(min = 40.dp).semantics { contentDescription = addDescription }) {
+                Icon(NuvoriIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Add")
+            }
+            IconButton(onClick = onLock, modifier = Modifier.size(48.dp)) {
+                Icon(NuvoriIcons.Lock, contentDescription = "Lock vault", modifier = Modifier.size(22.dp))
             }
         }
-    }
-}
-
-private data class SummaryItem(val label: String, val count: Int, val type: EntryType?, val accent: Color,
-    val isGroup: Boolean = false)
-
-@Composable
-private fun VaultSummary(items: List<SummaryItem>, openCategory: (EntryType) -> Unit,
-    openPasskeys: () -> Unit, openGroups: () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val columns = when {
-                maxWidth >= 700.dp -> items.size
-                maxWidth >= 280.dp -> 4
-                else -> 2
-            }
-            Column {
-                items.chunked(columns).forEach { row ->
-                    Row(Modifier.fillMaxWidth()) {
-                        if (row.size < columns) Spacer(Modifier.weight((columns - row.size) / 2f))
-                        row.forEach { item ->
-                            SummaryCell(item, openCategory, openPasskeys, openGroups, Modifier.weight(1f))
-                        }
-                        if (row.size < columns) Spacer(Modifier.weight((columns - row.size) / 2f))
-                    }
-                }
-            }
-        }
+        if (showSearch) NuvoriSearchField(search, onSearch, "Search ${title.lowercase(Locale.ROOT)}", Modifier.padding(end = 8.dp))
     }
 }
 
@@ -854,7 +924,7 @@ private fun PasswordColumnPicker(
     Box(Modifier.fillMaxWidth()) {
         OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
             Text("$label: ${selected ?: "Do not import"}", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Icon(Icons.Outlined.ExpandMore, contentDescription = null)
+            Icon(NuvoriIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(18.dp))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (!required) DropdownMenuItem(text = { Text("Do not import") }, onClick = { onSelected(null); expanded = false })
@@ -873,120 +943,66 @@ private fun PasswordColumnPicker(
     }
 }
 
-@Composable
-private fun SummaryCell(item: SummaryItem, openCategory: (EntryType) -> Unit,
-    openPasskeys: () -> Unit, openGroups: () -> Unit, modifier: Modifier) {
-    Column(
-        modifier
-            .heightIn(min = 64.dp)
-            .clickable(role = Role.Button) {
-                when {
-                    item.isGroup -> openGroups()
-                    item.type != null -> openCategory(item.type)
-                    else -> openPasskeys()
-                }
-            }
-            .semantics { contentDescription = "${item.label}, ${item.count}" }
-            .padding(horizontal = 6.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Box(Modifier.size(24.dp).clip(RoundedCornerShape(7.dp))
-                .background(item.accent.copy(alpha = .15f)), contentAlignment = Alignment.Center) {
-                Icon(when (item.type) {
-                    EntryType.CARD -> Icons.Outlined.CreditCard
-                    EntryType.PASSWORD, null -> if (item.isGroup) Icons.Outlined.Folder else Icons.Outlined.Key
-                    EntryType.QUESTION -> Icons.Outlined.QuestionAnswer
-                    EntryType.NOTE -> Icons.AutoMirrored.Outlined.Notes
-                    EntryType.AUTHENTICATOR -> Icons.Outlined.Timer
-                    EntryType.AUTOFILL -> Icons.Outlined.ContactPage
-                }, contentDescription = null, tint = item.accent, modifier = Modifier.size(16.dp))
-            }
-            Text(item.count.toString(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        }
-        Text(item.label, style = MaterialTheme.typography.labelSmall, maxLines = 2,
-            textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
-    }
-}
+private val navigationTabs = listOf(VaultTab.HOME, VaultTab.CARDS, VaultTab.PASSWORDS, VaultTab.AUTHENTICATOR, VaultTab.MORE)
 
+/** Home · Cards · Passwords · Codes · More, the same order, labels and glyphs as the Windows narrow layout. */
 @Composable
-private fun DashboardSection(title: String, entries: List<EntryWithDetails>, select: (String) -> Unit, showExpiry: Boolean = false) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column {
-                entries.forEachIndexed { index, item ->
-                    if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = .18f))
-                    CompactEntryRow(item, includeType = true, showPreview = false,
-                        trailing = if (showExpiry) expiryState(item.entry.tertiaryValue).label else null,
-                        containerColor = Color.Transparent) { select(item.entry.id) }
-                }
+private fun NuvoriBottomBar(current: VaultTab, onSelect: (Int) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Column {
+        HorizontalDivider(color = scheme.hairline)
+        NavigationBar(containerColor = scheme.background, tonalElevation = 0.dp) {
+            navigationTabs.forEach { tab ->
+                val selected = current.navigationOwner == tab
+                NavigationBarItem(selected, { onSelect(tab.ordinal) },
+                    icon = { Icon(tab.icon, contentDescription = null, modifier = Modifier.size(22.dp)) },
+                    label = { Text(tab.label, maxLines = 1, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) },
+                    colors = NavigationBarItemDefaults.colors(
+                        indicatorColor = scheme.primaryContainer,
+                        selectedIconColor = scheme.onPrimaryContainer,
+                        selectedTextColor = scheme.onSurface,
+                        unselectedIconColor = scheme.onSurfaceVariant,
+                        unselectedTextColor = scheme.onSurfaceVariant))
             }
         }
     }
 }
 
 @Composable
-private fun VaultNavigation(selected: Int, onSelect: (Int) -> Unit) {
-    NavigationBar(containerColor = MaterialTheme.colorScheme.background) {
-        navigationTabs.forEach { tab ->
-            val index = if (tab == VaultTab.MORE && VaultTab.entries[selected] in listOf(VaultTab.QUESTIONS, VaultTab.NOTES)) selected else tab.ordinal
-            NavigationBarItem(selected == index, { onSelect(tab.ordinal) }, icon = { VaultTabIcon(tab) },
-                label = { Text(if (tab == VaultTab.PASSWORDS) "Logins" else tab.label, maxLines = 1) })
-        }
-    }
-}
-
-@Composable
-private fun VaultRail(selected: Int, onSelect: (Int) -> Unit, openSettings: (String?) -> Unit) {
+private fun VaultRail(selected: Int, onSelect: (Int) -> Unit, openSettings: (String?) -> Unit, lock: () -> Unit) {
     Column(Modifier.width(120.dp).fillMaxHeight().safeDrawingPadding()
         .verticalScroll(rememberScrollState()).padding(horizontal = 8.dp).testTag("vaultSidebar"),
         verticalArrangement = Arrangement.spacedBy(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         IconButton(onClick = { onSelect(VaultTab.HOME.ordinal) }, modifier = Modifier.size(56.dp)) {
             NuvoriLogo(Modifier.size(40.dp))
         }
-        listOf(VaultTab.HOME, VaultTab.PASSWORDS, VaultTab.CARDS, VaultTab.AUTHENTICATOR,
-            VaultTab.NOTES, VaultTab.QUESTIONS).forEach { tab ->
+        listOf(VaultTab.HOME, VaultTab.CARDS, VaultTab.PASSWORDS, VaultTab.AUTHENTICATOR,
+            VaultTab.NOTES, VaultTab.QUESTIONS, VaultTab.AUTOFILL).forEach { tab ->
             VaultRailDestination(selected = selected == tab.ordinal, onClick = { onSelect(tab.ordinal) },
-                icon = { VaultTabIcon(tab) },
-                label = if (tab == VaultTab.QUESTIONS) "Security questions" else tab.label)
+                icon = tab.icon,
+                label = when (tab) { VaultTab.QUESTIONS -> "Security questions"; VaultTab.AUTOFILL -> "Autofill details"; else -> tab.label })
         }
-        VaultRailDestination(selected = false, onClick = { openSettings("Passkeys") },
-            icon = { Icon(Icons.Outlined.Key, null) }, label = "Passkeys")
-        VaultRailDestination(selected = selected == VaultTab.AUTOFILL.ordinal,
-            onClick = { onSelect(VaultTab.AUTOFILL.ordinal) },
-            icon = { Icon(Icons.Outlined.ContactPage, null) }, label = "Autofill details")
+        VaultRailDestination(selected = false, onClick = { openSettings("Passkeys") }, icon = NuvoriIcons.Passkey, label = "Passkeys")
         VaultRailDestination(selected = selected == VaultTab.MORE.ordinal, onClick = { onSelect(VaultTab.MORE.ordinal) },
-            icon = { VaultTabIcon(VaultTab.MORE) }, label = "More")
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            icon = NuvoriIcons.More, label = "More")
+        HorizontalDivider(Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.hairline)
         VaultRailDestination(selected = false, onClick = { openSettings("Android devices") },
-            icon = { Icon(Icons.Outlined.Sync, null) }, label = "Android devices")
-        VaultRailDestination(selected = false, onClick = { openSettings(null) },
-            icon = { Icon(Icons.Outlined.Settings, null) }, label = "Settings")
+            icon = NuvoriIcons.Devices, label = "Devices & sync")
+        VaultRailDestination(selected = false, onClick = { openSettings(null) }, icon = NuvoriIcons.Settings, label = "Settings")
+        VaultRailDestination(selected = false, onClick = lock, icon = NuvoriIcons.Lock, label = "Lock vault")
     }
 }
 
 @Composable
-private fun VaultRailDestination(selected: Boolean, onClick: () -> Unit, label: String, icon: @Composable () -> Unit) {
-    NavigationRailItem(selected = selected, onClick = onClick, icon = icon, modifier = Modifier.fillMaxWidth(),
+private fun VaultRailDestination(selected: Boolean, onClick: () -> Unit, label: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    val scheme = MaterialTheme.colorScheme
+    NavigationRailItem(selected = selected, onClick = onClick,
+        icon = { Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp)) }, modifier = Modifier.fillMaxWidth(),
+        colors = NavigationRailItemDefaults.colors(indicatorColor = scheme.primaryContainer,
+            selectedIconColor = scheme.onPrimaryContainer, selectedTextColor = scheme.onSurface,
+            unselectedIconColor = scheme.onSurfaceVariant, unselectedTextColor = scheme.onSurfaceVariant),
         label = { Text(label, fontSize = 12.sp, lineHeight = 14.sp, maxLines = 2,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center, overflow = TextOverflow.Ellipsis) })
-}
-
-@Composable
-private fun VaultTabIcon(tab: VaultTab) {
-    val icon = when (tab) {
-        VaultTab.HOME -> Icons.Outlined.Home
-        VaultTab.CARDS -> Icons.Outlined.CreditCard
-        VaultTab.QUESTIONS -> Icons.Outlined.QuestionAnswer
-        VaultTab.PASSWORDS -> Icons.Outlined.Key
-        VaultTab.NOTES -> Icons.AutoMirrored.Outlined.Notes
-        VaultTab.AUTHENTICATOR -> Icons.Outlined.Timer
-        VaultTab.MORE -> Icons.Outlined.MoreHoriz
-        VaultTab.AUTOFILL -> Icons.Outlined.ContactPage
-    }
-    Icon(icon, contentDescription = null)
+            textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis) })
 }
 
 @Composable
@@ -997,67 +1013,105 @@ private fun EntryCollection(
     select: (String) -> Unit,
     copy: (String, String) -> Unit,
     authenticate: (() -> Unit) -> Unit,
-    modifier: Modifier
+    modifier: Modifier,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    cardScroll: androidx.compose.foundation.ScrollState,
 ) {
-    if (entries.isEmpty()) {
-        Box(modifier.padding(24.dp), contentAlignment = Alignment.Center) {
-            Text("No ${tab.label.lowercase()} yet. Tap Add to create one.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .65f))
-        }
-    } else if (tab.type == EntryType.CARD) {
-        CardStack(entries, select, copy, authenticate, modifier)
-    } else {
-        LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    if (tab.type == EntryType.CARD) {
+        CardStack(entries, select, copy, authenticate, modifier, cardScroll)
+    } else if (tab.type == EntryType.AUTHENTICATOR) {
+        LazyColumn(modifier, state = listState, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(entries, key = { it.entry.id }) { item ->
-                if (item.entry.type == EntryType.AUTHENTICATOR) TotpTile(item.entry, copy, { select(item.entry.id) })
-                else EntryRow(item, item.entry.id == selectedId) { select(item.entry.id) }
+                Box(Modifier.animateItemPlacement()) { TotpTile(item.entry, copy, { select(item.entry.id) }) }
+            }
+        }
+    } else {
+        LazyColumn(modifier, state = listState, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp)) {
+            item(key = "count") {
+                Text("${entries.size} ${if (entries.size == 1) tab.type?.itemLabel?.lowercase(Locale.ROOT) ?: "item" else tab.label.lowercase(Locale.ROOT)}",
+                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 2.dp, bottom = 8.dp))
+            }
+            itemsIndexed(entries, key = { _, item -> item.entry.id }) { index, item ->
+                EntryRowWithActions(item, index, entries.size, item.entry.id == selectedId, false, copy, authenticate,
+                    Modifier.animateItemPlacement()) { select(item.entry.id) }
             }
         }
     }
 }
 
+/** A list row whose long-press offers the same copy shortcuts as Home. */
 @Composable
-private fun CardStack(cards: List<EntryWithDetails>, select: (String) -> Unit, copy: (String, String) -> Unit, authenticate: (() -> Unit) -> Unit, modifier: Modifier) {
+private fun EntryRowWithActions(item: EntryWithDetails, index: Int, count: Int, selected: Boolean, includeType: Boolean,
+    copy: (String, String) -> Unit, authenticate: (() -> Unit) -> Unit, modifier: Modifier = Modifier, open: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    val actions = remember(item.entry) { copyActions(item.entry, copy, authenticate) }
+    Box(modifier) {
+        EntryListRow(item, index, count, open, selected = selected, includeType = includeType,
+            onLongClick = if (actions.isEmpty()) null else {{ menu = true }})
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            actions.forEach { (label, action) ->
+                DropdownMenuItem(text = { Text(label) }, onClick = { menu = false; action() },
+                    leadingIcon = { Icon(NuvoriIcons.Copy, null, Modifier.size(18.dp)) })
+            }
+        }
+    }
+}
+
+/**
+ * The wallet: a stack of full card faces that spreads out on Expand. One animated fraction drives every card,
+ * read only in layout, so the stack moves without recomposing the cards.
+ */
+@Composable
+private fun CardStack(cards: List<EntryWithDetails>, select: (String) -> Unit, copy: (String, String) -> Unit,
+    authenticate: (() -> Unit) -> Unit, modifier: Modifier, scroll: androidx.compose.foundation.ScrollState) {
     var spread by rememberSaveable { mutableStateOf(false) }
-    val scroll = rememberScrollState()
-    LaunchedEffect(spread) { scroll.scrollTo(0) }
-    val animation = spring<androidx.compose.ui.unit.Dp>(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow)
-    Column(modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (spread) "Scroll through all ${cards.size} full cards." else "Scroll through the stack or tap Expand.",
-                Modifier.weight(1f),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = .65f)
-            )
-            TextButton(onClick = { spread = !spread }, modifier = Modifier.height(42.dp)) { Text(if (spread) "Collapse" else "Expand") }
+    val reduce = rememberReduceMotion()
+    val progress = androidx.compose.animation.core.animateFloatAsState(if (spread) 1f else 0f,
+        if (reduce) androidx.compose.animation.core.snap()
+        else spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow), label = "wallet")
+    var firstRun by remember { mutableStateOf(true) }
+    LaunchedEffect(spread) { if (firstRun) firstRun = false else scroll.animateScrollTo(0) }
+    Column(modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("${cards.size} ${if (cards.size == 1) "card" else "cards"}", Modifier.weight(1f),
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (cards.size > 1) TextButton(onClick = { spread = !spread }, modifier = Modifier.heightIn(min = 40.dp)) {
+                Text(if (spread) "Collapse" else "Expand")
+                Spacer(Modifier.width(4.dp))
+                Icon(if (spread) NuvoriIcons.ChevronUp else NuvoriIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(16.dp))
+            }
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val cardWidth = maxWidth.coerceAtMost(560.dp)
             val cardHeight = cardWidth / CARD_ASPECT_RATIO
-            val stackedSpacing = 46.dp
-            val expandedSpacing = cardHeight + 12.dp
-            val targetHeight = cardHeight + (if (spread) expandedSpacing else stackedSpacing) * (cards.size - 1).coerceAtLeast(0)
-            val containerHeight by animateDpAsState(targetHeight, animationSpec = animation, label = "wallet height")
-            Box(
-                Modifier.fillMaxSize().verticalScroll(scroll)
-            ) {
-                Box(Modifier.fillMaxWidth().height(containerHeight)) {
-                    cards.indices.forEach { index ->
-                        val offset by animateDpAsState(
-                            targetValue = (if (spread) expandedSpacing else stackedSpacing) * index,
-                            animationSpec = animation,
-                            label = "card offset"
-                        )
-                        CardFace(
-                            cards[index].entry,
-                            Modifier
-                                .align(Alignment.TopCenter)
-                                .offset(y = offset)
-                                .width(cardWidth)
-                                .aspectRatio(CARD_ASPECT_RATIO),
-                            copy,
-                            authenticate
-                        ) { select(cards[index].entry.id) }
+            val stacked = 46.dp
+            val expanded = cardHeight + 12.dp
+            val count = cards.size
+            Box(Modifier.fillMaxSize().verticalScroll(scroll)) {
+                Box(Modifier.fillMaxWidth().padding(bottom = 24.dp).layout { measurable, constraints ->
+                    val spacing = (stacked + (expanded - stacked) * progress.value).toPx()
+                    val height = (cardHeight.toPx() + spacing * (count - 1).coerceAtLeast(0)).roundToInt()
+                    val placeable = measurable.measure(constraints.copy(minHeight = height, maxHeight = height))
+                    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                }) {
+                    cards.forEachIndexed { index, card ->
+                        key(card.entry.id) {
+                            CardFace(
+                                card.entry,
+                                Modifier
+                                    .align(Alignment.TopCenter)
+                                    .offset {
+                                        val spacing = (stacked + (expanded - stacked) * progress.value).toPx()
+                                        IntOffset(0, (spacing * index).roundToInt())
+                                    }
+                                    .width(cardWidth)
+                                    .aspectRatio(CARD_ASPECT_RATIO),
+                                copy,
+                                authenticate
+                            ) { select(card.entry.id) }
+                        }
                     }
                 }
             }
@@ -1077,7 +1131,11 @@ private fun CardFace(
     val ink = cardInk(base)
     var cvvVisible by remember(entry.id) { mutableStateOf(false) }
     LaunchedEffect(cvvVisible) { if (cvvVisible) { kotlinx.coroutines.delay(15_000); cvvVisible = false } }
-    Card(modifier.clickable(onClick = onClick).semantics { contentDescription = "Open ${entry.title} ${entry.cardKind.label()} card" }, shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = base, contentColor = ink), border = if (base.luminance() < .03f) androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .18f)) else null, elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
+    Card(modifier.clip(NuvoriShapes.Card).tappable(pressedScale = .98f, onClick = onClick)
+        .semantics { contentDescription = "Open ${entry.title} ${entry.cardKind.label()} card" },
+        shape = NuvoriShapes.Card, colors = CardDefaults.cardColors(containerColor = base, contentColor = ink),
+        border = if (base.luminance() < .03f || base.luminance() > .9f) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.hairline) else null,
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Column(
             Modifier.fillMaxSize().padding(18.dp),
             verticalArrangement = Arrangement.SpaceBetween
@@ -1108,7 +1166,9 @@ private fun CardFace(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("CVV", fontSize = 9.sp, color = ink, letterSpacing = .8.sp)
                     Spacer(Modifier.width(8.dp))
-                    Text(if (cvvVisible) entry.fourthValue.ifBlank { "—" } else "•••", fontWeight = FontWeight.SemiBold)
+                    AnimatedContent(cvvVisible, label = "cvv") { visible ->
+                        Text(if (visible) entry.fourthValue.ifBlank { "—" } else "•••", fontWeight = FontWeight.SemiBold)
+                    }
                     Spacer(Modifier.weight(1f))
                     if (authenticate != null && entry.fourthValue.isNotBlank()) {
                         CompactCardAction(if (cvvVisible) "Hide" else "View") {
@@ -1126,14 +1186,34 @@ private fun CardFace(
 @Composable
 private fun CardCopyAction(description: String, action: () -> Unit) {
     IconButton(onClick = action, modifier = Modifier.size(40.dp)) {
-        Icon(Icons.Outlined.ContentCopy, contentDescription = description, modifier = Modifier.size(16.dp), tint = LocalContentColor.current)
+        Icon(NuvoriIcons.Copy, contentDescription = description, modifier = Modifier.size(16.dp), tint = LocalContentColor.current)
     }
 }
 
 @Composable
 internal fun BackIcon(onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+        Icon(NuvoriIcons.Back, contentDescription = "Back", modifier = Modifier.size(22.dp))
+    }
+}
+
+/** Calm empty state: tinted icon, one line, and the action that fills it. */
+@Composable
+private fun EmptyState(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, body: String?, modifier: Modifier,
+    actionLabel: String? = null, onAction: (() -> Unit)? = null, tintIndex: Int = 0) {
+    Box(modifier.padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TintedIcon(icon, tint(tintIndex), size = 48.dp)
+            Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (body != null) Text(body, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+            if (actionLabel != null && onAction != null) FilledTonalButton(onClick = onAction, shape = NuvoriShapes.Control) {
+                Icon(NuvoriIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(actionLabel)
+            }
+        }
     }
 }
 
@@ -1143,54 +1223,37 @@ private fun GlobalSearchResults(entries: List<EntryWithDetails>, folders: List<V
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     if (folders.isEmpty() && entries.isEmpty()) {
-        Box(modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.size(56.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = .1f), RoundedCornerShape(18.dp)),
-                    contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.primary)
-                }
-                Text("No results for \"$query\"", style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("Try a different name or keyword.", style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-            }
-        }
+        EmptyState(NuvoriIcons.Search, "No results for \"$query\"", "Try a different name or keyword.", modifier.fillMaxSize())
         return
     }
-    LazyColumn(modifier, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(modifier, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
         val count = folders.size + entries.size
         item { Text("$count ${if (count == 1) "result" else "results"}",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 4.dp)) }
-        if (folders.isNotEmpty()) item { SectionTitle("Folders (${folders.size})") }
-        items(folders, key = { "folder-${it.id}" }) { folder ->
+            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 8.dp)) }
+        if (folders.isNotEmpty()) item { SectionHeader("Folders") }
+        itemsIndexed(folders, key = { _, folder -> "folder-${folder.id}" }) { index, folder ->
             val folderType = folder.folderType!!.label()
-            Card(Modifier.fillMaxWidth().clickable { focus.clearFocus(); keyboard?.hide(); openFolder(folder) }
-                .semantics { contentDescription = "Open $folderType folder: ${folder.name}" },
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = .13f), RoundedCornerShape(10.dp)),
-                        contentAlignment = Alignment.Center) {
-                        Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
-                    }
-                    Text(folder.name, Modifier.weight(1f).padding(start = 10.dp), fontWeight = FontWeight.SemiBold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(folderType, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                }
+            val scheme = MaterialTheme.colorScheme
+            Row(Modifier.fillMaxWidth().groupedSegment(index, folders.size, scheme.raised, scheme.hairline)
+                .clip(segmentShape(index, folders.size))
+                .tappable(pressedScale = .985f) { focus.clearFocus(); keyboard?.hide(); openFolder(folder) }
+                .semantics { contentDescription = "Open $folderType folder: ${folder.name}" }
+                .heightIn(min = 56.dp).padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                TintedIcon(NuvoriIcons.Folder, tint(folder.folderType.tintIndex), size = 32.dp)
+                Text(folder.name, Modifier.weight(1f).padding(start = 12.dp), fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(folderType.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onSurfaceVariant, maxLines = 1)
             }
         }
-        if (folders.isNotEmpty() && entries.isNotEmpty()) item { Spacer(Modifier.height(8.dp)) }
-        if (entries.isNotEmpty()) item { SectionTitle("Entries (${entries.size})") }
-        items(entries, key = { it.entry.id }) { entry ->
-            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))) {
-                EntryRow(entry, false, includeType = true) {
-                    focus.clearFocus(); keyboard?.hide(); openEntry(entry.entry.id)
-                }
-            }
+        if (folders.isNotEmpty() && entries.isNotEmpty()) item { Spacer(Modifier.height(16.dp)) }
+        if (entries.isNotEmpty()) item { SectionHeader("Items") }
+        itemsIndexed(entries, key = { _, item -> item.entry.id }) { index, entry ->
+            EntryListRow(entry, index, entries.size, {
+                focus.clearFocus(); keyboard?.hide(); openEntry(entry.entry.id)
+            }, includeType = true)
         }
     }
 }
@@ -1201,7 +1264,10 @@ internal fun CategoryCollection(
     search: String, sortBy: String, onSort: (String) -> Unit, onFolder: (String?) -> Unit,
     onEditFolder: (VaultGroup?) -> Unit, onDeleteFolder: (VaultGroup) -> Unit,
     selectedId: String?, select: (String) -> Unit, copy: (String, String) -> Unit,
-    authenticate: (() -> Unit) -> Unit, modifier: Modifier
+    authenticate: (() -> Unit) -> Unit, modifier: Modifier,
+    listState: androidx.compose.foundation.lazy.LazyListState? = null,
+    cardScroll: androidx.compose.foundation.ScrollState? = null,
+    onAdd: (() -> Unit)? = null,
 ) {
     val visible = when {
         tab == VaultTab.CARDS -> entries
@@ -1211,43 +1277,57 @@ internal fun CategoryCollection(
     }
     val matchingFolders = if (search.isBlank()) folders else folders.filter { it.name.contains(search, true) || it.notes.contains(search, true) }
     var folderMenuExpanded by remember(selectedFolder?.id) { mutableStateOf(false) }
+    val lazyState = listState ?: androidx.compose.foundation.lazy.rememberLazyListState()
+    val scrollState = cardScroll ?: rememberScrollState()
     Column(modifier) {
-        if (selectedFolder != null) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (selectedFolder != null) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             BackIcon { onFolder(null) }
-            Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary)
+            Icon(NuvoriIcons.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
             Text(selectedFolder.name, Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Box {
-                IconButton(onClick = { folderMenuExpanded = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.MoreHoriz, "Folder actions") }
+                IconButton(onClick = { folderMenuExpanded = true }, modifier = Modifier.size(48.dp)) { Icon(NuvoriIcons.More, "Folder actions") }
                 DropdownMenu(expanded = folderMenuExpanded, onDismissRequest = { folderMenuExpanded = false }) {
                     DropdownMenuItem(text = { Text("Rename") }, onClick = {
                         folderMenuExpanded = false
                         onEditFolder(selectedFolder)
-                    })
+                    }, leadingIcon = { Icon(NuvoriIcons.Edit, null, Modifier.size(18.dp)) })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = {
                         folderMenuExpanded = false
                         onDeleteFolder(selectedFolder)
-                    })
+                    }, leadingIcon = { Icon(NuvoriIcons.Delete, null, Modifier.size(18.dp)) })
                 }
             }
         }
         else if (tab != VaultTab.CARDS && (matchingFolders.isNotEmpty() || (search.isBlank() && tab.type != EntryType.AUTHENTICATOR))) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Folders", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                if (search.isBlank() && tab.type != EntryType.AUTHENTICATOR) IconButton(onClick = { onEditFolder(null) }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Add, "Add folder") }
+                if (search.isBlank() && tab.type != EntryType.AUTHENTICATOR) IconButton(onClick = { onEditFolder(null) }, modifier = Modifier.size(48.dp)) {
+                    Icon(NuvoriIcons.Add, "Add folder", modifier = Modifier.size(20.dp))
+                }
             }
             if (matchingFolders.isNotEmpty()) CompactFolders(matchingFolders, entries, onFolder)
         }
-        if (tab != VaultTab.CARDS) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("Default", "Name", "Oldest").forEach { option -> FilterChip(sortBy == option, { onSort(option) }, { Text(option) }) }
+        if (tab != VaultTab.CARDS) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("Default" to "Recent first", "Name" to "Name", "Oldest" to "Oldest").forEach { (option, label) ->
+                FilterChip(sortBy == option, { onSort(option) }, { Text(label) }, shape = NuvoriShapes.Chip,
+                    leadingIcon = if (sortBy == option) {{ Icon(NuvoriIcons.Check, null, Modifier.size(16.dp)) }} else null)
+            }
         }
-        if (visible.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-            Text(when {
-                selectedFolder != null -> "This folder is empty. Edit an entry to move it here."
-                search.isNotBlank() -> "No matching ${tab.label.lowercase()}."
-                folders.isNotEmpty() -> "No unfiled ${tab.label.lowercase()}. Open a folder above."
-                else -> "No ${tab.label.lowercase()} yet. Tap Add to create one."
-            }, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .65f))
-        } else EntryCollection(tab, visible, selectedId, select, copy, authenticate, Modifier.weight(1f).fillMaxWidth())
+        val type = tab.type
+        if (visible.isEmpty()) EmptyState(type?.icon ?: NuvoriIcons.Search, when {
+                selectedFolder != null -> "This folder is empty"
+                search.isNotBlank() -> "No matching ${tab.label.lowercase()}"
+                folders.isNotEmpty() -> "No unfiled ${tab.label.lowercase()}"
+                else -> "No ${tab.label.lowercase()} yet"
+            }, when {
+                selectedFolder != null -> "Edit an item to move it here."
+                search.isNotBlank() -> "Try a different name or keyword."
+                folders.isNotEmpty() -> "Open a folder above."
+                else -> null
+            }, Modifier.weight(1f).fillMaxWidth(),
+            actionLabel = if (onAdd != null && search.isBlank() && selectedFolder == null && type != null) "Add ${type.itemLabel.lowercase()}" else null,
+            onAction = onAdd, tintIndex = type?.tintIndex ?: 0)
+        else EntryCollection(tab, visible, selectedId, select, copy, authenticate, Modifier.weight(1f).fillMaxWidth(), lazyState, scrollState)
     }
 }
 
@@ -1271,17 +1351,16 @@ private fun CompactFolders(folders: List<VaultGroup>, entries: List<EntryWithDet
 @Composable
 private fun FolderRow(folder: VaultGroup, entries: List<EntryWithDetails>, onFolder: (String?) -> Unit, modifier: Modifier) {
     val count = entries.count { item -> item.groups.any { it.id == folder.id } }
-    Surface(modifier.heightIn(min = 52.dp).clickable { onFolder(folder.id) }
+    val scheme = MaterialTheme.colorScheme
+    Surface(modifier.heightIn(min = 52.dp).clip(NuvoriShapes.Card).tappable { onFolder(folder.id) }
         .semantics { contentDescription = "Open folder ${folder.name}, $count ${if (count == 1) "item" else "items"}" },
-        shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(30.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = .13f), RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-            }
+        shape = NuvoriShapes.Card, color = scheme.raised, border = androidx.compose.foundation.BorderStroke(1.dp, scheme.hairline)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TintedIcon(NuvoriIcons.Folder, tint(folder.folderType?.tintIndex ?: 0), size = 30.dp)
             Text(folder.name, Modifier.weight(1f).padding(start = 8.dp), maxLines = 1,
                 overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
             Text(count.toString(), modifier = Modifier.padding(start = 6.dp), style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = .62f))
+                color = scheme.onSurfaceVariant)
         }
     }
 }
@@ -1290,68 +1369,6 @@ private fun FolderRow(folder: VaultGroup, entries: List<EntryWithDetails>, onFol
 private fun CompactCardAction(label: String, action: () -> Unit) {
     TextButton(onClick = action, colors = ButtonDefaults.textButtonColors(contentColor = LocalContentColor.current), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), modifier = Modifier.height(36.dp)) {
         Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-private fun EntryRow(item: EntryWithDetails, selected: Boolean, includeType: Boolean = false, onClick: () -> Unit) =
-    CompactEntryRow(item, includeType = includeType, showPreview = true,
-        containerColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .16f) else MaterialTheme.colorScheme.surfaceVariant,
-        onClick = onClick)
-
-@Composable
-internal fun CompactEntryRow(
-    item: EntryWithDetails,
-    includeType: Boolean,
-    showPreview: Boolean,
-    trailing: String? = null,
-    trailingColor: Color? = null,
-    containerColor: Color,
-    contentDescription: String? = null,
-    onClick: () -> Unit
-) {
-    val folder = item.groups.firstOrNull { it.folderType != null }?.name
-    val metadata = buildList {
-        if (includeType) add(item.entry.type.label().replaceFirstChar { it.uppercase() })
-        if (showPreview) add(when (item.entry.type) {
-            EntryType.PASSWORD, EntryType.AUTHENTICATOR -> item.entry.primaryValue
-            EntryType.QUESTION -> item.entry.primaryValue
-            EntryType.NOTE -> item.entry.notes
-            EntryType.CARD -> maskCard(item.entry.primaryValue)
-            EntryType.AUTOFILL -> item.entry.autofillProfile()?.let { profile ->
-                listOf(profile.name, profile.email, profile.phone, profile.address1, profile.city)
-                    .firstOrNull { it.isNotBlank() }.orEmpty()
-            }.orEmpty()
-        })
-        if (!folder.isNullOrBlank()) add(folder)
-    }.filter { it.isNotBlank() }.joinToString(" · ")
-    Surface(
-        Modifier.fillMaxWidth()
-            .heightIn(min = 64.dp)
-            .clickable(onClick = onClick)
-            .semantics { this.contentDescription = contentDescription ?: "Open ${item.entry.type.label()}: ${item.entry.title}" },
-        color = containerColor
-    ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = .13f)), contentAlignment = Alignment.Center) {
-                Icon(when (item.entry.type) {
-                    EntryType.CARD -> Icons.Outlined.CreditCard
-                    EntryType.PASSWORD -> Icons.Outlined.Key
-                    EntryType.QUESTION -> Icons.Outlined.QuestionAnswer
-                    EntryType.NOTE -> Icons.AutoMirrored.Outlined.Notes
-                    EntryType.AUTHENTICATOR -> Icons.Outlined.Timer
-                    EntryType.AUTOFILL -> Icons.Outlined.ContactPage
-                }, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(item.entry.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (metadata.isNotBlank()) Text(metadata, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .65f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            if (trailing != null) Text(trailing, color = trailingColor ?: MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.labelMedium, maxLines = 1)
-        }
     }
 }
 
@@ -1394,30 +1411,44 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
     }
     val detailContent: @Composable (PaddingValues) -> Unit = { contentPadding ->
     Column(Modifier.fillMaxSize().padding(contentPadding).background(MaterialTheme.colorScheme.background)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             BackIcon(close)
+            EntryLeading(item.entry, size = 40.dp)
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(item.entry.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
-                Text(item.entry.type.label().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                Text(item.entry.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+                Text(listOfNotNull(item.entry.type.itemLabel,
+                    if (item.entry.type == EntryType.PASSWORD) accountSiteLabel(item.entry) else null).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Box {
                 IconButton(onClick = toggleActions, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Outlined.MoreHoriz,
+                    Icon(NuvoriIcons.More,
                         contentDescription = if (if (widePane) actionsMenuExpanded else actionSheetExpanded) "Close entry actions" else "Open entry actions",
-                        tint = MaterialTheme.colorScheme.primary)
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (widePane) DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
-                    DropdownMenuItem(text = { Text("Add photo") }, onClick = { actionsMenuExpanded = false; addPhoto() })
-                    DropdownMenuItem(text = { Text("Camera") }, onClick = { actionsMenuExpanded = false; openCamera() })
-                    DropdownMenuItem(text = { Text("Edit") }, onClick = { actionsMenuExpanded = false; edit() })
+                    DropdownMenuItem(text = { Text("Add photo") }, onClick = { actionsMenuExpanded = false; addPhoto() },
+                        leadingIcon = { Icon(NuvoriIcons.AddPhoto, null, Modifier.size(18.dp)) })
+                    DropdownMenuItem(text = { Text("Camera") }, onClick = { actionsMenuExpanded = false; openCamera() },
+                        leadingIcon = { Icon(NuvoriIcons.Camera, null, Modifier.size(18.dp)) })
+                    DropdownMenuItem(text = { Text("Edit") }, onClick = { actionsMenuExpanded = false; edit() },
+                        leadingIcon = { Icon(NuvoriIcons.Edit, null, Modifier.size(18.dp)) })
                     if (item.entry.type != EntryType.AUTHENTICATOR) DropdownMenuItem(text = { Text("Duplicate") },
-                        onClick = { actionsMenuExpanded = false; viewModel.duplicateEntry(item); close() })
-                    DropdownMenuItem(text = { Text("Delete") }, onClick = { actionsMenuExpanded = false; confirmDelete = true })
+                        onClick = { actionsMenuExpanded = false; viewModel.duplicateEntry(item); close() },
+                        leadingIcon = { Icon(NuvoriIcons.Duplicate, null, Modifier.size(18.dp)) })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = { actionsMenuExpanded = false; confirmDelete = true },
+                        leadingIcon = { Icon(NuvoriIcons.Delete, null, Modifier.size(18.dp)) })
                 }
             }
             IconButton(onClick = { viewModel.toggleFavorite(item.entry) }, modifier = Modifier.size(48.dp)) {
-                Icon(if (item.entry.favorite) Icons.Outlined.Star else Icons.Outlined.StarBorder,
-                    contentDescription = if (item.entry.favorite) "Remove from favorites" else "Add to favorites")
+                AnimatedContent(item.entry.favorite, label = "favorite") { favorite ->
+                    Icon(if (favorite) NuvoriIcons.StarFilled else NuvoriIcons.Star,
+                        contentDescription = if (favorite) "Remove from favorites" else "Add to favorites",
+                        tint = if (favorite) statusColors(StatusKind.WARNING).accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp))
+                }
             }
         }
         LazyColumn(
@@ -1433,9 +1464,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 }
                 val expiry = expiryState(item.entry.tertiaryValue)
                 if (expiry != ExpiryState.OK) item {
-                    Surface(color = MaterialTheme.colorScheme.error.copy(alpha = .16f), shape = RoundedCornerShape(14.dp)) {
-                        Text(expiry.label, color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth().padding(14.dp), fontWeight = FontWeight.SemiBold)
-                    }
+                    StatusBanner(kind = if (expiry == ExpiryState.EXPIRED) StatusKind.ERROR else StatusKind.WARNING, message = expiry.label)
                 }
                 item { SectionTitle("Card") }
                 item { PlainRow("Card type", item.entry.cardKind.label()) }
@@ -1461,14 +1490,14 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 item { PlainRow("Code settings", "${item.entry.totpDigits} digits · ${item.entry.totpPeriod} seconds · ${item.entry.totpAlgorithm}") }
             } else if (item.entry.type == EntryType.PASSWORD) {
                 item { SectionTitle("Login") }
-                item { PlainRow("Username", item.entry.primaryValue, copy) }
+                item { PlainRow("Username", item.entry.primaryValue, copy, emptyText = "No username") }
                 if (item.entry.tertiaryValue.isNotBlank()) item { PlainRow("Website", item.entry.tertiaryValue, copy) }
                 item { SectionTitle("Security") }
                 item { SecretRow("Password", item.entry.secondaryValue, revealed.contains("secondary"), { revealed = toggle(revealed, "secondary") }, copy) }
                 val linked = vaultEntries.firstOrNull { it.entry.id == item.entry.linkedAuthenticatorId && it.entry.type == EntryType.AUTHENTICATOR }?.entry
                 if (linked != null) item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Linked authenticator", style = MaterialTheme.typography.titleSmall)
+                        SectionTitle("Linked code")
                         TotpTile(linked, copy, {}, initiallyMasked = true)
                     }
                 }
@@ -1526,7 +1555,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
         scaffoldState = actionScaffold,
         sheetPeekHeight = 56.dp,
         sheetContainerColor = MaterialTheme.colorScheme.surface,
-        sheetShape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+        sheetShape = NuvoriShapes.Sheet,
         sheetTonalElevation = 8.dp,
         sheetShadowElevation = 12.dp,
         sheetDragHandle = {
@@ -1541,8 +1570,8 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                     Box(Modifier.size(36.dp).clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = .18f)), contentAlignment = Alignment.Center) {
                         AnimatedContent(actionSheetExpanded, label = "entry action direction") { expanded ->
-                            Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
-                                contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Icon(if (expanded) NuvoriIcons.ChevronDown else NuvoriIcons.ChevronUp,
+                                contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                         }
                     }
                     Spacer(Modifier.width(10.dp))
@@ -1628,7 +1657,7 @@ internal fun PhotoViewer(photo: VaultPhoto, viewModel: VaultViewModel, close: ()
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(safeInsets)) {
                 Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = back, enabled = !busy, modifier = Modifier.size(48.dp)) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                    IconButton(onClick = back, enabled = !busy, modifier = Modifier.size(48.dp)) { Icon(NuvoriIcons.Back, "Back", Modifier.size(22.dp)) }
                     Text(if (cropping) "Crop photo" else "Photo", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 }
                 if (cropping) Text("Drag the edges or corners. Drag inside to move. Save replaces this vault photo.", Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
@@ -1661,35 +1690,51 @@ internal fun PhotoViewer(photo: VaultPhoto, viewModel: VaultViewModel, close: ()
 
 @Composable
 private fun SectionTitle(text: String) {
-    Text(text.uppercase(), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
+    Text(text.uppercase(), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold, letterSpacing = .8.sp, modifier = Modifier.padding(start = 4.dp, top = 4.dp).semantics { heading() })
 }
 
+/** One labelled field in a flat card, with a copy button when copying makes sense. */
 @Composable
-private fun PlainRow(label: String, value: String, copy: ((String, String) -> Unit)? = null) {
-    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(14.dp)) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(value.ifBlank { "Not set" }, Modifier.weight(1f))
-            if (copy != null && value.isNotBlank()) TextButton(onClick = { copy(label, value) }, modifier = Modifier.height(44.dp)) { Text("Copy") }
+private fun PlainRow(label: String, value: String, copy: ((String, String) -> Unit)? = null, emptyText: String = "Not set") {
+    HairlineCard(Modifier.fillMaxWidth()) {
+        Row(Modifier.heightIn(min = 60.dp).padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(value.ifBlank { emptyText }, style = MaterialTheme.typography.bodyLarge,
+                    color = if (value.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
+            }
+            if (copy != null && value.isNotBlank()) IconButton(onClick = { copy(label, value) }, modifier = Modifier.size(48.dp)) {
+                Icon(NuvoriIcons.Copy, contentDescription = "Copy ${label.lowercase(Locale.ROOT)}", modifier = Modifier.size(20.dp))
+            }
         }
     }
 }
 
+/** A hidden field. Hold or tap the eye to reveal; copy never reveals. */
 @Composable
 private fun SecretRow(label: String, value: String, revealed: Boolean, toggle: () -> Unit, copy: (String, String) -> Unit) {
-    Column(
-        Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .combinedClickable(onClick = {}, onLongClick = toggle)
-            .padding(14.dp)
+    HairlineCard(Modifier.fillMaxWidth()) {
+        Row(Modifier.clip(NuvoriShapes.Card).combinedClickable(onClick = {}, onLongClick = toggle)
             .semantics { contentDescription = "$label. Hold to reveal." }
-    ) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (revealed) value else "••••••••", Modifier.weight(1f))
-            TextButton(onClick = toggle, modifier = Modifier.height(44.dp)) { Text(if (revealed) "Hide" else "Reveal") }
-            if (value.isNotBlank()) TextButton(onClick = { copy(label, value) }, modifier = Modifier.height(44.dp)) { Text("Copy") }
+            .heightIn(min = 60.dp).padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                AnimatedContent(revealed, label = "reveal") { shown ->
+                    Text(if (shown) value.ifEmpty { "Not set" } else "••••••••", style = MaterialTheme.typography.bodyLarge,
+                        fontFamily = if (shown) androidx.compose.ui.text.font.FontFamily.Monospace else null)
+                }
+            }
+            IconButton(onClick = toggle, modifier = Modifier.size(48.dp)) {
+                Icon(if (revealed) NuvoriIcons.EyeOff else NuvoriIcons.Eye,
+                    contentDescription = if (revealed) "Hide ${label.lowercase(Locale.ROOT)}" else "Reveal ${label.lowercase(Locale.ROOT)}",
+                    modifier = Modifier.size(20.dp))
+            }
+            if (value.isNotBlank()) IconButton(onClick = { copy(label, value) }, modifier = Modifier.size(48.dp)) {
+                Icon(NuvoriIcons.Copy, contentDescription = "Copy ${label.lowercase(Locale.ROOT)}", modifier = Modifier.size(20.dp))
+            }
         }
     }
 }
@@ -1772,7 +1817,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                     IconButton(onClick = {
                     onSave((existing ?: VaultEntry(type = type, title = title)).copy(title = title.trim(), primaryValue = if (type == EntryType.AUTOFILL) profile.encode() else primary.trim(), secondaryValue = if (type == EntryType.CARD) secondary.trim() else secondary, tertiaryValue = tertiary.trim(), fourthValue = fourth.trim(), cardKind = cardKind, network = network.trim(), notes = notes.trim(), tags = tags.trim(), color = color, linkedApps = loginApps, autofillSignatures = loginSignatures, linkedAuthenticatorId = linkedCode), selectedGroups, photoDraft.takeForSave())
                     }, enabled = valid && !photoDraft.busy, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Outlined.Check, contentDescription = "Save entry")
+                        Icon(NuvoriIcons.Check, contentDescription = "Save entry")
                     }
                 }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp),
@@ -1784,7 +1829,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                     label = { Text(when (type) { EntryType.CARD -> "Card label"; EntryType.NOTE -> "Note title"; EntryType.AUTOFILL -> "Profile label"; else -> "Service" }) },
                     trailingIcon = if (type == EntryType.CARD && nfcEnabled) {{
                         IconButton(onClick = viewModel::requestNfcScan, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Outlined.Contactless, contentDescription = "Scan card with NFC", tint = MaterialTheme.colorScheme.primary)
+                            Icon(NuvoriIcons.Nfc, contentDescription = "Scan card with NFC", tint = MaterialTheme.colorScheme.primary)
                         }
                     }} else null,
                     modifier = Modifier.fillMaxWidth()
@@ -1823,7 +1868,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                                             .background(Color(option.value), CircleShape),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        if (selected) Icon(Icons.Outlined.Check, contentDescription = null, tint = cardInk(Color(option.value)), modifier = Modifier.size(20.dp))
+                                        if (selected) Icon(NuvoriIcons.Check, contentDescription = null, tint = cardInk(Color(option.value)), modifier = Modifier.size(20.dp))
                                     }
                                 }
                             }
@@ -1869,7 +1914,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                         items(groups.filter { it.folderType == type }, key = { it.id }) { folder ->
                             FilterChip(folder.id in selectedGroups, {
                                 selectedGroups = selectedGroups.filterNot { id -> groups.any { it.id == id && it.folderType != null } }.toSet() + folder.id
-                            }, { Text(folder.name) }, leadingIcon = { Icon(Icons.Outlined.Folder, null, modifier = Modifier.size(16.dp)) })
+                            }, { Text(folder.name) }, leadingIcon = { Icon(NuvoriIcons.Folder, null, modifier = Modifier.size(16.dp)) })
                         }
                     }
                 }
@@ -1917,7 +1962,7 @@ internal fun GroupManager(
                     BackIcon(back)
                     Text(selected?.name ?: "Groups", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 2)
                     IconButton(onClick = { name = selected?.name.orEmpty(); notes = selected?.notes.orEmpty(); editing = true }) {
-                        Icon(if (selected == null) Icons.Outlined.Add else Icons.Outlined.Settings, if (selected == null) "Add group" else "Edit group")
+                        Icon(if (selected == null) NuvoriIcons.Add else NuvoriIcons.Edit, if (selected == null) "Add group" else "Edit group")
                     }
                 }
                 if (selected == null) {
@@ -1930,7 +1975,7 @@ internal fun GroupManager(
                             Card(Modifier.fillMaxWidth().clickable { selectedId = group.id }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary)
+                                        Icon(NuvoriIcons.Folder, null, tint = MaterialTheme.colorScheme.primary)
                                         Spacer(Modifier.width(12.dp))
                                         Text(group.name, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                                         Text(members.size.toString(), color = MaterialTheme.colorScheme.primary)
@@ -2094,6 +2139,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     val passwordDuplicateReview by viewModel.passwordDuplicateReview.collectAsStateWithLifecycle()
     val syncConflicts by viewModel.syncConflicts.collectAsStateWithLifecycle()
     val rejectedSyncChanges by viewModel.rejectedSyncChanges.collectAsStateWithLifecycle()
+    val settingsTransfer by viewModel.authorityTransfer.collectAsStateWithLifecycle()
     var deletePasskey by remember { mutableStateOf<com.privatevault.app.data.PasskeySummary?>(null) }
     var confirmPasswordDuplicateDelete by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf<String?>(when (initialImportChoice) {
@@ -2108,7 +2154,24 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     var authenticatorError by remember { mutableStateOf<String?>(null) }
     var oneAuthUri by remember { mutableStateOf<Uri?>(null) }
     var oneAuthPassword by remember { mutableStateOf("") }
-    val pageScroll = remember(page) { androidx.compose.foundation.ScrollState(0) }
+    val hubScroll = rememberSaveable(saver = androidx.compose.foundation.ScrollState.Saver) { androidx.compose.foundation.ScrollState(0) }
+    val subpageScroll = remember(page) { androidx.compose.foundation.ScrollState(0) }
+    val pageScroll = if (page == null) hubScroll else subpageScroll
+    // Shared-axis motion between the hub and its pages: forward into a page, back to the hub.
+    val pageMotion = remember { androidx.compose.animation.core.Animatable(1f) }
+    var pageDirection by remember { mutableFloatStateOf(1f) }
+    var shownPage by remember { mutableStateOf(page) }
+    val settingsReduceMotion = rememberReduceMotion()
+    LaunchedEffect(page) {
+        if (page != shownPage) {
+            pageDirection = if (page == null) -1f else 1f
+            shownPage = page
+            if (!settingsReduceMotion) {
+                pageMotion.snapTo(0f)
+                pageMotion.animateTo(1f, androidx.compose.animation.core.tween(NuvoriMotion.SCREEN_MS, easing = NuvoriMotion.EaseOut))
+            }
+        }
+    }
     LaunchedEffect(page) {
         if (page == "Passkeys") viewModel.refreshPasskeys()
         if (page == "Watch codes") viewModel.refreshWatchConnection()
@@ -2214,8 +2277,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 importPasswords.launch(arrayOf("text/*", "application/csv", "application/json", "application/vnd.ms-excel", "application/octet-stream"))
             }
             if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT)
-                SettingsPrimaryButton("Choose password export", onClick = chooseExport, icon = Icons.Outlined.Download)
-            else SettingsSecondaryButton("Choose password export", onClick = chooseExport, icon = Icons.Outlined.Download)
+                SettingsPrimaryButton("Choose password export", onClick = chooseExport, icon = NuvoriIcons.Import)
+            else SettingsSecondaryButton("Choose password export", onClick = chooseExport, icon = NuvoriIcons.Import)
         }
     }
 
@@ -2229,14 +2292,18 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = 16.dp)) {
           Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
             BackIcon(back)
-            Text(page ?: "Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f).semantics { heading() })
+            Text(settingsPageTitle(page), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).semantics { heading() })
           }
-          Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().align(Alignment.CenterHorizontally).weight(1f).verticalScroll(pageScroll).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+          Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().align(Alignment.CenterHorizontally).weight(1f)
+              .graphicsLayer { val v = pageMotion.value; alpha = v; translationX = (1f - v) * NuvoriMotion.SlideDistance.toPx() * pageDirection }
+              .verticalScroll(pageScroll).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (page == null) {
                 SettingsHub(SettingsHubSummary(
                     backgroundTimeoutMs = security.backgroundTimeoutMs,
                     pairedDevices = pairedDevices.count { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name },
                     syncNeedsAttention = syncConflicts.isNotEmpty() || rejectedSyncChanges > 0,
+                    transferPending = settingsTransfer != null,
+                    membershipNotice = rememberMembershipNotice(viewModel),
                     watchSyncEnabled = security.watchSyncEnabled,
                     passkeys = passkeys.size,
                     lightMode = lightMode,
@@ -2246,7 +2313,10 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             }
             if (page == "Appearance") {
                 SettingsSection("Theme", description = "Choose how Nuvori looks on this device.") {
-                    SettingsSwitchRow("Light mode", lightMode, viewModel::setLightMode,
+                    SettingsSwitchRow("Light mode", lightMode, { on ->
+                        viewModel.setLightMode(on)
+                        viewModel.notify(if (on) "Light mode on" else "Dark mode on", StatusKind.SUCCESS)
+                    },
                         description = "Turn off for a black background.")
                 }
             }
@@ -2259,7 +2329,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 SettingsSection("Set up passkeys",
                     description = "Create passkeys from a supported website in Chrome or Brave. They are encrypted with your vault and included in backups. Deleting one here does not remove its registration on the website.") {
                     if (android.os.Build.VERSION.SDK_INT >= 34) {
-                        SettingsPrimaryButton("Enable Nuvori for passwords and passkeys", icon = Icons.Outlined.Key, onClick = {
+                        SettingsPrimaryButton("Enable Nuvori for passwords and passkeys", icon = NuvoriIcons.Passkey, onClick = {
                             runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
                         })
                     } else StatusBanner(kind = StatusKind.INFO,
@@ -2268,7 +2338,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 SettingsSection("Import from another manager",
                     description = "Android will show managers that support secure credential transfer. Browsers are listed only when their credential provider offers an export.") {
                     SettingsSecondaryButton(if (transferBusy) "Waiting for password manager…" else "Import passkeys from another manager",
-                        icon = Icons.Outlined.Download, enabled = !transferBusy, onClick = {
+                        icon = NuvoriIcons.Import, enabled = !transferBusy, onClick = {
                             transferBusy = true
                             viewModel.externalFlowActive = true
                             transferScope.launch {
@@ -2311,7 +2381,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             IconButton(onClick = { deletePasskey = passkey }, modifier = Modifier.size(48.dp)) {
-                                Icon(Icons.Outlined.DeleteOutline, contentDescription = "Delete passkey for ${passkey.rpId}",
+                                Icon(NuvoriIcons.Delete, contentDescription = "Delete passkey for ${passkey.rpId}",
                                     tint = MaterialTheme.colorScheme.error)
                             }
                         }
@@ -2319,12 +2389,15 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 }
             }
             if (page == "Cards and NFC") SettingsSection("Contactless cards") {
-                NfcPreference(nfcEnabled, viewModel.nfcSupported, viewModel::setNfcEnabled)
+                NfcPreference(nfcEnabled, viewModel.nfcSupported) { on ->
+                    viewModel.setNfcEnabled(on)
+                    viewModel.notify(if (on) "NFC card import on" else "NFC card import off", StatusKind.SUCCESS)
+                }
             }
             if (page == "Import authenticator codes") {
                 SettingsSection("Choose an export",
                     description = "In Google Authenticator, choose Transfer accounts, then Export accounts. Scan every QR page before importing. A second device may be needed to display the codes.") {
-                    SettingsPrimaryButton("Scan transfer QR", icon = Icons.Outlined.QrCodeScanner, onClick = {
+                    SettingsPrimaryButton("Scan transfer QR", icon = NuvoriIcons.Scan, onClick = {
                         if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) authenticatorScanner = true
                         else authenticatorPermission.launch(android.Manifest.permission.CAMERA)
                     })
@@ -2352,7 +2425,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                         if (authenticatorPages.size < expected)
                             StatusBanner(kind = StatusKind.INFO, message = "Scan the remaining QR pages to continue.")
                         Text("Review these accounts before saving. Imported codes do not remove them from the original app. Check a code on each website before deleting the original.", style = MaterialTheme.typography.bodySmall)
-                        SettingsPrimaryButton("Import codes", icon = Icons.Outlined.Check, enabled = authenticatorPages.size == expected, onClick = {
+                        SettingsPrimaryButton("Import codes", icon = NuvoriIcons.Check, enabled = authenticatorPages.size == expected, onClick = {
                             viewModel.importAuthenticatorAccounts(accounts)
                             authenticatorPages = emptyMap()
                         })
@@ -2418,7 +2491,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     (if (restoreFirst) listOf("restore", "export") else listOf("export", "restore")).forEach { kind ->
                         val isExport = kind == "export"
                         val label = if (isExport) "Export encrypted backup" else "Restore encrypted backup"
-                        val icon = if (isExport) Icons.Outlined.FileUpload else Icons.Outlined.Restore
+                        val icon = if (isExport) NuvoriIcons.Upload else NuvoriIcons.History
                         if (isExport != restoreFirst) SettingsPrimaryButton(label, icon = icon, onClick = { action = kind })
                         else SettingsSecondaryButton(label, icon = icon, onClick = { action = kind })
                     }
@@ -2427,13 +2500,13 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 if (initialImportChoice != FirstRunChoice.BROWSER_IMPORT) browserImportContent()
                 SettingsSection("Exact duplicate passwords",
                     description = "Find password entries whose saved fields, tags, folders, and app or website links match exactly. Entry IDs and activity dates are ignored. Entries with photos are never included.") {
-                    SettingsSecondaryButton("Check for exact duplicates", icon = Icons.Outlined.ContentCopy,
+                    SettingsSecondaryButton("Check for exact duplicates", icon = NuvoriIcons.Copy,
                         onClick = viewModel::checkPasswordDuplicates)
                 }
             }
             if (page == "Security") {
-                SettingsPrimaryButton("Lock now", icon = Icons.Outlined.Lock,
-                    onClick = { viewModel.lock(LockReason.MANUAL); close() })
+                SettingsPrimaryButton("Lock now", icon = NuvoriIcons.Lock,
+                    onClick = { viewModel.notify("Vault locked", StatusKind.SUCCESS); viewModel.lock(LockReason.MANUAL); close() })
                 SecurityChoices("Auto-lock after leaving the app", "The vault locks after you switch apps. Screen-off always locks immediately.",
                     security.backgroundTimeoutMs, backgroundLockChoices, onSelect = viewModel::setBackgroundTimeout)
                 SecurityChoices("Auto-lock after inactivity while open", "The countdown starts after your last interaction. Leaving the app never extends it.",
@@ -2449,7 +2522,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 SettingsSection("Master password", description = "Existing backup files keep their original passwords.") {
                     if (hasPairedDevices) StatusBanner(kind = StatusKind.WARNING,
                         message = "Paired devices must keep the same master password. Remove paired devices before changing it.")
-                    SettingsSecondaryButton("Change master password", icon = Icons.Outlined.Key, enabled = !hasPairedDevices,
+                    SettingsSecondaryButton("Change master password", icon = NuvoriIcons.Password, enabled = !hasPairedDevices,
                         onClick = { action = "password" })
                 }
             }
@@ -2665,12 +2738,19 @@ private fun SecretField(label: String, value: String, onValue: (String) -> Unit)
         visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
         trailingIcon = {
             IconButton(onClick = { visible = !visible }) {
-                Icon(if (visible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                Icon(if (visible) NuvoriIcons.EyeOff else NuvoriIcons.Eye,
                     contentDescription = if (visible) "Hide $name" else "Show $name")
             }
         },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth()
     )
+}
+
+/** Settings pages keep their internal names; a few show the name shared with Windows. */
+private fun settingsPageTitle(page: String?): String = when (page) {
+    null -> "Settings"
+    "Android devices" -> "Devices & sync"
+    else -> page
 }
 
 private fun EntryType.label() = when (this) { EntryType.CARD -> "card"; EntryType.QUESTION -> "security question"; EntryType.PASSWORD -> "password"; EntryType.NOTE -> "note"; EntryType.AUTHENTICATOR -> "authenticator"; EntryType.AUTOFILL -> "autofill profile" }

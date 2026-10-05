@@ -7,6 +7,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -42,76 +52,123 @@ import kotlinx.coroutines.launch
 internal fun TotpTile(entry: VaultEntry, copy: (String, String) -> Unit, open: () -> Unit, initiallyMasked: Boolean = false) {
     var revealed by remember(entry.id) { mutableStateOf(!initiallyMasked) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var seconds by remember { mutableStateOf<Long?>(null) }
+    var nowMs by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(lifecycle, entry.id) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            try { while (true) { seconds = System.currentTimeMillis() / 1000; delay(250) } }
-            finally { seconds = null; if (initiallyMasked) revealed = false }
+            try { while (true) { nowMs = System.currentTimeMillis(); delay(250) } }
+            finally { nowMs = null; if (initiallyMasked) revealed = false }
         }
     }
-    val current = seconds
-    val code = remember(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod, current?.div(entry.totpPeriod.coerceAtLeast(1))) {
-        if (current == null) null else runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod, current) }.getOrNull()
+    val current = nowMs?.div(1000)
+    val period = entry.totpPeriod.coerceAtLeast(1)
+    val code = remember(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, period, current?.div(period)) {
+        if (current == null) null else runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, period, current) }.getOrNull()
     }
     // Recompute on tap so a code at a time-step boundary isn't copied stale.
     val copyCurrent: () -> Unit = {
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-            runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod) }
+            runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, period) }
                 .onSuccess { copy("Authenticator code", it) }
         }
     }
-    val warning = statusColors(StatusKind.WARNING).accent
-    val urgent = statusColors(StatusKind.ERROR).accent
+    val scheme = MaterialTheme.colorScheme
+    val periodMs = period * 1000L
+    val remainingMs = nowMs?.let { periodMs - it % periodMs }
+    val seconds = remainingMs?.let { (it + 999) / 1000 }
+    // Warn before the code rolls over so a slow paste doesn't fail.
+    val accent = when {
+        seconds == null -> scheme.primary
+        seconds <= 2 -> statusColors(StatusKind.ERROR).accent
+        seconds <= 5 -> statusColors(StatusKind.WARNING).accent
+        else -> scheme.primary
+    }
     // The masked card copies without revealing the code; the plain card opens its entry.
-    Card(Modifier.fillMaxWidth().clickable(onClickLabel = if (initiallyMasked) "Copy code" else null,
-        onClick = if (initiallyMasked) copyCurrent else open)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(entry.title, style = MaterialTheme.typography.titleMedium)
-            if (entry.primaryValue.isNotBlank()) Text(entry.primaryValue, style = MaterialTheme.typography.bodySmall)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (revealed) code ?: "••• •••" else "••• •••", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
-                if (initiallyMasked) TextButton(onClick = { revealed = !revealed }) { Text(if (revealed) "Hide" else "Show") }
-                IconButton(enabled = code != null, onClick = copyCurrent) { Icon(Icons.Outlined.ContentCopy, "Copy authenticator code") }
+    Surface(Modifier.fillMaxWidth().clip(NuvoriShapes.Card)
+        .tappable(onClickLabel = if (initiallyMasked) "Copy code" else null, pressedScale = .985f,
+            onClick = if (initiallyMasked) copyCurrent else open),
+        shape = NuvoriShapes.Card, color = scheme.raised, border = BorderStroke(1.dp, scheme.hairline)) {
+        Row(Modifier.padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            NuvoriAvatar(entry.title, size = 36.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(entry.title, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (entry.favorite) FavoriteMark()
+                }
+                if (entry.primaryValue.isNotBlank()) Text(entry.primaryValue, style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (revealed) code?.let(::formatTotp) ?: "••• •••" else "••• •••",
+                    fontSize = 26.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
+                    color = if (revealed && seconds != null && seconds <= 5) accent else scheme.onSurface)
+                if (current != null && code == null)
+                    Text("Check this authenticator's setup key and settings.", color = scheme.error, style = MaterialTheme.typography.bodySmall)
             }
-            if (current != null && code != null) {
-                val remaining = entry.totpPeriod - current % entry.totpPeriod
-                // Warn before the code rolls over so a slow paste doesn't fail.
-                val barColor = if (remaining <= 2) urgent else if (remaining <= 5) warning else MaterialTheme.colorScheme.primary
-                LinearProgressIndicator(progress = remaining.toFloat() / entry.totpPeriod, modifier = Modifier.fillMaxWidth(), color = barColor)
-                Text("New code in ${remaining}s", style = MaterialTheme.typography.labelSmall)
-            } else if (current != null) Text("Check this authenticator's setup key and settings.", color = MaterialTheme.colorScheme.error)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (remainingMs != null && seconds != null && code != null)
+                    CountdownRing(remainingMs.toFloat() / periodMs, seconds, accent, Modifier.padding(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (initiallyMasked) TextButton(onClick = { revealed = !revealed }) { Text(if (revealed) "Hide" else "Show") }
+                    IconButton(enabled = code != null, onClick = copyCurrent, modifier = Modifier.size(44.dp)) {
+                        Icon(NuvoriIcons.Copy, "Copy authenticator code", Modifier.size(20.dp))
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
 internal fun MoreScreen(groupCount: Int, entries: List<EntryWithDetails>, groups: () -> Unit, questions: () -> Unit, notes: () -> Unit,
-    autofill: () -> Unit, settings: () -> Unit) {
+    autofill: () -> Unit, settings: () -> Unit, devices: () -> Unit = {}, passkeys: () -> Unit = {}, help: () -> Unit = {},
+    lock: (() -> Unit)? = null, passkeyCount: Int = 0, listState: LazyListState? = null) {
+    val state = listState ?: rememberLazyListState()
+    val vault = listOf(
+        MoreRow("Notes", "${entries.count { it.entry.type == EntryType.NOTE }} private notes", EntryType.NOTE.icon, tint(EntryType.NOTE.tintIndex), notes),
+        MoreRow("Security questions", "${entries.count { it.entry.type == EntryType.QUESTION }} saved questions", EntryType.QUESTION.icon, tint(EntryType.QUESTION.tintIndex), questions),
+        MoreRow("Autofill details", "${entries.count { it.entry.type == EntryType.AUTOFILL }} saved profiles", EntryType.AUTOFILL.icon, tint(EntryType.AUTOFILL.tintIndex), autofill),
+        MoreRow("Passkeys", if (passkeyCount == 0) "Website sign-in without passwords" else "$passkeyCount saved", NuvoriIcons.Passkey, tint(0), passkeys),
+        MoreRow("Groups", "$groupCount groups · linked accounts in one place", NuvoriIcons.Folder, tint(1), groups),
+    )
+    val manage = listOfNotNull(
+        MoreRow("Devices & sync", "Pair a phone or PC and check sync", NuvoriIcons.Devices, tint(0), devices),
+        MoreRow("Settings", "Security, autofill, backup and appearance", NuvoriIcons.Settings, tint(0), settings),
+        MoreRow("Help", "Answers and shortcuts", NuvoriIcons.Question, tint(0), help),
+        lock?.let { MoreRow("Lock vault", "Lock now. Unlock with fingerprint or password.", NuvoriIcons.Lock, tint(0), it) },
+    )
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        LazyColumn(Modifier.widthIn(max = 720.dp).fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text("Your vault", style = MaterialTheme.typography.titleMedium) }
-        item { MoreItem("Groups", "$groupCount groups · linked accounts in one place", Icons.Outlined.Folder, groups) }
-        item { MoreItem("Security questions", "${entries.count { it.entry.type == EntryType.QUESTION }} saved questions", Icons.Outlined.QuestionAnswer, questions) }
-        item { MoreItem("Notes", "${entries.count { it.entry.type == EntryType.NOTE }} private notes", Icons.Outlined.Notes, notes) }
-        item { MoreItem("Autofill details", "${entries.count { it.entry.type == EntryType.AUTOFILL }} saved profiles", Icons.Outlined.ContactPage, autofill) }
-        item { HorizontalDivider() }
-        item { Text("Manage Nuvori", style = MaterialTheme.typography.titleMedium) }
-        item { MoreItem("Settings", "Security, autofill, backup, browser import and appearance", Icons.Outlined.Settings, settings) }
+        LazyColumn(Modifier.widthIn(max = 720.dp).fillMaxSize(), state = state,
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp)) {
+            item { MoreCaption("Your vault") }
+            itemsIndexed(vault, key = { _, row -> row.title }) { index, row -> MoreItem(row, index, vault.size) }
+            item { Spacer(Modifier.height(20.dp)) }
+            item { MoreCaption("Manage Nuvori") }
+            itemsIndexed(manage, key = { _, row -> "manage-" + row.title }) { index, row -> MoreItem(row, index, manage.size) }
         }
     }
 }
 
+private data class MoreRow(val title: String, val subtitle: String, val icon: ImageVector, val tint: Tint, val open: () -> Unit)
+
 @Composable
-private fun MoreItem(title: String, subtitle: String, icon: ImageVector, open: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = open)) {
-      Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(subtitle, style = MaterialTheme.typography.bodyMedium)
+private fun MoreCaption(text: String) {
+    Text(text, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp).semantics { heading() })
+}
+
+@Composable
+private fun MoreItem(row: MoreRow, index: Int, count: Int) {
+    val scheme = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().groupedSegment(index, count, scheme.raised, scheme.hairline, dividerInset = 62.dp)
+        .clip(segmentShape(index, count)).tappable(pressedScale = .985f, onClick = row.open)
+        .heightIn(min = 64.dp).padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        TintedIcon(row.icon, row.tint, size = 34.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(row.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+            Text(row.subtitle, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, maxLines = 2)
         }
-        Icon(Icons.Outlined.ChevronRight, null)
-      }
+        Icon(NuvoriIcons.ChevronRight, null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -162,7 +219,7 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                     IconButton(enabled = valid && !photoDraft.busy, onClick = {
                         onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes, linkedApps = linkedApps), selectedGroups, photoDraft.takeForSave())
                         secret = ""
-                    }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Check, contentDescription = "Save authenticator") }
+                    }, modifier = Modifier.size(48.dp)) { Icon(NuvoriIcons.Check, contentDescription = "Save authenticator") }
                 }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {

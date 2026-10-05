@@ -17,7 +17,7 @@ class SyncTransferPlanner(private val database: VaultDatabase) {
         val vaultId = requireVaultId()
         val dao = database.syncDao()
         val member = dao.membership(vaultId, peerDeviceId)?.toMembership()
-        require(member?.status == MemberStatus.ACTIVE && member.keyEpoch == 1L) {
+        require(member?.status == MemberStatus.ACTIVE && member.keyEpoch >= 1L) {
             "Device is not an active vault member"
         }
         val pending = ArrayList<SyncOperationEntity>(limit)

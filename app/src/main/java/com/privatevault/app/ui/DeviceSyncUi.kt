@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.privatevault.app
 
 import android.Manifest
@@ -17,13 +19,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AppShortcut
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.LinkOff
-import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.QrCode
-import androidx.compose.material.icons.outlined.QrCodeScanner
-import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -121,11 +118,11 @@ internal fun DeviceSyncState(status: DeviceSyncStatus, connected: Int, paired: I
             delay(30_000)
         }
     }
-    Surface(Modifier.fillMaxWidth().animateContentSize(), shape = RoundedCornerShape(20.dp),
+    Surface(Modifier.fillMaxWidth().animateContentSize(), shape = NuvoriShapes.Card,
         color = colors.container, contentColor = colors.content) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Icon(kind.icon, contentDescription = null, tint = colors.accent, modifier = Modifier.size(28.dp))
+                StatusIcon(kind, colors.accent, size = 28.dp)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(if (hasWaitingChanges) "Changes still waiting" else status.phase.title,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
@@ -151,7 +148,7 @@ internal fun DeviceSyncState(status: DeviceSyncStatus, connected: Int, paired: I
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
                 if (busy) CircularProgressIndicator(Modifier.size(ButtonDefaults.IconSize), strokeWidth = 2.dp,
                     color = LocalContentColor.current)
-                else Icon(Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                else Icon(NuvoriIcons.Sync, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
                 Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                 Text("Sync now")
             }
@@ -188,7 +185,7 @@ private fun ConflictInbox(conflicts: List<SyncConflictReview>, onReview: (String
 @Composable
 private fun ConflictVersion(label: String, side: SyncConflictSide) {
     Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(14.dp)) {
+        shape = NuvoriShapes.Card) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
@@ -246,7 +243,7 @@ internal fun ConflictReviewSheet(conflict: SyncConflictReview, onDismiss: () -> 
                     else conflict.current.deleted
                 val panel = statusColors(if (choosingDeleted) StatusKind.ERROR else StatusKind.INFO)
                 Surface(color = panel.container, contentColor = panel.content,
-                    shape = RoundedCornerShape(14.dp)) {
+                    shape = NuvoriShapes.Card) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(if (pendingChoice == true) "Use the incoming version?" else "Keep this device's version?",
                             style = MaterialTheme.typography.titleSmall)
@@ -282,14 +279,15 @@ internal fun DeviceSyncSelfCard(device: SyncMembershipEntity, isManager: Boolean
     Card(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(start = 16.dp, top = 12.dp, end = 8.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SettingsIconBadge(Icons.Outlined.PhoneAndroid)
+            SettingsIconBadge(devicePlatformIcon(device))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("This device", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary)
                 Text(device.displayName, style = MaterialTheme.typography.titleMedium,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${if (isManager) "Managing device" else "Paired device"} · ${device.deviceId.take(8)}",
-                    style = MaterialTheme.typography.labelSmall)
+                if (isManager) ManagingBadge()
+                Text("${if (isManager) "Adds and removes devices" else "Member"} · ID ${device.deviceId.take(8)}",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             TextButton(onClick = { name = device.displayName; editing = true },
                 modifier = Modifier.heightIn(min = 48.dp)) { Text("Rename") }
@@ -320,7 +318,8 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
     status: DevicePeerStatus?, lastContact: Long, lastExchange: Long, progress: String,
     savedAddress: String, canRemove: Boolean, showRemove: Boolean,
     onTryAddress: (String) -> Unit, onRemove: () -> Unit,
-    counts: PeerSyncCounts = PeerSyncCounts(0, 0, 0, 0), advanced: Boolean = true) {
+    counts: PeerSyncCounts = PeerSyncCounts(0, 0, 0, 0), advanced: Boolean = true,
+    transferRole: String? = null, removeHint: String? = null) {
     val needsCheck = counts.toSend > 0 || counts.toReceiveHere > 0 || counts.toApplyHere > 0 ||
         counts.receivedThere > 0
     val (peerLabel, peerKind) = when {
@@ -331,9 +330,11 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
         needsCheck -> "Changes waiting" to StatusKind.WARNING
         status?.phase == DeviceSyncPhase.SEARCHING || status?.phase == DeviceSyncPhase.FOUND ->
             "Looking" to StatusKind.PROGRESS
-        lastExchange > 0 -> "Checked" to StatusKind.SUCCESS
+        lastExchange > 0 -> "Active" to StatusKind.SUCCESS
         else -> "Not checked yet" to StatusKind.NEUTRAL
     }
+    val now = remember(lastContact, lastExchange, status?.phase) { System.currentTimeMillis() }
+    val lastSeen = maxOf(lastContact, lastExchange)
     var address by rememberSaveable(device.deviceId) { mutableStateOf(savedAddress) }
     var showAddress by rememberSaveable(device.deviceId) { mutableStateOf(false) }
     LaunchedEffect(savedAddress) { if (!showAddress) address = savedAddress }
@@ -341,14 +342,19 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp).animateContentSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Column(Modifier.weight(1f)) {
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                SettingsIconBadge(devicePlatformIcon(device))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(device.displayName, style = MaterialTheme.typography.titleSmall,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(if (isManager) "Manages this sync group" else "In this sync group",
-                        style = MaterialTheme.typography.labelSmall)
+                    if (isManager) ManagingBadge()
+                    Text(if (lastSeen > 0) "Last seen ${relativeTime(lastSeen, now)}" else "Not seen yet",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 StatusChip(peerKind, peerLabel)
+                if (transferRole != null) StatusChip(StatusKind.INFO, transferRole)
             }
             Text(when {
                 status?.phase == DeviceSyncPhase.TRANSFERRING -> "Sending and receiving encrypted changes."
@@ -397,8 +403,12 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                         enabled = validAddress)
                 }
             }
-            if (showRemove) SettingsDangerButton("Remove device", onClick = onRemove, enabled = canRemove,
-                icon = Icons.Outlined.LinkOff)
+            if (showRemove) {
+                SettingsDangerButton("Remove ${device.displayName}", onClick = onRemove, enabled = canRemove,
+                    icon = NuvoriIcons.Delete)
+                if (removeHint != null) Text(removeHint, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }
@@ -550,7 +560,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                         style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         SettingsSecondaryButton("Copy link", onClick = { copyLink(state.invitation) },
-                            modifier = Modifier.weight(1f), icon = Icons.Outlined.ContentCopy, fill = false)
+                            modifier = Modifier.weight(1f), icon = NuvoriIcons.Copy, fill = false)
                         SettingsSecondaryButton("Cancel", onClick = viewModel::cancelDevicePairing,
                             modifier = Modifier.weight(1f), fill = false)
                     }
@@ -560,7 +570,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     Text(state.confirmation, style = MaterialTheme.typography.headlineLarge)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         SettingsPrimaryButton("Codes match", onClick = viewModel::approveDevicePairing,
-                            modifier = Modifier.weight(1f), icon = Icons.Outlined.Check, fill = false)
+                            modifier = Modifier.weight(1f), icon = NuvoriIcons.Check, fill = false)
                         SettingsSecondaryButton("Cancel", onClick = viewModel::cancelDevicePairing,
                             modifier = Modifier.weight(1f), fill = false)
                     }
@@ -572,7 +582,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     SettingsSecondaryButton("Cancel", onClick = viewModel::cancelDevicePairing)
                 }
                 "paired", "enrolled_pending" -> {
-                    SettingsPrimaryButton("Done", onClick = viewModel::cancelDevicePairing, icon = Icons.Outlined.Check)
+                    SettingsPrimaryButton("Done", onClick = viewModel::cancelDevicePairing, icon = NuvoriIcons.Check)
                 }
                 else -> {
                     if (state.stage == "failed") TextButton(onClick = viewModel::cancelDevicePairing,
@@ -596,7 +606,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                                 PackageManager.PERMISSION_GRANTED) scanner = true
                             else cameraPermission.launch(Manifest.permission.CAMERA)
-                        }, modifier = Modifier.weight(1f), icon = Icons.Outlined.QrCodeScanner, fill = false)
+                        }, modifier = Modifier.weight(1f), icon = NuvoriIcons.Scan, fill = false)
                     }
                     if (canCreate) SettingsSecondaryButton("Scan Windows QR if the PC cannot reach this phone", onClick = {
                         scanWindowsQr = true
@@ -604,7 +614,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                             PackageManager.PERMISSION_GRANTED) scanner = true
                         else cameraPermission.launch(Manifest.permission.CAMERA)
-                    }, icon = Icons.Outlined.QrCodeScanner)
+                    }, icon = NuvoriIcons.Scan)
                     scanError?.let { StatusBanner(StatusKind.ERROR, it) }
                     if (devices.isEmpty()) {
                         if (permissionDenied) Text("Camera access was denied. Paste the setup link instead.",
@@ -625,12 +635,20 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         }
     }
 
+    val isManager = localDevice != null && localDevice?.deviceId == managerDeviceId
+    val managerName = (memberships + listOfNotNull(localDevice)).firstOrNull { it.deviceId == managerDeviceId }?.displayName
+        ?: "the managing device"
+    val membershipNotice = rememberMembershipNotice(viewModel)
+
+    // A persistent removed/left notice comes before everything else.
+    membershipNotice?.let { MembershipNoticeBanner(it, onDismiss = { dismissMembershipNotice(viewModel, it, context) }) }
+
     // Not paired yet: pairing is the only thing to do, so it comes first.
     if (devices.isEmpty()) addDeviceCard()
 
     // 1. Status and the main action.
     if (devices.isNotEmpty()) DeviceSyncState(syncStatus, connectedCount, activeDeviceCount - 1, waitingCount,
-        lastChecked, onSyncNow = { viewModel.syncDevicesNow() })
+        lastChecked, onSyncNow = { SyncRequests.request(); viewModel.syncDevicesNow() })
 
     // 2. Problems next.
     if (rejected > 0) StatusBanner(kind = StatusKind.ERROR, title = "Changes need attention",
@@ -645,7 +663,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                 SettingsHeading("Devices in this vault", Modifier.weight(1f))
                 Text("$activeDeviceCount of $MAX_ACTIVE_SYNC_DEVICES", style = MaterialTheme.typography.labelMedium)
             }
-            Text("These devices share one vault. Each keeps its own copy and catches up when connected.",
+            Text("Each device keeps its own copy and catches up when connected. $managerName manages the group.",
                 style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(if (showAdvanced) "Hide connection details" else "Show connection details")
@@ -661,16 +679,40 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             }
             devices.forEach { device ->
                 val (lastContact, lastExchange) = viewModel.deviceSyncContact(device.deviceId)
+                val pendingTransfer = authorityTransfer
                 DeviceSyncPeerCard(device = device, isManager = device.deviceId == managerDeviceId,
                     status = peerStatuses[device.deviceId], lastContact = lastContact,
                     lastExchange = lastExchange, progress = viewModel.deviceSyncProgress(device.deviceId),
                     savedAddress = viewModel.deviceSyncAddress(device.deviceId),
-                    canRemove = canRemoveOnlyPeer && localDevice?.deviceId == managerDeviceId,
-                    showRemove = localDevice?.deviceId == managerDeviceId &&
-                        canRemoveOnlyPeer,
+                    // A signed REMOVE cannot be issued while a managing-role transfer is pending.
+                    canRemove = isManager && pendingTransfer == null,
+                    showRemove = isManager,
                     onTryAddress = { viewModel.setDeviceSyncAddress(device.deviceId, it) },
                     onRemove = { removeDeviceId = device.deviceId },
-                    counts = counts.getValue(device.deviceId), advanced = showAdvanced)
+                    counts = counts.getValue(device.deviceId), advanced = showAdvanced,
+                    transferRole = when {
+                        pendingTransfer == null || pendingTransfer.targetDeviceId != device.deviceId -> null
+                        pendingTransfer.accepted -> "Accepted managing role"
+                        else -> "Waiting to accept managing role"
+                    },
+                    removeHint = if (isManager && pendingTransfer != null)
+                        "Cancel the managing-role transfer before removing a device." else null)
+            }
+            val removedDevices = memberships.filter { it.status != MemberStatus.ACTIVE.name && it.deviceId != localDevice?.deviceId }
+            if (removedDevices.isNotEmpty()) HairlineCard(Modifier.fillMaxWidth()) {
+                Column {
+                    removedDevices.forEachIndexed { index, device ->
+                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.hairline)
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Icon(devicePlatformIcon(device), contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                            Text(device.displayName, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            StatusChip(StatusKind.NEUTRAL, "Removed")
+                        }
+                    }
+                }
             }
         }
     }
@@ -695,7 +737,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                         viewModel.setDeviceSyncInterval(option)
                     }, label = { Text(label) }, modifier = Modifier.weight(1f),
                         leadingIcon = if (interval == option) {
-                            { Icon(Icons.Outlined.Check, contentDescription = null,
+                            { Icon(NuvoriIcons.Check, contentDescription = null,
                                 modifier = Modifier.size(FilterChipDefaults.IconSize)) }
                         } else null)
                 }
@@ -713,58 +755,82 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     // 5. Add a device (after the devices people already have).
     if (devices.isNotEmpty()) addDeviceCard()
 
-    // 6. Transfer management.
-    if (devices.isNotEmpty() && (localDevice?.deviceId == managerDeviceId ||
-            authorityTransfer?.targetDeviceId == localDevice?.deviceId)) SettingsSection("Transfer management") {
-        val transfer = authorityTransfer
+    // 6. Managing role: a three-step handoff that every device can follow.
+    val transfer = authorityTransfer
+    if (devices.isNotEmpty() && (isManager || transfer != null)) SettingsSection("Managing role",
+        description = "The managing device adds and removes devices and holds pairing invitations. Vault items sync the same on every device.") {
+        val me = localDevice?.deviceId
+        val targetName = (devices + listOfNotNull(localDevice)).firstOrNull { it.deviceId == transfer?.targetDeviceId }?.displayName
+            ?: "the other device"
+        TransferStepper(when {
+            transfer == null -> TransferStep.OFFER
+            !transfer.accepted -> TransferStep.ACCEPT
+            else -> TransferStep.COMPLETE
+        })
         when {
             transfer == null -> {
-                Text("Transfer this role while both devices can sync. The recipient must accept, then this device completes the handoff.",
+                Text("Choose the device that should take over. It accepts, then this device completes the handoff. Keep both devices syncing.",
                     style = MaterialTheme.typography.bodyMedium)
                 devices.forEach { device ->
-                    SettingsSecondaryButton("Transfer to ${device.displayName}",
+                    SettingsSecondaryButton("Offer to ${device.displayName}", icon = devicePlatformIcon(device),
                         onClick = { transferTargetId = device.deviceId })
                 }
             }
-            localDevice?.deviceId == managerDeviceId -> {
-                val name = devices.firstOrNull { it.deviceId == transfer.targetDeviceId }?.displayName
-                    ?: "the other device"
-                if (transfer.accepted) StatusBanner(kind = StatusKind.SUCCESS,
-                    message = "$name accepted. Sync both devices, then complete the transfer.")
-                else StatusBanner(kind = StatusKind.PROGRESS,
-                    message = "Waiting for $name to accept. Keep both devices syncing.")
+            isManager -> {
+                if (transfer.accepted) StatusBanner(kind = StatusKind.SUCCESS, title = "Complete transfer",
+                    message = "$targetName accepted. Sync both devices, then complete the transfer.")
+                else StatusBanner(kind = StatusKind.PROGRESS, title = "Waiting for $targetName to accept",
+                    message = "Open Devices & sync on $targetName and accept. Keep both devices syncing.")
                 if (transfer.accepted) SettingsPrimaryButton("Complete transfer",
-                    onClick = viewModel::completeAuthorityTransfer)
-                TextButton(onClick = viewModel::cancelAuthorityTransfer,
-                    modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancel transfer") }
+                    onClick = viewModel::completeAuthorityTransfer, icon = NuvoriIcons.Check)
+                SettingsSecondaryButton("Cancel transfer", onClick = viewModel::cancelAuthorityTransfer,
+                    icon = NuvoriIcons.Close)
             }
-            transfer.targetDeviceId == localDevice?.deviceId -> {
-                if (transfer.accepted) StatusBanner(kind = StatusKind.PROGRESS,
-                    message = "You accepted. Waiting for the current managing device to finish the handoff.")
-                else StatusBanner(kind = StatusKind.INFO,
-                    message = "The managing device offered you this role. Both devices must finish syncing before you accept.")
+            transfer.targetDeviceId == me -> {
+                if (transfer.accepted) StatusBanner(kind = StatusKind.PROGRESS, title = "Accepted",
+                    message = "Waiting for $managerName to complete the handoff.")
+                else StatusBanner(kind = StatusKind.INFO, title = "Accept managing role?",
+                    message = "$managerName offered this device the managing role. Both devices must finish syncing before you accept.")
                 if (!transfer.accepted) SettingsPrimaryButton("Accept managing role",
-                    onClick = { acceptTransfer = true })
+                    onClick = { acceptTransfer = true }, icon = NuvoriIcons.Check)
+                // TODO(sync): the membership chain only lets the managing device sign CANCEL_TRANSFER.
+                // A recipient-side decline needs a new signed action or a cancel request to the manager.
+                Text("To decline or cancel, use Cancel transfer on $managerName.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            else -> StatusBanner(kind = StatusKind.INFO,
+                title = if (transfer.accepted) "Handoff in progress" else "Managing role offered",
+                message = if (transfer.accepted) "$targetName accepted. $managerName completes the handoff."
+                    else "$managerName offered the managing role to $targetName. Waiting for it to accept.")
         }
     }
 
-    // 7. Danger zone.
+    // 7. Membership: leave the group, or for the managing device, why it cannot yet.
     if (devices.isNotEmpty()) Card(Modifier.fillMaxWidth(),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = .5f))) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Danger zone", modifier = Modifier.semantics { heading() },
+            Text("Leave the group", modifier = Modifier.semantics { heading() },
                 style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
-            Text("This device keeps its vault copy and starts a separate sync group with new keys. Other devices keep their copies.",
-                style = MaterialTheme.typography.bodyMedium)
-            SettingsDangerButton("Stop sharing on this device", onClick = { leaveGroup = true },
-                icon = Icons.Outlined.LinkOff)
-            if (localDevice?.deviceId != managerDeviceId) Text(
-                "Lost the managing device? Stop sharing here to keep this vault copy, then pair a new empty device from this one.",
-                style = MaterialTheme.typography.bodySmall)
-            if (activeDeviceCount > 2) Text(
-                "Removing another member while the rest stay together is not available yet. Each device can stop sharing and keep its own copy.",
-                style = MaterialTheme.typography.bodySmall)
+            if (isManager) {
+                Text("This device manages the group, so it can't leave yet. Transfer the managing role to another device first.",
+                    style = MaterialTheme.typography.bodyMedium)
+                SettingsDangerButton("Remove this device from the group", onClick = {}, enabled = false,
+                    icon = Icons.Outlined.LinkOff)
+                if (transfer == null) SettingsSecondaryButton("Transfer managing role", onClick = {
+                    if (devices.size == 1) transferTargetId = devices.first().deviceId
+                    else viewModel.notify("Choose a device under Managing role.", StatusKind.INFO)
+                }, icon = NuvoriIcons.Shield)
+                TextButton(onClick = { leaveGroup = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Start a separate group on this device instead", color = MaterialTheme.colorScheme.error)
+                }
+            } else {
+                Text("This device keeps its vault copy and stops syncing. $managerName removes it from the group; no one needs to approve.",
+                    style = MaterialTheme.typography.bodyMedium)
+                SettingsDangerButton("Remove this device from the group", onClick = { leaveGroup = true },
+                    icon = Icons.Outlined.LinkOff)
+                Text("Lost the managing device? Leaving here keeps this vault copy; you can pair a new empty device from this one later.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 
@@ -859,36 +925,45 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             } else { joinLink = null; joinPassword = "" }
         }, enabled = !joining) { Text(if (changeJoinPassword) "Back" else "Cancel") } })
     removeDeviceId?.let { deviceId ->
+        val name = devices.firstOrNull { it.deviceId == deviceId }?.displayName ?: "this device"
         AlertDialog(onDismissRequest = { removeDeviceId = null },
-            title = { Text("Remove this device from sync?") },
-            text = { Text("Both devices keep their current vault data. This device gets new sync keys, and future changes stop syncing with the other device. Finish any waiting changes first. You will also need to pair your watch again.") },
+            title = { Text("Remove $name?") },
+            text = { Text("$name doesn't need to approve. It keeps its own copy of the vault but stops syncing with this group, and sees a notice the next time it reaches any of your devices. The group gets new sync keys.") },
             confirmButton = {
                 TextButton(onClick = {
                     removeDeviceId = null
-                    viewModel.removeOnlyPairedDevice(deviceId)
-                }) { Text("Remove device", color = MaterialTheme.colorScheme.error) }
+                    viewModel.notify("Removing $name…", StatusKind.PROGRESS)
+                    viewModel.removeSyncDevice(deviceId)
+                }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { removeDeviceId = null }) { Text("Cancel") } })
     }
     if (leaveGroup) AlertDialog(onDismissRequest = { leaveGroup = false },
-        title = { Text("Stop sharing on this device?") },
-        text = { Text("This device keeps its current vault and starts a separate sync group with new keys. Other devices keep their copies and continue syncing with each other. Changes waiting to arrive here must finish first. If another device manages the old group, remove this device there later. If this device manages it, the others cannot add or remove members until they start a new group. Pair the watch again for codes.") },
+        title = { Text(if (isManager) "Start a separate group?" else "Remove this device from the group?") },
+        text = { Text(if (isManager)
+            "This device keeps its vault and starts a separate sync group with new keys. The other devices keep their copies, but nobody can add or remove members in the old group until it has a managing device again. Pair the watch again for codes."
+            else "This device keeps its current vault and stops syncing with the group. $managerName removes it the next time they connect; no approval is needed. Changes waiting to arrive here must finish first. Pair the watch again for codes.") },
         confirmButton = { TextButton(onClick = {
             leaveGroup = false
+            MembershipNoticeStore.leaveRequestedAt = System.currentTimeMillis()
+            // For a member this also queues the signed leave request for the managing device.
             viewModel.leaveSyncGroup()
-        }) { Text("Stop sharing", color = MaterialTheme.colorScheme.error) } },
+        }) { Text(if (isManager) "Start separate group" else "Leave group", color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton(onClick = { leaveGroup = false }) { Text("Cancel") } })
-    transferTargetId?.let { targetId -> AlertDialog(onDismissRequest = { transferTargetId = null },
-        title = { Text("Transfer management?") },
-        text = { Text("The paired device must be up to date and accept this role. This device keeps syncing records after the handoff.") },
-        confirmButton = { TextButton(onClick = {
-            transferTargetId = null
-            viewModel.offerAuthorityTransfer(targetId)
-        }) { Text("Offer transfer") } },
-        dismissButton = { TextButton(onClick = { transferTargetId = null }) { Text("Cancel") } }) }
+    transferTargetId?.let { targetId ->
+        val name = devices.firstOrNull { it.deviceId == targetId }?.displayName ?: "the other device"
+        AlertDialog(onDismissRequest = { transferTargetId = null },
+            title = { Text("Offer the managing role to $name?") },
+            text = { Text("Step 1 of 3. $name must be up to date and accept. Then you complete the handoff here. You can cancel at any step. This device keeps syncing items afterwards.") },
+            confirmButton = { TextButton(onClick = {
+                transferTargetId = null
+                viewModel.offerAuthorityTransfer(targetId)
+            }) { Text("Offer") } },
+            dismissButton = { TextButton(onClick = { transferTargetId = null }) { Text("Cancel") } })
+    }
     if (acceptTransfer) AlertDialog(onDismissRequest = { acceptTransfer = false },
         title = { Text("Accept managing role?") },
-        text = { Text("This device will manage enrollment and removal after the current manager completes the signed handoff. Ordinary vault sync continues on every device.") },
+        text = { Text("Step 2 of 3. This device will add and remove devices after $managerName completes the signed handoff. Vault items keep syncing on every device.") },
         confirmButton = { TextButton(onClick = {
             acceptTransfer = false
             viewModel.acceptAuthorityTransfer()

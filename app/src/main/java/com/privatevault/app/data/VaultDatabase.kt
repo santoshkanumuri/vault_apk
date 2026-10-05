@@ -323,6 +323,12 @@ interface VaultDao {
     @Query("SELECT * FROM photos WHERE id = :id")
     suspend fun photo(id: String): VaultPhoto?
 
+    @Query("SELECT * FROM photos")
+    suspend fun allPhotos(): List<VaultPhoto>
+
+    @Query("SELECT id FROM entries")
+    suspend fun entryIds(): List<String>
+
     @Update suspend fun updatePhoto(photo: VaultPhoto)
 
     @Query("UPDATE photos SET isCover = 0 WHERE entryId = :entryId")

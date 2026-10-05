@@ -42,7 +42,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
             } else {
                 StatusBanner(kind = StatusKind.WARNING, title = "Nuvori is not your Autofill service",
                     message = "Choose Nuvori in Android to fill saved logins in supported apps and websites. This replaces your current Autofill provider.")
-                SettingsPrimaryButton("Choose Nuvori autofill", icon = Icons.Outlined.Password, onClick = {
+                SettingsPrimaryButton("Choose Nuvori autofill", icon = NuvoriIcons.Password, onClick = {
                     context.startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE, Uri.parse("package:${context.packageName}")))
                 })
                 Text("Linked native apps and exact HTTPS sites in verified Chrome and Brave releases can offer logins. Supported browser forms can offer Save after you unlock and confirm. The Vault codes tile still works with another provider.",
@@ -52,7 +52,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
         if (android.os.Build.VERSION.SDK_INT >= 34) {
             SettingsSection("Passwords and passkeys",
                 description = "Modern Android apps use Credential Manager. Enable Nuvori there for passwords and passkeys as well.") {
-                SettingsSecondaryButton("Enable passwords and passkeys", icon = Icons.Outlined.Key, onClick = {
+                SettingsSecondaryButton("Enable passwords and passkeys", icon = NuvoriIcons.Passkey, onClick = {
                     runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
                 })
             }

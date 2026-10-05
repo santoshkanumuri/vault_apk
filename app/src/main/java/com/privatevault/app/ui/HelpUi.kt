@@ -160,7 +160,7 @@ internal fun HelpPage(openPage: (String) -> Unit) {
                     verticalAlignment = Alignment.CenterVertically) {
                     Text(item.question, style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.weight(1f))
-                    Icon(if (expanded == index) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    Icon(if (expanded == index) NuvoriIcons.ChevronUp else NuvoriIcons.ChevronDown,
                         contentDescription = null)
                 }
                 if (expanded == index) Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {

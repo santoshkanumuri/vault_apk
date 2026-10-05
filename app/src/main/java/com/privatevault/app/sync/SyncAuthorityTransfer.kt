@@ -42,7 +42,8 @@ private suspend fun VaultDatabase.changeAuthority(identityStore: AndroidDeviceId
         }
         else -> error("Unsupported authority action")
     }
-    require(sync.vaultState()?.let { it.vaultId == vaultId && it.keyEpoch == verified.keyEpoch } == true)
+    // The vault state's epoch is the content key's (always 1); REMOVE raises only the membership epoch.
+    require(sync.vaultState()?.vaultId == vaultId)
     val event = SyncMembershipEvent.sign(vaultId, history.size + 1L, verified.head, action,
         localId, target, "", verified.keyEpoch, identityStore::sign)
     SyncMembershipManager.verify(history + event)

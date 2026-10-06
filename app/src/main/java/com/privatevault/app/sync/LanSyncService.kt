@@ -55,7 +55,8 @@ class LanSyncService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val signals = Channel<Unit>(Channel.CONFLATED)
     private val connections = ConcurrentHashMap.newKeySet<Socket>()
-    private val endpoints = ConcurrentHashMap<String, Endpoint>()
+    private val endpoints = ConcurrentHashMap<String, List<Endpoint>>()
+    @Volatile private var peerBusy = false
     private val discovered = ConcurrentHashMap<String, NsdServiceInfo>()
     private val lastAuthenticated = ConcurrentHashMap<String, Long>()
     private val exchange = Mutex()
@@ -85,6 +86,7 @@ class LanSyncService : Service() {
         }
         private fun connect(network: Network) {
             scope.launch(Dispatchers.Main.immediate) {
+                if (!isLocalWifi(connectivity.getNetworkCapabilities(network))) return@launch
                 val address = preferredWifiAddress(connectivity.getLinkProperties(network)?.linkAddresses
                     ?.map { it.address }.orEmpty()) ?: return@launch
                 if (activeNetwork == null || activeNetwork == network && activeAddress != address) {
@@ -115,7 +117,7 @@ class LanSyncService : Service() {
                     server?.close()
                     connections.forEach { runCatching { it.close() } }
                     connectivity.allNetworks.filter { it != network &&
-                        connectivity.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }
+                        isLocalWifi(connectivity.getNetworkCapabilities(it)) }
                         .forEach(::connect)
                 }
             }
@@ -245,7 +247,14 @@ class LanSyncService : Service() {
                 launch {
                     while (isActive) {
                         val socket = try { listener.accept() } catch (_: java.net.SocketTimeoutException) { continue }
-                        if (!isPrivateAddress(socket.inetAddress) || !exchange.tryLock()) { socket.close(); continue }
+                        if (!isPrivateAddress(socket.inetAddress)) { socket.close(); continue }
+                        if (!exchange.tryLock()) {
+                            socket.use {
+                                runCatching { SyncFrames(socket.getInputStream(), socket.getOutputStream())
+                                    .send(MembershipWire.BUSY.toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME) }
+                            }
+                            continue
+                        }
                         launch {
                             setStatus(DeviceSyncPhase.CONNECTING, "A device answered. Checking that it belongs to your vault.")
                             try { transfer(socket, true) } finally { exchange.unlock() }
@@ -254,6 +263,7 @@ class LanSyncService : Service() {
                 }
                 while (isActive) {
                     var needsRetry = false
+                    peerBusy = false
                     val passStartedAt = android.os.SystemClock.elapsedRealtime()
                     val current = store(this@LanSyncService).snapshot() ?: mirror
                     require(current.vaultId == mirror.vaultId)
@@ -261,73 +271,13 @@ class LanSyncService : Service() {
                         it.status == MemberStatus.ACTIVE.name && it.deviceId != current.localDeviceId
                     }
                     activePeers.forEach { peer ->
-                        if (peer.deviceId in current.clientOnlyPeers) {
-                            if (mutablePeerStatus.value[peer.deviceId] == null)
-                                setPeerStatus(peer.deviceId, DeviceSyncPhase.WAITING,
-                                    "This PC connects to this phone when it syncs.")
-                        } else if (mutablePeerStatus.value[peer.deviceId]?.phase !in setOf(
+                        if (mutablePeerStatus.value[peer.deviceId]?.phase !in setOf(
                                 DeviceSyncPhase.ATTENTION, DeviceSyncPhase.TRANSFERRING))
                             setPeerStatus(peer.deviceId, DeviceSyncPhase.SEARCHING,
                                 "Looking for this device on Wi-Fi.")
                     }
-                    for (info in discovered.values.toList()) {
-                        if (!endpoints.containsKey(info.serviceName)) {
-                            val resolved = resolve(info)
-                            if (resolved == null) {
-                                needsRetry = true
-                                setStatus(DeviceSyncPhase.SEARCHING,
-                                    "Found Nuvori, but its Wi-Fi address is still being resolved.")
-                                continue
-                            }
-                            val addresses = if (android.os.Build.VERSION.SDK_INT >= 34 ||
-                                android.os.Build.VERSION.SDK_INT >= 33 &&
-                                SdkExtensions.getExtensionVersion(android.os.Build.VERSION_CODES.TIRAMISU) >= 7)
-                                resolved.hostAddresses else listOfNotNull(resolved.host)
-                            val peerAddress = preferredWifiAddress(addresses)
-                            if (peerAddress != null && resolved.port in 1024..65535)
-                                endpoints[resolved.serviceName] = Endpoint(peerAddress, resolved.port)
-                            else {
-                                needsRetry = true
-                                setStatus(DeviceSyncPhase.SEARCHING,
-                                    "Found Nuvori, but its Wi-Fi address is unavailable. Retrying discovery.")
-                            }
-                        }
-                    }
-                    for ((name, endpoint) in endpoints.entries.toList()) {
-                        ensureActive()
-                        if (current.peerAddresses.any { (deviceId, address) ->
-                                address == endpoint.address.hostAddress &&
-                                    lastAuthenticated[deviceId]?.let {
-                                        it >= passStartedAt
-                                    } == true
-                            }) continue
-                        // Let either side connect when discovery is one-sided. Stagger the
-                        // higher name so two phones do not repeatedly reject each other.
-                        if (instanceName > name) delay(1_000 + kotlin.random.Random.nextLong(1_000))
-                        exchange.withLock {
-                            val socket = Socket()
-                            connections.add(socket)
-                            try {
-                                setStatus(DeviceSyncPhase.CONNECTING, "Verifying the device found on Wi-Fi.")
-                                network.bindSocket(socket)
-                                socket.connect(InetSocketAddress(endpoint.address, endpoint.port), 5000)
-                                if (!transfer(socket, false)) {
-                                    needsRetry = true
-                                    endpoints.remove(name, endpoint)
-                                }
-                            } catch (failure: Exception) {
-                                needsRetry = true
-                                endpoints.remove(name, endpoint)
-                                setStatus(DeviceSyncPhase.SEARCHING,
-                                    "The Wi-Fi address changed or the connection closed. Looking again.")
-                            } finally { connections.remove(socket); socket.close() }
-                        }
-                    }
                     current.peerAddresses.forEach { (deviceId, hint) ->
-                        // A Windows PC never listens; dialing it would only hold the exchange lock
-                        // while the PC is trying to reconnect for its next batch.
-                        if (deviceId in current.clientOnlyPeers ||
-                            current.members.none { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name } ||
+                        if (current.members.none { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name } ||
                             lastAuthenticated[deviceId]?.let {
                                 it >= passStartedAt
                             } == true)
@@ -335,7 +285,7 @@ class LanSyncService : Service() {
                         val peerAddress = runCatching { android.net.InetAddresses.parseNumericAddress(hint) }
                             .getOrNull() ?: return@forEach
                         if (!isPrivateAddress(peerAddress) || peerAddress.isLinkLocalAddress) return@forEach
-                        // A saved address is a fallback. Discovery may advertise a different port.
+                        // Prefer a confirmed address; discovery remains a fallback if its address or port changed.
                         exchange.withLock {
                             val socket = Socket()
                             connections.add(socket)
@@ -359,18 +309,78 @@ class LanSyncService : Service() {
                             } finally { connections.remove(socket); socket.close() }
                         }
                     }
+                    for (info in discovered.values.toList()) {
+                        if (!endpoints.containsKey(info.serviceName)) {
+                            val resolved = resolve(info)
+                            if (resolved == null) {
+                                needsRetry = true
+                                setStatus(DeviceSyncPhase.SEARCHING,
+                                    "Found Nuvori, but its Wi-Fi address is still being resolved.")
+                                continue
+                            }
+                            val addresses = if (android.os.Build.VERSION.SDK_INT >= 34 ||
+                                android.os.Build.VERSION.SDK_INT >= 33 &&
+                                SdkExtensions.getExtensionVersion(android.os.Build.VERSION_CODES.TIRAMISU) >= 7)
+                                resolved.hostAddresses else listOfNotNull(resolved.host)
+                            val peerAddresses = peerSyncAddresses(addresses)
+                            if (peerAddresses.isNotEmpty() && resolved.port in 1024..65535)
+                                endpoints[resolved.serviceName] = peerAddresses.map { Endpoint(it, resolved.port) }
+                            else {
+                                needsRetry = true
+                                setStatus(DeviceSyncPhase.SEARCHING,
+                                    "Found Nuvori, but its Wi-Fi address is unavailable. Retrying discovery.")
+                            }
+                        }
+                    }
+                    for ((name, candidates) in endpoints.entries.toList()) {
+                        ensureActive()
+                        if (current.peerAddresses.any { (deviceId, address) ->
+                                candidates.any { address == it.address.hostAddress } &&
+                                    lastAuthenticated[deviceId]?.let {
+                                        it >= passStartedAt
+                                    } == true
+                            }) continue
+                        // Let either side connect when discovery is one-sided. Stagger the
+                        // higher name so two phones do not repeatedly reject each other.
+                        if (instanceName > name) delay(1_000 + kotlin.random.Random.nextLong(1_000))
+                        var completed = false
+                        for (endpoint in candidates) {
+                            exchange.withLock {
+                                val socket = Socket()
+                                connections.add(socket)
+                                try {
+                                    setStatus(DeviceSyncPhase.CONNECTING, "Verifying the device found on Wi-Fi.")
+                                    network.bindSocket(socket)
+                                    socket.connect(InetSocketAddress(endpoint.address, endpoint.port), 5000)
+                                    completed = transfer(socket, false)
+                                } catch (failure: Exception) {
+                                    needsRetry = true
+                                    setStatus(DeviceSyncPhase.SEARCHING,
+                                        "The Wi-Fi address changed or the connection closed. Looking again.")
+                                } finally { connections.remove(socket); socket.close() }
+                            }
+                            if (completed) {
+                                endpoints[name] = listOf(endpoint) + candidates.filter { it != endpoint }
+                                break
+                            }
+                        }
+                        if (!completed) {
+                            needsRetry = true
+                            if (!peerBusy) endpoints.remove(name, candidates)
+                        }
+                    }
                     deliverPendingLeave(network)
                     activePeers.forEach { peer ->
-                        if (peer.deviceId !in current.clientOnlyPeers &&
-                            (lastAuthenticated[peer.deviceId] ?: -1L) < passStartedAt &&
+                        if ((lastAuthenticated[peer.deviceId] ?: -1L) < passStartedAt &&
                             mutablePeerStatus.value[peer.deviceId]?.phase in setOf(
                                 DeviceSyncPhase.SEARCHING, DeviceSyncPhase.CONNECTING))
                             setPeerStatus(peer.deviceId, DeviceSyncPhase.WAITING,
                                 "No reply on this check. Check Wi-Fi and try again.")
                     }
                     val interval = syncInterval(this@LanSyncService)
-                    val delayMs = if (needsRetry) retryDelayMs.coerceAtMost(interval) else interval
-                    retryDelayMs = if (needsRetry) (retryDelayMs * 2).coerceAtMost(interval) else 5_000L
+                    val delayMs = if (peerBusy) 5_000L.coerceAtMost(interval)
+                        else if (needsRetry) retryDelayMs.coerceAtMost(interval) else interval
+                    retryDelayMs = if (needsRetry && !peerBusy) (retryDelayMs * 2).coerceAtMost(interval) else 5_000L
                     if (withTimeoutOrNull(delayMs + kotlin.random.Random.nextLong(5000)) { signals.receive() } != null) {
                         // Coalesce a burst of saves (or saves during a running exchange) into one pass.
                         delay(FOLLOW_UP_DEBOUNCE_MS)
@@ -440,6 +450,10 @@ class LanSyncService : Service() {
                 }
             }
             return true
+        } catch (_: LanSyncExchange.PeerBusy) {
+            peerBusy = true
+            if (manualAttempt) manualProgressAt = android.os.SystemClock.elapsedRealtime()
+            setStatus(DeviceSyncPhase.SEARCHING, "A device is finishing another sync. Retrying shortly.")
         } catch (_: PhotoStorageFullException) {
             setStatus(DeviceSyncPhase.ATTENTION, "Photo sync needs more free space. Free space, then tap Sync now.")
             peerId?.let { setPeerStatus(it, DeviceSyncPhase.ATTENTION, "Photo transfer needs more free space.") }
@@ -489,7 +503,7 @@ class LanSyncService : Service() {
         val notice = runCatching { store(this).pendingLeave() }.getOrNull() ?: return
         if (System.currentTimeMillis() - notice.lastAttemptAt < LEAVE_RETRY_MS) return
         runCatching { store(this).recordLeaveAttempt() }
-        val targets = endpoints.values.map { it.address to it.port } + notice.addresses.mapNotNull { hint ->
+        val targets = endpoints.values.flatten().map { it.address to it.port } + notice.addresses.mapNotNull { hint ->
             runCatching { android.net.InetAddresses.parseNumericAddress(hint) }.getOrNull()
                 ?.takeIf { isPrivateAddress(it) && !it.isLinkLocalAddress }?.let { it to notice.port }
         }
@@ -583,7 +597,9 @@ class LanSyncService : Service() {
             }
         }
         discovery = discover
-        nsd.discoverServices(TYPE, NsdManager.PROTOCOL_DNS_SD, discover)
+        if (android.os.Build.VERSION.SDK_INT >= 33)
+            nsd.discoverServices(TYPE, NsdManager.PROTOCOL_DNS_SD, network, mainExecutor, discover)
+        else nsd.discoverServices(TYPE, NsdManager.PROTOCOL_DNS_SD, discover)
     }
 
     @Suppress("DEPRECATION")

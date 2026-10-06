@@ -1,8 +1,8 @@
 # Personal device sync
 
-Decision revised October 4, 2026.
+Decision revised October 5, 2026.
 
-Nuvori is a private vault for one owner using personal devices. The usual setup is a primary phone, perhaps a second phone and tablet, a Windows computer, and a watch for codes. Android membership remains limited to four active devices. Version 2.1.0 added Windows pairing and an initial vault copy over the encrypted connection. Version 2.1.1 syncs later edits and photos with a paired Windows PC over the local network; Windows connects to the phone, never the reverse. The watch is a companion rather than an Android vault member.
+Nuvori is a private vault for one owner using personal devices. The usual setup is a primary phone, perhaps a second phone and tablet, a Windows computer, and a watch for codes. A group supports six active mobile devices and two Windows PCs, including the managing device. Version 2.1.0 added Windows pairing and an initial vault copy over the encrypted connection. Version 2.1.1 syncs later edits and photos with a paired Windows PC over the local network; Version 2.1.2 adds Windows discovery and an incoming sync listener so either device can initiate an exchange. Version 2.1.3 corrects physical Wi-Fi selection, remembered peer routes, busy replies, and failure counting. The watch is a companion rather than an Android vault member.
 
 ## Daily behavior
 
@@ -42,7 +42,7 @@ The lost phone retains its old contents. Devices that still belong to the old gr
 
 Any active Android member can choose "Stop sharing on this device". It keeps its contents and creates a fresh independent group, and disables the old watch relationship. The old group does not learn a signed removal from this local action. Its manager must remove the departed identity later when group removal is implemented. If the manager leaves without transferring first, the others can still edit and sync but cannot manage membership in the old group. A survivor can also start a fresh group from its local copy and enroll a new empty phone. With two members, the existing peer-removal button uses the same local split.
 
-For groups with three or four members, the manager must be able to remove another device while keeping the survivors together. This requires a signed removal, fresh random group keys, authenticated delivery only to survivors, and rejection of removed identities. Updated peers must apply membership changes before exchanging more record data. Offline survivors need a defined path for publishing legitimate edits made under an older key epoch. The manager should transfer authority before leaving if the old group must continue accepting membership changes.
+For groups with three or more members, the manager must be able to remove another device while keeping the survivors together. This requires a signed removal, fresh random group keys, authenticated delivery only to survivors, and rejection of removed identities. Updated peers must apply membership changes before exchanging more record data. Offline survivors need a defined path for publishing legitimate edits made under an older key epoch. The manager should transfer authority before leaving if the old group must continue accepting membership changes.
 
 Self-detach and committed group removal are different states. If the user erases local data before a leave request reaches the manager, the app cannot promise to send it later using credentials it has erased. Either acknowledge removal first or explain that the owner must remove the device on the manager. Retaining a signed leave request requires an explicit bounded outbox design.
 

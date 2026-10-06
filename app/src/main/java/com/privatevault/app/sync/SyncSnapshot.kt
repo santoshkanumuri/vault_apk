@@ -44,6 +44,7 @@ class SyncSnapshot(private val context: Context, private val database: VaultData
     suspend fun export(output: OutputStream, localKey: ByteArray, pairingKey: ByteArray,
         joiningMember: SyncMembershipEntity, windowsPeer: Boolean = false): SyncMembershipEventEntity? {
         require(pairingKey.size == 32)
+        val windowsIds = LanSyncService.store(context).snapshot()?.clientOnlyPeers.orEmpty()
         val staged = File.createTempFile("sync-enrollment-", ".bin", context.cacheDir)
         val stagingCipher = if (windowsPeer) {
             TinkConfig.register()
@@ -67,9 +68,10 @@ class SyncSnapshot(private val context: Context, private val database: VaultData
                             existing.identityPublicKey == joiningMember.identityPublicKey) {
                             "Enrolled device identity changed or was removed"
                         }
-                        require(existing != null || members.count { it.status == MemberStatus.ACTIVE.name } < MAX_ACTIVE_SYNC_DEVICES) {
-                            "This vault already has $MAX_ACTIVE_SYNC_DEVICES active Android devices"
-                        }
+                        requireDeviceCapacity(members.filter { it.status == MemberStatus.ACTIVE.name }
+                            .mapTo(hashSetOf()) { it.deviceId },
+                            windowsIds,
+                            joiningMember.deviceId, windowsPeer)
                         val identityStore = AndroidDeviceIdentityStore(context)
                         val identity = identityStore.getOrCreate()
                         val history = database.syncDao().membershipEvents(vaultId)
@@ -129,7 +131,9 @@ class SyncSnapshot(private val context: Context, private val database: VaultData
         expectedVaultId: String, localDeviceId: String, approvedPeer: DeviceIdentity): PreparedSyncSnapshot {
         require(pairingKey.size == 32)
         val data = DataInputStream(input)
-        require(ByteArray(MAGIC.size).also(data::readFully).contentEquals(MAGIC)) { "Unsupported sync snapshot" }
+        val magic = ByteArray(MAGIC.size).also(data::readFully)
+        if (magic.contentEquals(SNAPSHOT_FAILURE)) throw readSnapshotFailure(data)
+        require(magic.contentEquals(MAGIC)) { "Unsupported sync snapshot" }
         val nonce = ByteArray(12).also(data::readFully)
         val size = data.readInt()
         require(size in 16..MAX_METADATA + 16) { "Sync snapshot metadata is too large" }

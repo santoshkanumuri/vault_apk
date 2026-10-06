@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -432,6 +433,13 @@ private fun PairingStep(number: Int, title: String, detail: String) {
 internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) -> Unit,
     joiningExisting: Boolean = false) {
     val state by viewModel.devicePairingState.collectAsStateWithLifecycle()
+    // A screen timeout locks the vault, and locking cancels pairing while the other device connects.
+    val pairingView = LocalView.current
+    val pairingActive = state.stage in setOf("offering", "connecting", "confirm", "transferring")
+    DisposableEffect(pairingActive) {
+        pairingView.keepScreenOn = pairingActive
+        onDispose { pairingView.keepScreenOn = false }
+    }
     val memberships by viewModel.pairedDevices.collectAsStateWithLifecycle()
     val localDevice by viewModel.localSyncDevice.collectAsStateWithLifecycle()
     val canRemoveOnlyPeer by viewModel.canRemoveOnlyPeer.collectAsStateWithLifecycle()
@@ -663,7 +671,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                 SettingsHeading("Devices in this vault", Modifier.weight(1f))
                 Text("$activeDeviceCount of $MAX_ACTIVE_SYNC_DEVICES", style = MaterialTheme.typography.labelMedium)
             }
-            Text("Each device keeps its own copy and catches up when connected. $managerName manages the group.",
+            Text("Up to 6 mobile devices and 2 Windows PCs share this vault. Each keeps its own copy and catches up when connected. $managerName manages the group.",
                 style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(if (showAdvanced) "Hide connection details" else "Show connection details")

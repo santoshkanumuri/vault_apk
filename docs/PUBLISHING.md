@@ -1,6 +1,6 @@
 # Release builds and downloads
 
-The phone release is version 2.1.1, version code 52, package `com.application.private_vault`. Use the existing release key to keep updates installable over earlier releases.
+The phone release is version 2.1.3, version code 54, package `com.application.private_vault`. Use the existing release key to keep updates installable over earlier releases.
 
 ## Signing setup
 
@@ -20,7 +20,7 @@ On macOS or Linux, use `sh gradlew` with the same tasks.
 
 Build the watch companion separately. It uses version 2.1.1, code 360011:
 
-For each new Google Play upload, update `versionCode` in `wear/build.gradle.kts` to an unused, higher number and rebuild. Codes up to 360010 were used by earlier releases, so this release uses 360011. `versionName` is the displayed label; this release uses 2.1.1 to match the phone. Renaming an APK or AAB does not change its embedded version. See [Android app versioning](https://developer.android.com/studio/publish/versioning).
+For each new Google Play upload, update `versionCode` in `wear/build.gradle.kts` to an unused, higher number and rebuild. Codes up to 360010 were used by earlier releases, so this watch release uses 360011. `versionName` is the displayed label; the watch stays at 2.1.1 with the phone at 2.1.3. Renaming an APK or AAB does not change its embedded version. See [Android app versioning](https://developer.android.com/studio/publish/versioning).
 
 ```powershell
 .\gradlew.bat :watchcommon:test :wear:testDebugUnitTest :wear:lintRelease :wear:assembleRelease :wear:bundleRelease --console=plain
@@ -48,11 +48,11 @@ Run `:app:connectedDebugAndroidTest` with a test device connected. Check autofil
 
 ## Keep release files
 
-Copy the verified outputs to `downloads/nuvori-v2.1.1-phone.apk` and `downloads/nuvori-v2.1.1-phone.aab`. Archive the matching `mapping.txt` as `downloads/nuvori-v2.1.1-phone-mapping.zip` to decode crash reports after build outputs are cleaned. Keep the current phone and watch APKs and AABs in `downloads/` and remove superseded versions.
+Copy the verified outputs to `downloads/nuvori-v2.1.3-phone.apk` and `downloads/nuvori-v2.1.3-phone.aab`. Archive the matching `mapping.txt` as `downloads/nuvori-v2.1.3-phone-mapping.zip` to decode crash reports after build outputs are cleaned. Keep the current phone and watch APKs and AABs in `downloads/`.
 
 Keep the watch outputs as `downloads/nuvori-v2.1.1-watch.apk`, `downloads/nuvori-v2.1.1-watch.aab`, and `downloads/nuvori-v2.1.1-watch-mapping.zip`. Each mapping archive must match its own APK and AAB.
 
-The delivered 2.1.1 packages are kept only in `downloads/`. After verification and copying the packages and mappings, `:app:clean :wear:clean :watchcommon:clean` cleared module build outputs, including debug and test packages. Build-output paths above are recreated when you build again. Verification reports are retained in `build/release-2.1.1-verification/`.
+The 2.1.3 phone packages are retained in `downloads/` alongside 2.1.2 and earlier releases and the 2.1.1 watch companion. Module build outputs remain available. Verification reports are retained in `build/release-2.1.3-verification/`.
 
 Refresh `downloads/SHA256SUMS.txt` to list only release files actually present:
 

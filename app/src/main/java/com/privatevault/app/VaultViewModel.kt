@@ -724,6 +724,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     val applied = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         lockedSyncStore.applyQueued(db, syncKey)
                     }
+                    if (applied > 0) runCatching {
+                        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
+                    }
                     if (!photoWaiting && lockedSyncStore.missingPhotos().isNotEmpty() && !backgrounded)
                         runCatching { com.privatevault.app.sync.LanSyncService.syncNow(getApplication()) }
                     if (database === db && _status.value is VaultStatus.Unlocked &&
@@ -808,9 +811,17 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         if (remaining <= 0) { lock(LockReason.INACTIVITY); return }
         inactivityJob = viewModelScope.launch {
             delay(remaining)
-            lock(LockReason.INACTIVITY)
+            // Locking cancels pairing, which closes the QR listener while the other device is still
+            // scanning or receiving. Pairing has its own two-minute expiry, so it counts as activity.
+            if (devicePairingActive()) {
+                lastActivityElapsed = android.os.SystemClock.elapsedRealtime()
+                scheduleInactivity()
+            } else lock(LockReason.INACTIVITY)
         }
     }
+
+    private fun devicePairingActive() =
+        devicePairing.state.value.stage in setOf("offering", "connecting", "confirm", "transferring")
 
     fun onAppBackgrounded() {
         backgrounded = true

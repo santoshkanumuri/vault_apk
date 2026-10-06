@@ -250,7 +250,7 @@ internal class LockedSyncStore(private val context: Context,
                 else mirror.lastExchangeAt)).toByteArray(Charsets.UTF_8))
     }
 
-    /** Windows peers only connect out; this device never dials them. */
+    /** Platform metadata for enrollment limits. Every platform can accept sync connections. */
     @Synchronized fun recordPeerPlatform(deviceId: String, platform: String) {
         val mirror = requireNotNull(snapshot())
         require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })

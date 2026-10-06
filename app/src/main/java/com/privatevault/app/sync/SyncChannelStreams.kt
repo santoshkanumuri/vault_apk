@@ -42,6 +42,38 @@ internal class SyncChannelOutput(private val channel: EncryptedSyncChannel) : Ou
         try { flush(); channel.send(byteArrayOf()) }
         finally { closed = true; buffer.fill(0) }
     }
+
+    /**
+     * Ends a failed transfer without the normal end frame, so the receiver cannot mistake it for
+     * a short copy. Before any data was sent, the receiver gets [SNAPSHOT_FAILURE] and [reason].
+     */
+    fun abort(reason: String) {
+        if (closed) return
+        closed = true
+        buffer.fill(0)
+        if (total > 0 || used > 0) return
+        used = 0
+        channel.send(SNAPSHOT_FAILURE + reason.take(240).toByteArray(Charsets.UTF_8))
+        channel.send(byteArrayOf())
+    }
+}
+
+/** Sent in place of a snapshot's magic when the sending phone could not prepare the copy. */
+internal val SNAPSHOT_FAILURE = "NUVFAIL1".toByteArray(Charsets.US_ASCII)
+
+internal class PeerSnapshotFailure(reason: String) : Exception(reason)
+
+/** Reads the rest of a failure report after [SNAPSHOT_FAILURE] (at most 1 KiB of text). */
+internal fun readSnapshotFailure(input: InputStream): PeerSnapshotFailure {
+    val bytes = ByteArray(1024)
+    var count = 0
+    while (count < bytes.size) {
+        val read = input.read(bytes, count, bytes.size - count)
+        if (read < 0) break
+        count += read
+    }
+    return PeerSnapshotFailure(String(bytes, 0, count, Charsets.UTF_8).filter { !it.isISOControl() }.take(240)
+        .ifBlank { "The other device could not prepare the vault copy" })
 }
 
 internal class SyncChannelInput(private val channel: EncryptedSyncChannel) : InputStream() {

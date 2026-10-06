@@ -177,7 +177,7 @@ class SyncSnapshotTest {
     }
 
     @Test
-    fun membershipAllowsFourActiveDevicesAndReusesRevokedSlot() = runBlocking {
+    fun membershipAllowsEightActiveDevicesAndReusesRevokedSlot() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val database = Room.inMemoryDatabaseBuilder(context, VaultDatabase::class.java).build()
         try {
@@ -187,10 +187,11 @@ class SyncSnapshotTest {
                     "Device $number", "public-$number", status, "device-1", number.toLong(), 1)))
             (1..MAX_ACTIVE_SYNC_DEVICES).forEach { member(it) }
             assertEquals(MAX_ACTIVE_SYNC_DEVICES, sync.activeMembershipCount("vault"))
-            assertTrue(runCatching { member(5) }.isFailure)
-            assertNull(sync.membership("vault", "device-5"))
+            val extra = MAX_ACTIVE_SYNC_DEVICES + 1
+            assertTrue(runCatching { member(extra) }.isFailure)
+            assertNull(sync.membership("vault", "device-$extra"))
             member(2, MemberStatus.REVOKED)
-            member(5)
+            member(extra)
             assertEquals(MAX_ACTIVE_SYNC_DEVICES, sync.activeMembershipCount("vault"))
         } finally { database.close() }
     }

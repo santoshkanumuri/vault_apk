@@ -1,6 +1,8 @@
 # Android sync implementation steps
 
-Updated: September 27, 2026.
+Updated: October 5, 2026.
+
+Version 2.1.2 supersedes the earlier four-device limit with six mobile devices and two Windows PCs. Windows now discovers and accepts peer connections. Android can connect to Windows, and received changes prompt an applied-progress update. Version 2.1.3 fixes route selection and retries after pairing. See [2.1.3 release notes](docs/RELEASE-2.1.3.md) for verification and remaining physical network checks.
 
 Status: implementation plan. The remaining work described here has not been completed by writing this document.
 

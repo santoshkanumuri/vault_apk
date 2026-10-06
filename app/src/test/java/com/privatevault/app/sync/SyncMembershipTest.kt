@@ -45,11 +45,11 @@ class SyncMembershipTest {
         assertTrue(runCatching { SyncMembershipManager.verify(listOf(genesis, add.copy(subjectPublicKey = managerKey))) }.isFailure)
     }
 
-    @Test fun fourActiveMembersIsTheLimitAndRevocationFreesOneSlot() {
+    @Test fun eightActiveMembersIsTheLimitAndRevocationFreesOneSlot() {
         val genesis = SyncMembershipEvent.sign("vault", 1, GENESIS_HASH, MembershipAction.GENESIS,
             "manager", "manager", managerKey, 1) { DeviceIdentityCrypto.sign(managerSeed, it) }
         val events = mutableListOf(genesis)
-        repeat(3) { index ->
+        repeat(MAX_ACTIVE_SYNC_DEVICES - 1) { index ->
             val publicKey = Base64.getUrlEncoder().withoutPadding().encodeToString(
                 DeviceIdentityCrypto.publicKey(ByteArray(32) { (index + 3).toByte() }))
             events += SyncMembershipEvent.sign("vault", events.size + 1L, events.last().hash,
@@ -57,20 +57,21 @@ class SyncMembershipTest {
                 DeviceIdentityCrypto.sign(managerSeed, it)
             }
         }
-        val fifth = SyncMembershipEvent.sign("vault", 5, events.last().hash,
-            MembershipAction.ADD, "manager", "fifth", memberKey, 1) {
+        val extra = SyncMembershipEvent.sign("vault", events.size + 1L, events.last().hash,
+            MembershipAction.ADD, "manager", "extra", memberKey, 1) {
             DeviceIdentityCrypto.sign(managerSeed, it)
         }
-        assertTrue(runCatching { SyncMembershipManager.verify(events + fifth) }.isFailure)
-        val removal = SyncMembershipEvent.sign("vault", 5, events.last().hash,
+        assertEquals(MAX_ACTIVE_SYNC_DEVICES, SyncMembershipManager.verify(events).members.size)
+        assertTrue(runCatching { SyncMembershipManager.verify(events + extra) }.isFailure)
+        val removal = SyncMembershipEvent.sign("vault", events.size + 1L, events.last().hash,
             MembershipAction.REMOVE, "manager", "member-0", "", 2) {
             DeviceIdentityCrypto.sign(managerSeed, it)
         }
-        val replacement = SyncMembershipEvent.sign("vault", 6, removal.hash,
-            MembershipAction.ADD, "manager", "fifth", memberKey, 2) {
+        val replacement = SyncMembershipEvent.sign("vault", events.size + 2L, removal.hash,
+            MembershipAction.ADD, "manager", "extra", memberKey, 2) {
             DeviceIdentityCrypto.sign(managerSeed, it)
         }
-        assertEquals(4, SyncMembershipManager.verify(events + removal + replacement).members
+        assertEquals(MAX_ACTIVE_SYNC_DEVICES, SyncMembershipManager.verify(events + removal + replacement).members
             .count { it.status == MemberStatus.ACTIVE.name })
     }
 

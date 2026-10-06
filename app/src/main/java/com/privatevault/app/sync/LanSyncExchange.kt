@@ -1,6 +1,8 @@
 package com.privatevault.app.sync
 
+import androidx.annotation.Keep
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.privatevault.app.data.SyncMembershipEventEntity
 import com.privatevault.app.data.SyncOperationEntity
 import java.security.SecureRandom
@@ -10,6 +12,7 @@ import javax.crypto.spec.SecretKeySpec
 
 /** The random probe identifies a paired peer without advertising vault or device IDs. */
 internal object LanSyncExchange {
+    class PeerBusy : Exception("The device is finishing another sync")
     class BatchLimitReached : Exception("More changes remain after this sync pass")
     /** A verified, signed REMOVE of this device arrived. The caller leaves the group locally. */
     class RemovedFromGroup(val notice: RemovalNotice.Removed) : Exception("This device was removed from the sync group")
@@ -17,7 +20,9 @@ internal object LanSyncExchange {
     class MembershipCaughtUp : Exception("Sync group changed; reconnecting")
     /** This server answered a leave request or sent a removal notice; no sync happened. */
     class MembershipMessageServed(val reply: String) : Exception("Membership message answered")
-    private data class PhotoRequest(val hash: String, val offset: Long)
+    /** Kept for R8: Windows reads `hash` and `offset`. 2.1.x release phones sent `a` and `b`. */
+    @Keep private data class PhotoRequest(@SerializedName(value = "hash", alternate = ["a"]) val hash: String,
+        @SerializedName(value = "offset", alternate = ["b"]) val offset: Long)
     /** Wire limits shared with Windows (`lan_sync.rs` MAX_ROUNDS / MAX_BATCH_OPERATIONS). */
     internal const val MAX_ROUNDS = 32
     internal const val MAX_BATCH = 100
@@ -63,6 +68,7 @@ internal object LanSyncExchange {
             require(mirror.members.count { it.status == MemberStatus.ACTIVE.name } in 2..MAX_ACTIVE_SYNC_DEVICES)
             secret = currentSecret
             challenge = frames.receive(MembershipWire.CONTROL_FRAME)
+            if (challenge.contentEquals(MembershipWire.BUSY.toByteArray(Charsets.US_ASCII))) throw PeerBusy()
             require(challenge.size == 32)
             frames.send(encoder.encodeToString(TransportEpochs.probeProof(secret, challenge))
                 .toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME)

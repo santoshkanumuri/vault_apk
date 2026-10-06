@@ -264,7 +264,7 @@ abstract class SyncDao {
         val previous = membership(membership.vaultId, membership.deviceId)
         if (membership.status == MemberStatus.ACTIVE.name && previous?.status != MemberStatus.ACTIVE.name) {
             require(activeMembershipCount(membership.vaultId) < MAX_ACTIVE_SYNC_DEVICES) {
-                "This vault already has $MAX_ACTIVE_SYNC_DEVICES active Android devices"
+                "This vault already has $MAX_ACTIVE_SYNC_DEVICES active devices"
             }
         }
         saveMembership(membership)

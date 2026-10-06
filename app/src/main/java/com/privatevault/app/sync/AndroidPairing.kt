@@ -53,25 +53,26 @@ internal data class PairingInvitation(val address: String, val port: Int, val se
     }
 }
 
-internal data class ReversePairingInvitation(val address: String, val port: Int,
+internal data class ReversePairingInvitation(val addresses: List<String>, val port: Int,
     val session: String, val code: String) {
     companion object {
         fun decode(value: String): ReversePairingInvitation {
-            require(value.length <= 2048 && value.startsWith("nuvori-pair-reverse://v1/")) {
+            require(value.length <= 4096 && value.startsWith("nuvori-pair-reverse://v2/")) {
                 "Invalid Windows pairing QR"
             }
             val json = JsonParser.parseString(Base64.getUrlDecoder()
-                .decode(value.removePrefix("nuvori-pair-reverse://v1/"))
+                .decode(value.removePrefix("nuvori-pair-reverse://v2/"))
                 .toString(Charsets.UTF_8)).asJsonObject
-            val result = ReversePairingInvitation(json.get("address").asString,
+            val result = ReversePairingInvitation(json.getAsJsonArray("addresses").map { it.asString },
                 json.get("port").asInt, json.get("session").asString, json.get("code").asString)
             require(result.port in 1024..65535 && result.session.length in 1..128 &&
                 result.code.length == 24 && result.code.all { it in '0'..'9' }) {
                 "Invalid Windows pairing QR"
             }
-            require(InetAddresses.parseNumericAddress(result.address).let {
-                isPrivateAddress(it) && !it.isLinkLocalAddress
-            }) { "Invalid Windows pairing QR" }
+            require(result.addresses.size in 1..16 && result.addresses.distinct().size == result.addresses.size &&
+                result.addresses.all { value -> InetAddresses.parseNumericAddress(value).let {
+                    isPrivateAddress(it) && it.address.size == 4 && !it.isLinkLocalAddress
+                } }) { "Invalid Windows pairing QR" }
             return result
         }
     }
@@ -107,7 +108,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                 } else null
                 listener = server
                 val random = SecureRandom()
-                val invitation = PairingInvitation(reverse?.address ?: address.hostAddress!!,
+                val invitation = PairingInvitation(reverse?.addresses?.first() ?: address.hostAddress!!,
                     reverse?.port ?: requireNotNull(server).localPort,
                     reverse?.session ?: UUID.randomUUID().toString(), vaultId,
                     reverse?.code ?: CharArray(24) { ('0'.code + random.nextInt(10)).toChar() }.concatToString())
@@ -121,10 +122,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                     val socket = if (reverse == null) {
                         requireNotNull(server).soTimeout = (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1).toInt()
                         server.accept()
-                    } else Socket().apply {
-                        network.bindSocket(this)
-                        connect(InetSocketAddress(InetAddresses.parseNumericAddress(reverse.address), reverse.port), 10_000)
-                    }
+                    } else connectReverse(network, reverse)
                     connection = socket
                     try {
                         socket.use {
@@ -140,10 +138,10 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                     confirm(channel, result.confirmation)
                                     require(android.os.SystemClock.elapsedRealtime() < deadline) { "Pairing expired" }
                                     socket.soTimeout = 300_000
-                                    val existing = database.syncDao().membership(vaultId, result.peer.deviceId)
-                                    require(existing != null || database.syncDao().activeMembershipCount(vaultId) < MAX_ACTIVE_SYNC_DEVICES) {
-                                        "This vault already has $MAX_ACTIVE_SYNC_DEVICES active Android devices"
-                                    }
+                                    requireDeviceCapacity(database.syncDao().memberships(vaultId)
+                                        .filter { it.status == MemberStatus.ACTIVE.name }.mapTo(hashSetOf()) { it.deviceId },
+                                        LanSyncService.store(context).snapshot()?.clientOnlyPeers.orEmpty(),
+                                        result.peer.deviceId, result.peerPlatform == "windows")
                                     val member = SyncMembershipEntity.from(DeviceMembership(vaultId, result.peer.deviceId,
                                         if (result.peerPlatform == "windows") "Windows device" else "Android device",
                                         result.peer.publicKeyBase64Url, MemberStatus.ACTIVE, identity.deviceId,
@@ -151,11 +149,18 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                         SyncMembershipManager.verify(database.syncDao().membershipEvents(vaultId)
                                             .map { it.toEvent() }).keyEpoch))
                                     mutableState.value = PairingUiState("transferring", message = "Sending the encrypted vault copy…")
-                                    val admission = SyncChannelOutput(channel).use { output ->
+                                    val output = SyncChannelOutput(channel)
+                                    val admission = try {
                                         SyncSnapshot(context, database, EncryptedPhotoStore(context))
                                             .export(output, key, result.key, member,
                                                 windowsPeer = result.peerPlatform == "windows")
+                                    } catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (failure: Exception) {
+                                        // Without this the receiver sees a clean, empty copy and reports a read error.
+                                        runCatching { output.abort(exportFailureReason(failure)) }
+                                        throw ExportFailure(failure)
                                     }
+                                    output.close()
                                     require(channel.receive().contentEquals("ready".toByteArray())) { "Enrollment was not prepared" }
                                     ensureActive()
                                     if (admission != null) database.withTransaction {
@@ -167,6 +172,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                     require(channel.receive().contentEquals("committed".toByteArray()))
                                     runCatching {
                                         LanSyncService.store(context).publish(database)
+                                        LanSyncService.store(context).recordPeerPlatform(result.peer.deviceId, result.peerPlatform)
                                         LanSyncService.store(context).recordPeerAddress(result.peer.deviceId,
                                             socket.inetAddress.hostAddress!!)
                                     }
@@ -296,17 +302,49 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
 
     private fun wifi(): Pair<Network, InetAddress> {
         val manager = context.getSystemService(ConnectivityManager::class.java)
-        for (network in manager.allNetworks) {
-            if (manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true) continue
+        for (network in (listOfNotNull(manager.activeNetwork) + manager.allNetworks).distinct()) {
+            if (!isLocalWifi(manager.getNetworkCapabilities(network))) continue
             val address = preferredWifiAddress(manager.getLinkProperties(network)?.linkAddresses
                 ?.map { it.address }.orEmpty()) ?: continue
             return network to address
         }
         error("Connect to Wi-Fi to pair")
     }
+
+    private suspend fun connectReverse(network: Network, invitation: ReversePairingInvitation): Socket {
+        var lastFailure: Exception = ConnectException("No Windows address answered")
+        for (address in invitation.addresses) {
+            currentCoroutineContext().ensureActive()
+            val socket = Socket()
+            connection = socket
+            try {
+                network.bindSocket(socket)
+                socket.connect(InetSocketAddress(InetAddresses.parseNumericAddress(address), invitation.port), 2_000)
+                return socket
+            } catch (failure: Exception) {
+                socket.close()
+                lastFailure = failure
+            }
+        }
+        throw lastFailure
+    }
+}
+
+/** Marks a failure while this phone prepared the vault copy, so the message names this phone. */
+internal class ExportFailure(override val cause: Exception) : Exception(cause.message, cause)
+
+/** The app's own short requirement messages are safe to show; others are named by type only. */
+internal fun exportFailureReason(failure: Exception): String {
+    val text = failure.message
+    val own = (failure is IllegalArgumentException || failure is IllegalStateException) &&
+        text != null && text.length < 160 && text != "Failed requirement." &&
+        text != "Required value was null." && text != "Check failed."
+    return if (own) text!! else "The phone could not prepare the vault copy (${failure.javaClass.simpleName})"
 }
 
 private fun pairingFailure(failure: Exception, stage: String): String = when {
+    failure is ExportFailure -> "This phone could not send the vault copy: ${exportFailureReason(failure.cause)}"
+    failure is PeerSnapshotFailure -> "The other phone could not send the vault copy: ${failure.message}"
     failure.message == "Join from an empty vault" ->
         "This phone already has vault items. Pairing needs an empty vault; use Sync now if these phones are already paired."
     failure.message == "This vault is already paired" ->
@@ -315,13 +353,19 @@ private fun pairingFailure(failure: Exception, stage: String): String = when {
     failure.message?.startsWith("The master passwords do not match") == true -> failure.message!!
     failure.message == "Invalid pairing link" || failure.message == "Pair using a reachable local network" ->
         "The QR is not a valid local pairing invitation. Generate a new QR on the other phone."
-    failure is ConnectException || failure is java.net.NoRouteToHostException ->
-        "QR read, but this device cannot reach the other device on the local network. Check the network route and retry."
+    // Refused means the other phone answered but had stopped offering, usually because it locked.
+    failure is ConnectException && failure.message?.contains("ECONNREFUSED") == true ->
+        "QR read, but the other phone stopped offering pairing. Keep its pairing screen open and unlocked, then scan a new QR."
+    failure is ConnectException || failure is java.net.NoRouteToHostException ||
+        (failure is SocketTimeoutException && stage == "connecting") ->
+        "QR read, but this phone cannot reach the other phone. Put both on the same Wi-Fi network (not a guest network) and check that the router allows devices to connect to each other."
     failure is SocketTimeoutException ->
         "The $stage step timed out. Keep both devices unlocked and retry with a new QR."
     failure is EOFException ->
         "The $stage connection closed on the other phone. Check its pairing message and retry."
-    failure.message?.contains("active Android devices") == true ||
+    failure.message?.contains("active devices") == true ||
+        failure.message?.contains("active Windows devices") == true ||
+        failure.message?.contains("active mobile devices") == true ||
         failure.message?.contains("sync needs recovery") == true -> failure.message!!
     else -> "Pairing stopped during $stage. Check the other phone's message and retry with a new QR."
 }
@@ -330,6 +374,14 @@ internal fun isPrivateAddress(address: InetAddress): Boolean = !address.isLoopba
     (address.isSiteLocalAddress || address.isLinkLocalAddress ||
         (address.address.size == 16 && address.address[0].toInt() and 0xfe == 0xfc))
 
+internal fun isLocalWifi(capabilities: NetworkCapabilities?): Boolean =
+    capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
+        !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+
 internal fun preferredWifiAddress(addresses: List<InetAddress>): InetAddress? =
     addresses.firstOrNull { it.address.size == 4 && it.isSiteLocalAddress } ?:
         addresses.firstOrNull { isPrivateAddress(it) && !it.isLinkLocalAddress }
+
+internal fun peerSyncAddresses(addresses: List<InetAddress>): List<InetAddress> =
+    addresses.filter { isPrivateAddress(it) && !it.isLinkLocalAddress }
+        .distinct().sortedBy { if (it.address.size == 4) 0 else 1 }.take(16)

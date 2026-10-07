@@ -22,8 +22,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 29
         targetSdk = 36
-        versionCode = 54
-        versionName = "2.1.3"
+        versionCode = 56
+        versionName = "2.1.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

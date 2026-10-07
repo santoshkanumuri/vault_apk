@@ -2,7 +2,7 @@
 
 Decision revised October 5, 2026.
 
-Nuvori is a private vault for one owner using personal devices. The usual setup is a primary phone, perhaps a second phone and tablet, a Windows computer, and a watch for codes. A group supports six active mobile devices and two Windows PCs, including the managing device. Version 2.1.0 added Windows pairing and an initial vault copy over the encrypted connection. Version 2.1.1 syncs later edits and photos with a paired Windows PC over the local network; Version 2.1.2 adds Windows discovery and an incoming sync listener so either device can initiate an exchange. Version 2.1.3 corrects physical Wi-Fi selection, remembered peer routes, busy replies, and failure counting. The watch is a companion rather than an Android vault member.
+Nuvori is a private vault for one owner using personal devices. The usual setup is a primary phone, perhaps a second phone and tablet, a Windows computer, and a watch for codes. A group supports six active mobile devices and two Windows PCs, including the managing device. Version 2.1.0 added Windows pairing and an initial vault copy over the encrypted connection. Version 2.1.1 syncs later edits and photos with a paired Windows PC over the local network; Version 2.1.2 adds Windows discovery and an incoming sync listener so either device can initiate an exchange. Version 2.1.3 corrects physical Wi-Fi selection, remembered peer routes, busy replies, and failure counting. Version 2.1.4 keeps pairing open while the other device connects, shows the phone's reason when a vault copy fails, and fixes photo sync with Windows in release builds. The watch is a companion rather than an Android vault member.
 
 ## Daily behavior
 
@@ -13,6 +13,14 @@ The vault ID identifies a sync group. Each installation has its own device ID an
 The interface must distinguish saved locally, received by a peer, and applied by a peer. A missing managing phone blocks membership changes and transfer, but does not block ordinary edits or peer sync. A notification and Android's background restrictions still affect automatic delivery.
 
 ## Passwords and pairing
+
+### Wi-Fi and hotspot connections in 2.1.5
+
+Pairing and later sync both select a local route for the peer's address. A phone hosting a hotspot can use its hotspot interface even while it has an upstream Wi-Fi connection. The sync listener accepts connections across local interfaces and does not depend on a Wi-Fi client callback. Discovery failures leave the listener and saved-address checks running.
+
+Matching-code confirmation has its own two-minute window on Android and Windows. Expiry produces a visible failure. A connection timeout and a timeout after the secure handshake starts now have different messages.
+
+The reported initial pairing succeeded after switching to a hotspot. That points to reachability restrictions on the original Wi-Fi, but does not establish which router setting caused them. The later hotspot sync report exposed the app's Wi-Fi-only routing assumption. [Release 2.1.5 checks](RELEASE-2.1.5.md) distinguish automated verification from the physical hotspot check still needed.
 
 The product target is one user-facing master password across the owner's devices, while each installation keeps a separate random local vault key and salt. Current installations have independent passwords. This release slice does not silently change those passwords or claim they are already synchronized.
 

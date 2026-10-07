@@ -3,7 +3,6 @@ package com.privatevault.app.sync
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.InetAddresses
-import android.net.Network
 import android.net.NetworkCapabilities
 import androidx.room.withTransaction
 import com.google.gson.JsonObject
@@ -21,6 +20,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.io.EOFException
+import java.io.IOException
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
@@ -97,7 +97,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
             var committedHost = false
             try {
                 previous?.join()
-                val (network, address) = wifi()
+                val address = pairingAddress()
                 val reverse = reverseLink?.let(ReversePairingInvitation::decode)
                 val identity = AndroidDeviceIdentityStore(context).getOrCreate()
                 val vaultId = requireNotNull(database.dao().settings()).vaultId
@@ -122,7 +122,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                     val socket = if (reverse == null) {
                         requireNotNull(server).soTimeout = (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1).toInt()
                         server.accept()
-                    } else connectReverse(network, reverse)
+                    } else connectReverse(reverse)
                     connection = socket
                     try {
                         socket.use {
@@ -135,8 +135,8 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                 verifyMasterPassword(frames, identity, password, invitation.session,
                                     vaultId, true, result.peer)
                                 EncryptedSyncChannel(frames, result.key, true).use { channel ->
+                                    socket.soTimeout = PAIRING_CONFIRMATION_TIMEOUT_MS
                                     confirm(channel, result.confirmation)
-                                    require(android.os.SystemClock.elapsedRealtime() < deadline) { "Pairing expired" }
                                     socket.soTimeout = 300_000
                                     requireDeviceCapacity(database.syncDao().memberships(vaultId)
                                         .filter { it.status == MemberStatus.ACTIVE.name }.mapTo(hashSetOf()) { it.deviceId },
@@ -197,7 +197,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                         "Enrollment was saved, but final confirmation was lost. If the other device has the vault, use Sync now. If it is still empty, pair that same device again.")
                 } else mutableState.value = PairingUiState("failed", message =
                     if (reverseLink != null && mutableState.value.stage == "connecting" &&
-                        (failure is ConnectException || failure is SocketTimeoutException ||
+                        (failure is ConnectException || failure is PairingConnectTimeout ||
                             failure is java.net.NoRouteToHostException))
                         "Windows did not answer. Keep its QR open and allow Nuvori through the PC's firewall on this local network."
                     else pairingFailure(failure, mutableState.value.stage))
@@ -222,14 +222,14 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                 require(database.syncDao().memberships(requireNotNull(database.dao().settings()).vaultId)
                     .none { it.deviceId != AndroidDeviceIdentityStore(context).getOrCreate().deviceId &&
                         it.status == MemberStatus.ACTIVE.name }) { "This vault is already paired" }
-                val (network, _) = wifi()
                 val identity = AndroidDeviceIdentityStore(context).getOrCreate()
                 mutableState.value = PairingUiState("connecting", message = "Connecting to the other phone…")
                 val socket = Socket()
                 connection = socket
                 socket.use {
-                    network.bindSocket(socket)
-                    socket.connect(InetSocketAddress(InetAddresses.parseNumericAddress(invitation.address), invitation.port), 10_000)
+                    val address = InetAddresses.parseNumericAddress(invitation.address)
+                    bindSyncSocket(context.getSystemService(ConnectivityManager::class.java), socket, address)
+                    connectPairingSocket(socket, InetSocketAddress(address, invitation.port), 10_000)
                     socket.soTimeout = 30_000
                     val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
                     val result = pairingHandshake(frames, identity, invitation.code.toCharArray(), invitation.session, invitation.vault, false)
@@ -237,6 +237,7 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                         verifyMasterPassword(frames, identity, password, invitation.session,
                             invitation.vault, false, result.peer)
                         EncryptedSyncChannel(frames, result.key, false).use { channel ->
+                            socket.soTimeout = PAIRING_CONFIRMATION_TIMEOUT_MS
                             confirm(channel, result.confirmation)
                             socket.soTimeout = 300_000
                             mutableState.value = PairingUiState("transferring", message = "Receiving the encrypted vault copy…")
@@ -283,8 +284,8 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
         val pending = CompletableDeferred<Boolean>()
         approval = pending
         mutableState.value = PairingUiState("confirm", confirmation = code,
-            message = "Check that both devices show this code, then confirm on each device.")
-        try { require(withTimeout(30_000) { pending.await() }) }
+            message = "Check that both devices show this code, then confirm on each device within two minutes.")
+        try { awaitPairingApproval(pending, PAIRING_CONFIRMATION_TIMEOUT_MS.toLong()) }
         finally { approval = null }
         channel.send("approved".toByteArray())
         require(channel.receive().contentEquals("approved".toByteArray())) { "The other phone did not approve" }
@@ -295,31 +296,27 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
         try {
             pairingHandshake(frames, identity, password.copyOf(), "$session-master", vaultId,
                 creator, expectedPeer = peer, masterPassword = true).key.fill(0)
-        } catch (_: Exception) {
+        } catch (failure: IOException) { throw failure }
+        catch (_: Exception) {
             throw IllegalArgumentException("The master passwords do not match. Use the same password on both devices.")
         }
     }
 
-    private fun wifi(): Pair<Network, InetAddress> {
+    private fun pairingAddress(): InetAddress {
         val manager = context.getSystemService(ConnectivityManager::class.java)
-        for (network in (listOfNotNull(manager.activeNetwork) + manager.allNetworks).distinct()) {
-            if (!isLocalWifi(manager.getNetworkCapabilities(network))) continue
-            val address = preferredWifiAddress(manager.getLinkProperties(network)?.linkAddresses
-                ?.map { it.address }.orEmpty()) ?: continue
-            return network to address
-        }
-        error("Connect to Wi-Fi to pair")
+        return localSyncRoutes(manager).firstOrNull()?.address ?: error("Connect to Wi-Fi to pair")
     }
 
-    private suspend fun connectReverse(network: Network, invitation: ReversePairingInvitation): Socket {
+    private suspend fun connectReverse(invitation: ReversePairingInvitation): Socket {
         var lastFailure: Exception = ConnectException("No Windows address answered")
         for (address in invitation.addresses) {
             currentCoroutineContext().ensureActive()
             val socket = Socket()
             connection = socket
             try {
-                network.bindSocket(socket)
-                socket.connect(InetSocketAddress(InetAddresses.parseNumericAddress(address), invitation.port), 2_000)
+                val peerAddress = InetAddresses.parseNumericAddress(address)
+                bindSyncSocket(context.getSystemService(ConnectivityManager::class.java), socket, peerAddress)
+                connectPairingSocket(socket, InetSocketAddress(peerAddress, invitation.port), 2_000)
                 return socket
             } catch (failure: Exception) {
                 socket.close()
@@ -342,7 +339,21 @@ internal fun exportFailureReason(failure: Exception): String {
     return if (own) text!! else "The phone could not prepare the vault copy (${failure.javaClass.simpleName})"
 }
 
-private fun pairingFailure(failure: Exception, stage: String): String = when {
+internal suspend fun awaitPairingApproval(pending: Deferred<Boolean>, timeoutMs: Long) {
+    if (withTimeoutOrNull(timeoutMs) { pending.await() } != true)
+        throw SocketTimeoutException("Matching-code confirmation expired")
+}
+
+private const val PAIRING_CONFIRMATION_TIMEOUT_MS = 120_000
+
+internal class PairingConnectTimeout(cause: SocketTimeoutException) : IOException(cause)
+
+private fun connectPairingSocket(socket: Socket, address: InetSocketAddress, timeoutMs: Int) {
+    try { socket.connect(address, timeoutMs) }
+    catch (failure: SocketTimeoutException) { throw PairingConnectTimeout(failure) }
+}
+
+internal fun pairingFailure(failure: Exception, stage: String): String = when {
     failure is ExportFailure -> "This phone could not send the vault copy: ${exportFailureReason(failure.cause)}"
     failure is PeerSnapshotFailure -> "The other phone could not send the vault copy: ${failure.message}"
     failure.message == "Join from an empty vault" ->
@@ -357,8 +368,12 @@ private fun pairingFailure(failure: Exception, stage: String): String = when {
     failure is ConnectException && failure.message?.contains("ECONNREFUSED") == true ->
         "QR read, but the other phone stopped offering pairing. Keep its pairing screen open and unlocked, then scan a new QR."
     failure is ConnectException || failure is java.net.NoRouteToHostException ||
-        (failure is SocketTimeoutException && stage == "connecting") ->
+        failure is PairingConnectTimeout ->
         "QR read, but this phone cannot reach the other phone. Put both on the same Wi-Fi network (not a guest network) and check that the router allows devices to connect to each other."
+    failure is SocketTimeoutException && stage == "confirm" ->
+        "Matching-code confirmation expired. Create a new QR and confirm on both devices within two minutes."
+    failure is SocketTimeoutException && stage == "connecting" ->
+        "The device connected, but the secure pairing handshake timed out. Keep both pairing screens open and try a new QR."
     failure is SocketTimeoutException ->
         "The $stage step timed out. Keep both devices unlocked and retry with a new QR."
     failure is EOFException ->
@@ -377,10 +392,6 @@ internal fun isPrivateAddress(address: InetAddress): Boolean = !address.isLoopba
 internal fun isLocalWifi(capabilities: NetworkCapabilities?): Boolean =
     capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
         !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-
-internal fun preferredWifiAddress(addresses: List<InetAddress>): InetAddress? =
-    addresses.firstOrNull { it.address.size == 4 && it.isSiteLocalAddress } ?:
-        addresses.firstOrNull { isPrivateAddress(it) && !it.isLinkLocalAddress }
 
 internal fun peerSyncAddresses(addresses: List<InetAddress>): List<InetAddress> =
     addresses.filter { isPrivateAddress(it) && !it.isLinkLocalAddress }

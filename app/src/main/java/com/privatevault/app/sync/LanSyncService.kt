@@ -29,7 +29,6 @@ import java.net.InetSocketAddress
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.BindException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -65,9 +64,7 @@ class LanSyncService : Service() {
     private var lastNotificationText = ""
     private lateinit var connectivity: ConnectivityManager
     private lateinit var nsd: NsdManager
-    private var networkJob: Job? = null
-    @Volatile private var activeNetwork: Network? = null
-    private var activeAddress: InetAddress? = null
+    @Volatile private var discoveryNeedsRestart = true
     private var server: ServerSocket? = null
     @Volatile private var registration: NsdManager.RegistrationListener? = null
     @Volatile private var discovery: NsdManager.DiscoveryListener? = null
@@ -78,49 +75,13 @@ class LanSyncService : Service() {
     @Volatile private var manualProgressAt = 0L
     private val instanceName = "nuvori-" + UUID.randomUUID().toString()
     private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
-            connect(network)
-        }
-        override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
-            connect(network)
-        }
-        private fun connect(network: Network) {
-            scope.launch(Dispatchers.Main.immediate) {
-                if (!isLocalWifi(connectivity.getNetworkCapabilities(network))) return@launch
-                val address = preferredWifiAddress(connectivity.getLinkProperties(network)?.linkAddresses
-                    ?.map { it.address }.orEmpty()) ?: return@launch
-                if (activeNetwork == null || activeNetwork == network && activeAddress != address) {
-                    activeNetwork = network
-                    activeAddress = address
-                    setNearbyCount(0)
-                    setStatus(DeviceSyncPhase.SEARCHING, "Wi-Fi changed. Restarting device discovery.")
-                    val previous = networkJob
-                    previous?.cancel()
-                    server?.close()
-                    connections.forEach { runCatching { it.close() } }
-                    networkJob = scope.launch {
-                        previous?.join()
-                        while (isActive) { listen(network); delay(5_000) }
-                    }
-                }
-            }
-        }
-        override fun onLost(network: Network) {
-            scope.launch(Dispatchers.Main.immediate) {
-                if (activeNetwork == network) {
-                    activeNetwork = null
-                    activeAddress = null
-                    setNearbyCount(0)
-                    setStatus(DeviceSyncPhase.WAITING, "Wi-Fi disconnected. Reconnect both devices to the same network.")
-                    clearConnectedPeers("Wi-Fi disconnected.")
-                    networkJob?.cancel()
-                    server?.close()
-                    connections.forEach { runCatching { it.close() } }
-                    connectivity.allNetworks.filter { it != network &&
-                        isLocalWifi(connectivity.getNetworkCapabilities(it)) }
-                        .forEach(::connect)
-                }
-            }
+        override fun onAvailable(network: Network) = networkChanged()
+        override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) = networkChanged()
+        override fun onLost(network: Network) = networkChanged()
+        private fun networkChanged() {
+            endpoints.clear()
+            discoveryNeedsRestart = true
+            signals.trySend(Unit)
         }
     }
 
@@ -138,6 +99,8 @@ class LanSyncService : Service() {
         nsd = getSystemService(NsdManager::class.java)
         connectivity.registerNetworkCallback(NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), callback)
+        // A hotspot can remain reachable without a Wi-Fi client Network callback.
+        scope.launch { while (isActive) { listen(); delay(5_000) } }
     }
 
     private fun syncNotification(): Notification {
@@ -223,17 +186,10 @@ class LanSyncService : Service() {
         return if (manualAttempt) START_NOT_STICKY else START_STICKY
     }
 
-    private suspend fun listen(network: Network) {
+    private suspend fun listen() {
         try {
-            val address = preferredWifiAddress(connectivity.getLinkProperties(network)?.linkAddresses
-                ?.map { it.address }.orEmpty()) ?: return
             val mirror = requireNotNull(store(this).snapshot())
-            val listener = ServerSocket().apply {
-                val preferred = InetSocketAddress(address, syncPort(mirror.vaultId))
-                try { bind(preferred) }
-                catch (_: BindException) { bind(InetSocketAddress(address, 0)) }
-                soTimeout = 1000
-            }
+            val listener = openSyncListener(syncPort(mirror.vaultId))
             server = listener
             multicastLock = getSystemService(WifiManager::class.java)
                 .createMulticastLock("nuvori-sync-discovery").apply {
@@ -241,7 +197,7 @@ class LanSyncService : Service() {
                     acquire()
                 }
             setStatus(DeviceSyncPhase.SEARCHING, "Checking nearby Nuvori devices on Wi-Fi.")
-            startDiscovery(network, listener.localPort)
+            discoveryNeedsRestart = true
             coroutineScope {
                 var retryDelayMs = 5_000L
                 launch {
@@ -262,6 +218,14 @@ class LanSyncService : Service() {
                     }
                 }
                 while (isActive) {
+                    if (discoveryNeedsRestart) {
+                        discoveryNeedsRestart = false
+                        stopDiscovery()
+                        runCatching { startDiscovery(listener.localPort) }.onFailure {
+                            discoveryNeedsRestart = true
+                            setStatus(DeviceSyncPhase.SEARCHING, "Discovery is unavailable. Trying saved device addresses.")
+                        }
+                    }
                     var needsRetry = false
                     peerBusy = false
                     val passStartedAt = android.os.SystemClock.elapsedRealtime()
@@ -292,7 +256,7 @@ class LanSyncService : Service() {
                             try {
                                 setStatus(DeviceSyncPhase.CONNECTING, "Trying the last confirmed Wi-Fi address.")
                                 setPeerStatus(deviceId, DeviceSyncPhase.CONNECTING, "Trying its saved Wi-Fi address.")
-                                network.bindSocket(socket)
+                                bindSyncSocket(connectivity, socket, peerAddress)
                                 socket.connect(InetSocketAddress(peerAddress, syncPort(mirror.vaultId)), 3000)
                                 if (!transfer(socket, false)) {
                                     needsRetry = true
@@ -350,7 +314,7 @@ class LanSyncService : Service() {
                                 connections.add(socket)
                                 try {
                                     setStatus(DeviceSyncPhase.CONNECTING, "Verifying the device found on Wi-Fi.")
-                                    network.bindSocket(socket)
+                                    bindSyncSocket(connectivity, socket, endpoint.address)
                                     socket.connect(InetSocketAddress(endpoint.address, endpoint.port), 5000)
                                     completed = transfer(socket, false)
                                 } catch (failure: Exception) {
@@ -369,7 +333,7 @@ class LanSyncService : Service() {
                             if (!peerBusy) endpoints.remove(name, candidates)
                         }
                     }
-                    deliverPendingLeave(network)
+                    deliverPendingLeave()
                     activePeers.forEach { peer ->
                         if ((lastAuthenticated[peer.deviceId] ?: -1L) < passStartedAt &&
                             mutablePeerStatus.value[peer.deviceId]?.phase in setOf(
@@ -395,14 +359,8 @@ class LanSyncService : Service() {
         }
         finally {
             server?.close(); server = null
-            val oldDiscovery = discovery.also { discovery = null }
-            oldDiscovery?.let { runCatching { nsd.stopServiceDiscovery(it) } }
-            val oldRegistration = registration.also { registration = null }
-            oldRegistration?.let { runCatching { nsd.unregisterService(it) } }
+            stopDiscovery()
             multicastLock?.let { if (it.isHeld) it.release() }; multicastLock = null
-            endpoints.clear()
-            discovered.clear()
-            setNearbyCount(0)
         }
     }
 
@@ -499,7 +457,7 @@ class LanSyncService : Service() {
     }
 
     /** Retries a signed leave request on discovered devices and saved addresses of the old group. */
-    private suspend fun deliverPendingLeave(network: Network) {
+    private suspend fun deliverPendingLeave() {
         val notice = runCatching { store(this).pendingLeave() }.getOrNull() ?: return
         if (System.currentTimeMillis() - notice.lastAttemptAt < LEAVE_RETRY_MS) return
         runCatching { store(this).recordLeaveAttempt() }
@@ -512,7 +470,7 @@ class LanSyncService : Service() {
                 val socket = Socket()
                 connections.add(socket)
                 try {
-                    network.bindSocket(socket)
+                    bindSyncSocket(connectivity, socket, address)
                     socket.connect(InetSocketAddress(address, port), 3000)
                     socket.soTimeout = PRE_AUTH_TIMEOUT_MS
                     LanSyncExchange.sendLeave(SyncFrames(socket.getInputStream(), socket.getOutputStream()), notice)
@@ -555,13 +513,15 @@ class LanSyncService : Service() {
     }
 
     @Suppress("DEPRECATION")
-    private fun startDiscovery(network: Network, port: Int) {
+    private fun startDiscovery(port: Int) {
         val register = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(info: NsdServiceInfo) = Unit
+            override fun onServiceRegistered(info: NsdServiceInfo) {
+                if (registration !== this) runCatching { nsd.unregisterService(this) }
+            }
             override fun onRegistrationFailed(info: NsdServiceInfo, error: Int) {
-                if (registration !== this || activeNetwork != network) return
-                setStatus(DeviceSyncPhase.ATTENTION, "Wi-Fi registration failed. Restarting discovery.")
-                server?.close()
+                if (registration !== this) return
+                discoveryNeedsRestart = true
+                setStatus(DeviceSyncPhase.SEARCHING, "Discovery is unavailable. Trying saved device addresses.")
             }
             override fun onServiceUnregistered(info: NsdServiceInfo) = Unit
             override fun onUnregistrationFailed(info: NsdServiceInfo, error: Int) = Unit
@@ -569,26 +529,27 @@ class LanSyncService : Service() {
         registration = register
         nsd.registerService(NsdServiceInfo().apply {
             serviceName = instanceName; serviceType = TYPE; setPort(port)
-            if (android.os.Build.VERSION.SDK_INT >= 33) setNetwork(network)
         }, NsdManager.PROTOCOL_DNS_SD, register)
         val discover = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(type: String) = Unit
+            override fun onDiscoveryStarted(type: String) {
+                if (discovery !== this) runCatching { nsd.stopServiceDiscovery(this) }
+            }
             override fun onDiscoveryStopped(type: String) = Unit
             override fun onStartDiscoveryFailed(type: String, error: Int) {
-                if (discovery !== this || activeNetwork != network) return
-                setStatus(DeviceSyncPhase.ATTENTION, "Wi-Fi discovery failed. Restarting it.")
-                server?.close()
+                if (discovery !== this) return
+                discoveryNeedsRestart = true
+                setStatus(DeviceSyncPhase.SEARCHING, "Discovery is unavailable. Trying saved device addresses.")
             }
             override fun onStopDiscoveryFailed(type: String, error: Int) = Unit
             override fun onServiceLost(info: NsdServiceInfo) {
-                if (discovery !== this || activeNetwork != network) return
+                if (discovery !== this) return
                 endpoints.remove(info.serviceName); discovered.remove(info.serviceName)
                 setNearbyCount(discovered.size)
                 if (discovered.isEmpty() && !exchange.isLocked)
                     setStatus(DeviceSyncPhase.SEARCHING, "The device left Wi-Fi. Looking again.")
             }
             override fun onServiceFound(info: NsdServiceInfo) {
-                if (discovery !== this || activeNetwork != network) return
+                if (discovery !== this) return
                 if (info.serviceName.startsWith(instanceName) || discovered.size >= 64) return
                 discovered[info.serviceName] = info
                 setNearbyCount(discovered.size)
@@ -598,8 +559,18 @@ class LanSyncService : Service() {
         }
         discovery = discover
         if (android.os.Build.VERSION.SDK_INT >= 33)
-            nsd.discoverServices(TYPE, NsdManager.PROTOCOL_DNS_SD, network, mainExecutor, discover)
+            nsd.discoverServices(TYPE, NsdManager.PROTOCOL_DNS_SD, null, mainExecutor, discover)
         else nsd.discoverServices(TYPE, NsdManager.PROTOCOL_DNS_SD, discover)
+    }
+
+    private fun stopDiscovery() {
+        val oldDiscovery = discovery.also { discovery = null }
+        oldDiscovery?.let { runCatching { nsd.stopServiceDiscovery(it) } }
+        val oldRegistration = registration.also { registration = null }
+        oldRegistration?.let { runCatching { nsd.unregisterService(it) } }
+        endpoints.clear()
+        discovered.clear()
+        setNearbyCount(0)
     }
 
     @Suppress("DEPRECATION")

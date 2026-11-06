@@ -16,8 +16,17 @@ Android version code 56. Windows version 2.1.5.
 - 15 Android 16 emulator tests passed, covering QR pairing, the initial vault copy, locked exchanges, six-device synchronization, and Windows interoperability.
 - 142 Windows Rust tests passed. The separate interoperability test also passed with the Android emulator, exchanging later edits in both directions and switching which device initiated the connection.
 - The two timeout regression tests failed before their fixes and passed afterward.
+- Signed Android APK and AAB builds passed. The APK reports version 2.1.5, code 56, with the same signing certificate as 2.1.4. APK zip alignment and all 12 native libraries in each package passed 16 KB alignment checks. Release lint reported zero errors and 77 warnings.
+- Windows setup EXE and MSI builds passed. The MSI reports 2.1.5 and includes the pairing helper and browser host. Both Windows installers are unsigned. The packaging script now collects them with SHA-256 checksums in `artifacts/`.
 
 Physical hotspot behavior has not been verified with this build. Emulator and route-selection tests cannot establish what a particular phone or router permits. The original Wi-Fi still needs a network where the devices can reach each other.
+
+## Download files
+
+- [Phone APK](../downloads/nuvori-v2.1.5-phone.apk) for updating both Android phones.
+- [Phone AAB](../downloads/nuvori-v2.1.5-phone.aab) for Google Play upload.
+- [Android checksums](../downloads/SHA256SUMS-2.1.5.txt).
+- Windows setup EXE and MSI are in `card_app_windows/artifacts/`. Its `docs/DISTRIBUTION.md` explains installation and sharing. Recipients do not need npm or development tools.
 
 ## Check on the paired phones
 

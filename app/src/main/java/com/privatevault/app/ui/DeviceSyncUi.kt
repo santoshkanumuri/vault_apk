@@ -934,9 +934,16 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         }, enabled = !joining) { Text(if (changeJoinPassword) "Back" else "Cancel") } })
     removeDeviceId?.let { deviceId ->
         val name = devices.firstOrNull { it.deviceId == deviceId }?.displayName ?: "this device"
+        val behind by produceState(emptyList<String>(), deviceId) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { viewModel.devicesMissingChangesFrom(deviceId) }
+        }
         AlertDialog(onDismissRequest = { removeDeviceId = null },
             title = { Text("Remove $name?") },
-            text = { Text("$name doesn't need to approve. It keeps its own copy of the vault but stops syncing with this group, and sees a notice the next time it reaches any of your devices. The group gets new sync keys.") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("$name doesn't need to approve. It keeps its own copy of the vault but stops syncing with this group, and sees a notice the next time it reaches any of your devices. The group gets new sync keys.")
+                if (behind.isNotEmpty()) Text("${behind.joinToString()} ${if (behind.size == 1) "has" else "have"} not received every change from $name yet. Sync ${if (behind.size == 1) "that device" else "those devices"} first, or ${if (behind.size == 1) "it" else "they"} will not get those changes.",
+                    color = MaterialTheme.colorScheme.error)
+            } },
             confirmButton = {
                 TextButton(onClick = {
                     removeDeviceId = null

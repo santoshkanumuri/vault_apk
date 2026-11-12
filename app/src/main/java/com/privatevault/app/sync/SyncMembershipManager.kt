@@ -103,7 +103,8 @@ internal object SyncMembershipManager {
                 }
                 MembershipAction.REMOVE -> {
                     require(pendingTransfer == null)
-                    require(event.subjectDeviceId != manager && event.subjectPublicKey.isEmpty() &&
+                    // The subject key field is empty, or holds the removed device's last accepted change.
+                    require(event.subjectDeviceId != manager && RemovalCutoff.isValidField(event.subjectPublicKey) &&
                         event.keyEpoch == epoch + 1L)
                     val subject = requireNotNull(members[event.subjectDeviceId])
                     require(subject.status == MemberStatus.ACTIVE.name)

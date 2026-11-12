@@ -171,6 +171,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Names of paired devices that have not yet received everything [deviceId] changed. Reads sync files. */
+    fun devicesMissingChangesFrom(deviceId: String): List<String> = runCatching {
+        val mirror = lockedSyncStore.snapshot() ?: return emptyList()
+        com.privatevault.app.sync.RemovalReadiness.peersBehind(deviceId, mirror.localDeviceId, mirror.members,
+            lockedSyncStore.progress().received, mirror.peerProgress).map { it.displayName.ifBlank { "A paired device" } }
+    }.getOrDefault(emptyList())
+
     internal fun deviceSyncCounts(deviceId: String): com.privatevault.app.sync.PeerSyncCounts {
         val mirror = lockedSyncStore.snapshot() ?: return com.privatevault.app.sync.PeerSyncCounts(0, 0, 0, 0)
         return com.privatevault.app.sync.peerSyncCounts(mirror.localDeviceId, deviceId,
@@ -1552,7 +1559,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 // Bring in membership events the service received while locked, then sign on top of them.
                 lockedSyncStore.applyQueued(db, key)
-                db.removeSyncMember(deviceIdentityStore, deviceId)
+                // Peers keep accepting what this device holds from it (see RemovalCutoff).
+                db.removeSyncMember(deviceIdentityStore, deviceId, lockedSyncStore.removalCutoff(deviceId))
                 lockedSyncStore.publish(db)
             }
         } finally { key.fill(0) }

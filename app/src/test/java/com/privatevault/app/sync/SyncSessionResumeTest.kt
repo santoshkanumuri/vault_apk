@@ -185,7 +185,7 @@ class SyncSessionResumeTest {
 
         override fun recordPeerProgress(deviceId: String, progress: SyncProgress) { progress.validate() }
 
-        override fun pending(frontier: SyncFrontier): List<SyncOperationEntity> {
+        override fun pending(frontier: SyncFrontier, relayRemoved: Boolean): List<SyncOperationEntity> {
             frontiersSeen += frontier.counters.values.maxOrNull() ?: 0L
             return held.values.filter { it.sequence > (frontier.counters[it.deviceId] ?: 0L) }
                 .sortedWith(compareBy({ it.deviceId }, { it.sequence })).take(100)

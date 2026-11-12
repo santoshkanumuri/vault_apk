@@ -137,8 +137,10 @@ class ProfileFormClassifierTest {
         assertNull(native(entry = "name_label"))
         assertNull(native(hint = "Company name"))
         assertNull(native(entry = "username"))
-        // "address" alone is only trusted for native views.
-        assertNull(profileField(emptySet(), mapOf("name" to "address"), TEXT_INPUT))
+        // A web field named exactly "address" is the street line, as the browser extension reads it
+        // (shared vectors: autofill-vectors/field-roles-v1.json). Containing the word is still not enough.
+        assertEquals(ProfileField.ADDRESS1, profileField(emptySet(), mapOf("name" to "address"), TEXT_INPUT))
+        assertNull(profileField(emptySet(), mapOf("name" to "ip_address_field"), TEXT_INPUT))
     }
 
     // ---- whole forms ------------------------------------------------------------------------------------------------

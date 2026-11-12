@@ -184,7 +184,8 @@ private fun precedingAccount(items: List<FormItem>, password: FormItem, browser:
         val node = candidate.node
         if (explicitPurposes(node.hints + candidate.attrs["autocomplete"].orEmpty()).isNotEmpty() ||
             hasNegativeToken(listOf(candidate.attrs["name"], candidate.attrs["id"], node.idEntry, node.hintText)) ||
-            profileKind(candidate, browser) != null) return null
+            // Many sites sign in with a phone number or an e-mail; a name or address part is never the account.
+            profileKind(candidate, browser).let { it != null && it != ProfileField.PHONE && it != ProfileField.EMAIL }) return null
         val plain = if (node.htmlTag != null) node.htmlTag.equals("input", true) && candidate.type in FALLBACK_HTML_TYPES &&
             candidate.origin == password.origin
             else !browser && !candidate.web && isNativeTextInput(node.inputType, plainOnly = true)

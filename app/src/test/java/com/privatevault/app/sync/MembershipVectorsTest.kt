@@ -106,7 +106,7 @@ internal object MembershipVectors {
     fun removedHistory(): List<SyncMembershipEvent> {
         val history = clientHistory()
         val decision = LeaveRequestHandler.handle(leaveFrame(), challenge, rootSecret, history, setOf(1L),
-            MANAGER_ID, CREATED_AT + 60_000) { DeviceIdentityCrypto.sign(managerSeed, it) }
+            MANAGER_ID, CREATED_AT + 60_000, signer = { DeviceIdentityCrypto.sign(managerSeed, it) })
         return history + (decision as LeaveDecision.Left).append
     }
 

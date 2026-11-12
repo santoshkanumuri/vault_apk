@@ -66,7 +66,8 @@ internal fun profileField(hints: Set<String>, attributes: Map<String, String>, i
     val labels = listOf(idEntry, hintText).map(::normalizeToken).filter { it.isNotEmpty() }.toSet()
     // "cardholder" next to id="name" is still a card field.
     if ((names + labels).any { it.startsWith("cc") || it.startsWith("card") || it.startsWith("creditcard") }) return null
-    matchProfile(names)?.let { return it }
+    // A web field named exactly "address" is the street line, as the browser extension reads it.
+    matchProfile(names, native = true)?.let { return it }
     matchProfile(labels, native = true)?.let { return it }
     return when {
         inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_PHONE -> ProfileField.PHONE

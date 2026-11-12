@@ -456,11 +456,14 @@ class LoginFormClassifierTest {
     }
 
     @Test fun nonAccountNamesAreNotUsernames() {
-        listOf("billing_email", "username_confirmation", "name", "firstname", "search", "coupon", "phone", "city").forEach {
+        listOf("billing_email", "username_confirmation", "name", "firstname", "search", "coupon", "city").forEach {
             val form = login(webPage(htmlForm(htmlInput(9, name = it), htmlInput(1, type = "password", name = "pass"))), browser = true)
             // The nearest-input fallback must also refuse these: they name another purpose.
             assertNull(it, form!!.username)
         }
+        // Many sites sign in with a phone number, so the fallback accepts that box (shared with the extension).
+        val phone = login(webPage(htmlForm(htmlInput(9, name = "phone"), htmlInput(1, type = "password", name = "pass"))), browser = true)
+        assertEquals(9, phone!!.username)
     }
 
     @Test fun severalBrowserCandidatesPickTheNearestBeforeThePassword() {

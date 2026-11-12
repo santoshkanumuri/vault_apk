@@ -43,7 +43,11 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             "Device is not a vault member"
         }.toMembership()
         member.validate()
-        require(member.status == MemberStatus.ACTIVE && member.vaultId == operation.vaultId &&
+        // A removed device's changes up to its cutoff still apply (see RemovalCutoff).
+        val withinCutoff = member.status != MemberStatus.ACTIVE && RemovalCutoff.allows(
+            RemovalCutoff.cutoffsOf(database.syncDao().membershipEvents(operation.vaultId))[operation.deviceId],
+            operation.sequence, operation.hash)
+        require((member.status == MemberStatus.ACTIVE || withinCutoff) && member.vaultId == operation.vaultId &&
             member.deviceId == operation.deviceId && member.keyEpoch >= 1L) {
             "Device is not an active vault member"
         }
@@ -106,7 +110,7 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             val currentMember = requireNotNull(syncDao.membership(change.vaultId, change.deviceId)) {
                 "Device is not a vault member"
             }.toMembership()
-            require(currentMember == member && currentMember.status == MemberStatus.ACTIVE) {
+            require(currentMember == member && (currentMember.status == MemberStatus.ACTIVE || withinCutoff)) {
                 "Device membership changed"
             }
             syncDao.operation(change.mutationId)?.let { existing ->

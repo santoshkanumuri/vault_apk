@@ -13,7 +13,8 @@ internal interface SyncSessionStore {
     val photoBlobs: PhotoSyncBlobs
     fun progress(): SyncProgress
     fun recordPeerProgress(deviceId: String, progress: SyncProgress)
-    fun pending(frontier: SyncFrontier): List<SyncOperationEntity>
+    /** [relayRemoved]: also changes of removed devices up to their cutoff ([RemovalCutoff]). */
+    fun pending(frontier: SyncFrontier, relayRemoved: Boolean = false): List<SyncOperationEntity>
     fun queue(operation: SyncOperationEntity)
     fun missingPhotos(): List<Pair<String, Long>>
     fun receivedPhoto(hash: String)

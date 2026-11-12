@@ -68,7 +68,7 @@ internal object LanSyncExchange {
             require(mirror.members.count { it.status == MemberStatus.ACTIVE.name } in 2..MAX_ACTIVE_SYNC_DEVICES)
             secret = currentSecret
             challenge = frames.receive(MembershipWire.CONTROL_FRAME)
-            if (challenge.contentEquals(MembershipWire.BUSY.toByteArray(Charsets.US_ASCII))) throw PeerBusy()
+            if (MembershipWire.isBusyReply(challenge)) throw PeerBusy()
             require(challenge.size == 32)
             frames.send(encoder.encodeToString(TransportEpochs.probeProof(secret, challenge))
                 .toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME)
@@ -114,9 +114,11 @@ internal object LanSyncExchange {
                 require(DeviceIdentityCrypto.verify(session.peer.publicKey,
                     identityProof(session.key, accepted.vaultId, session.peer.deviceId, identity.deviceId),
                     remoteSignature)) { "Peer identity proof failed" }
+                runCatching { store.recordPeerFeatures(member.deviceId, session.peerFeatures) }
                 onAuthenticated(member.deviceId, session.peerPlatform)
                 val membershipHead = accepted.membershipEvents.last().hash
-                val finished = exchangeChanges(channel, store, server, member.deviceId) {
+                val finished = exchangeChanges(channel, store, server, member.deviceId,
+                    relayRemoved = RemovalCutoff.FEATURE in session.peerFeatures) {
                     require(store.snapshot()?.membershipEvents?.last()?.hash == membershipHead) {
                         "Membership changed during sync"
                     }
@@ -158,7 +160,7 @@ internal object LanSyncExchange {
         val mirror = requireNotNull(store.snapshot())
         val decision = LeaveRequestHandler.handle(leave, challenge, mirror.transportSecret,
             mirror.membershipEvents.map { it.toEvent() }, setOf(mirror.keyEpoch) + store.retainedEpochs(),
-            mirror.localDeviceId, System.currentTimeMillis(), store::signIdentity)
+            mirror.localDeviceId, System.currentTimeMillis(), store::signIdentity, store::removalCutoff)
         val reply = when (decision) {
             LeaveDecision.Reject -> throw IllegalArgumentException("Invalid leave request")
             is LeaveDecision.Left -> {
@@ -193,13 +195,13 @@ internal object LanSyncExchange {
      * round limit ended the session with changes left.
      */
     internal fun exchangeChanges(channel: EncryptedSyncChannel, store: SyncSessionStore, server: Boolean,
-        peerDeviceId: String, beforeRound: () -> Unit = {}): Boolean {
+        peerDeviceId: String, relayRemoved: Boolean = false, beforeRound: () -> Unit = {}): Boolean {
         repeat(MAX_ROUNDS) {
             beforeRound()
             val sent: Int
             val received: Int
-            if (server) { sent = sendBatch(channel, store, peerDeviceId); received = receiveBatch(channel, store) }
-            else { received = receiveBatch(channel, store); sent = sendBatch(channel, store, peerDeviceId) }
+            if (server) { sent = sendBatch(channel, store, peerDeviceId, relayRemoved); received = receiveBatch(channel, store) }
+            else { received = receiveBatch(channel, store); sent = sendBatch(channel, store, peerDeviceId, relayRemoved) }
             if (sent == 0 && received == 0) return true
         }
         return false
@@ -216,11 +218,12 @@ internal object LanSyncExchange {
         }
     }
 
-    private fun sendBatch(channel: EncryptedSyncChannel, store: SyncSessionStore, peerDeviceId: String): Int {
+    private fun sendBatch(channel: EncryptedSyncChannel, store: SyncSessionStore, peerDeviceId: String,
+        relayRemoved: Boolean): Int {
         val progress = SyncProgress.parse(channel.receive())
         store.recordPeerProgress(peerDeviceId, progress)
         val frontier = SyncFrontier(progress.received.mapValues { it.value.sequence })
-        val pending = store.pending(frontier).take(MAX_BATCH)
+        val pending = store.pending(frontier, relayRemoved).take(MAX_BATCH)
         channel.send(pending.size.toString().toByteArray())
         pending.forEach { operation ->
             channel.send(gson.toJson(operation).toByteArray(Charsets.UTF_8))

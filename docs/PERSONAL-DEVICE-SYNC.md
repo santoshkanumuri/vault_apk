@@ -48,6 +48,12 @@ The lost phone retains its old contents. Devices that still belong to the old gr
 
 ## Leaving and removal
 
+### Removing a device in 2.1.6
+
+When the managing phone removes a device, other devices stop accepting that device's changes. Before 2.1.6, a device that had not yet received some of them never got them. Now the managing phone records the removed device's last change it holds (its sequence and hash) in the signed removal. Every device then accepts that device's changes up to that point, never later ones, and passes them only to devices that support this.
+
+Older builds reject a removal that carries this record. So each device announces `removal-cutoff-v1` in the sync handshake, and the managing phone records it only when every other active device announced it. Otherwise the removal is written as before. The Remove dialog also names each device that has not received every change from the device being removed, so you can sync it first.
+
 Any active Android member can choose "Stop sharing on this device". It keeps its contents and creates a fresh independent group, and disables the old watch relationship. The old group does not learn a signed removal from this local action. Its manager must remove the departed identity later when group removal is implemented. If the manager leaves without transferring first, the others can still edit and sync but cannot manage membership in the old group. A survivor can also start a fresh group from its local copy and enroll a new empty phone. With two members, the existing peer-removal button uses the same local split.
 
 For groups with three or more members, the manager must be able to remove another device while keeping the survivors together. This requires a signed removal, fresh random group keys, authenticated delivery only to survivors, and rejection of removed identities. Updated peers must apply membership changes before exchanging more record data. Offline survivors need a defined path for publishing legitimate edits made under an older key epoch. The manager should transfer authority before leaving if the old group must continue accepting membership changes.

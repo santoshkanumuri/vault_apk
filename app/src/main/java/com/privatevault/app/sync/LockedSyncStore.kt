@@ -36,7 +36,9 @@ internal data class TransportMirror(val vaultId: String, val localDeviceId: Stri
     val lastExchangeAt: Map<String, Long> = emptyMap(),
     val pendingPhotoHashes: Set<String> = emptySet(),
     val epochRetiredAt: Map<String, Long> = emptyMap(),
-    val clientOnlyPeers: Set<String> = emptySet())
+    val clientOnlyPeers: Set<String> = emptySet(),
+    /** What each peer announced in its last sync handshake (see [RemovalCutoff.FEATURE]). */
+    val peerFeatures: Map<String, List<String>> = emptyMap())
 
 /**
  * A leave request kept after this device already left locally. It holds only what is needed to
@@ -54,6 +56,10 @@ internal data class PendingLeaveNotice(val vaultId: String, val deviceId: String
 @Keep
 data class SyncRemovalNotice(val vaultId: String, val byDeviceId: String, val byName: String,
     val at: Long, val leftLocally: Boolean = false)
+
+/** Devices whose changes a peer accepts: the active members of the signed history. */
+internal fun relayableAuthors(members: List<SyncMembershipEntity>): Set<String> =
+    members.filter { it.status == MemberStatus.ACTIVE.name }.mapTo(hashSetOf()) { it.deviceId }
 
 internal class SyncQueueFullException : Exception("Unlock this device to apply queued changes")
 
@@ -119,6 +125,7 @@ internal class LockedSyncStore(private val context: Context,
             kept.copy(peerProgress = previous.peerProgress, peerAddresses = previous.peerAddresses,
                 lastContactAt = previous.lastContactAt, lastExchangeAt = previous.lastExchangeAt,
                 pendingPhotoHashes = previous.pendingPhotoHashes, clientOnlyPeers = previous.clientOnlyPeers,
+                peerFeatures = previous.peerFeatures,
                 epochRetiredAt = retire(previous.epochRetiredAt, previous.keyEpoch, kept.keyEpoch))
         } else mirror
         val activePeers = selected.members.filter {
@@ -139,7 +146,9 @@ internal class LockedSyncStore(private val context: Context,
         }
         writeProtected(File(directory, "peers"), gson.toJson(selected).toByteArray(Charsets.UTF_8))
         photoBlobs.pruneAbandonedPartials(selected.pendingPhotoHashes)
-        val allApplied = activePeers.isNotEmpty() && selected.heads.all { head ->
+        // A removed device's history is no longer relayed, so a peer may never reach its head.
+        val authors = relayableAuthors(selected.members)
+        val allApplied = activePeers.isNotEmpty() && selected.heads.filter { it.deviceId in authors }.all { head ->
             activePeers.all { peer ->
                 (selected.peerProgress[peer.deviceId]?.applied?.get(head.deviceId)?.sequence ?: 0L) >= head.sequence
             }
@@ -166,7 +175,8 @@ internal class LockedSyncStore(private val context: Context,
                 lastExchangeAt = mirror.lastExchangeAt ?: emptyMap(),
                 pendingPhotoHashes = mirror.pendingPhotoHashes ?: emptySet(),
                 epochRetiredAt = mirror.epochRetiredAt ?: emptyMap(),
-                clientOnlyPeers = mirror.clientOnlyPeers ?: emptySet())
+                clientOnlyPeers = mirror.clientOnlyPeers ?: emptySet(),
+                peerFeatures = mirror.peerFeatures ?: emptyMap())
         }
         finally { bytes.fill(0) }
     }
@@ -261,6 +271,30 @@ internal class LockedSyncStore(private val context: Context,
             .toByteArray(Charsets.UTF_8))
     }
 
+    @Synchronized fun recordPeerFeatures(deviceId: String, features: Set<String>) {
+        val mirror = requireNotNull(snapshot())
+        require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })
+        val list = features.sorted().take(32)
+        if (mirror.peerFeatures[deviceId] == list) return
+        writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
+            peerFeatures = mirror.peerFeatures + (deviceId to list))).toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * The cutoff to write into a REMOVE of [subjectDeviceId]: this device's received head of its
+     * changes, when every other active device announced [RemovalCutoff.FEATURE]. Otherwise ""
+     * (the earlier behavior), because older builds reject a REMOVE that carries one.
+     */
+    @Synchronized fun removalCutoff(subjectDeviceId: String): String {
+        val mirror = snapshot() ?: return ""
+        val others = mirror.members.filter {
+            it.status == MemberStatus.ACTIVE.name && it.deviceId != mirror.localDeviceId && it.deviceId != subjectDeviceId
+        }
+        if (others.any { RemovalCutoff.FEATURE !in mirror.peerFeatures[it.deviceId].orEmpty() }) return ""
+        val head = runCatching { progress().received[subjectDeviceId] }.getOrNull() ?: return ""
+        return if (head.sequence >= 1) RemovalCutoff.encode(head) else ""
+    }
+
     @Synchronized fun recordPeerAddress(deviceId: String, address: String) {
         val numeric = InetAddresses.parseNumericAddress(address)
         require(isPrivateAddress(numeric) && !numeric.isLinkLocalAddress)
@@ -333,10 +367,16 @@ internal class LockedSyncStore(private val context: Context,
             peerProgress = mirror.peerProgress + (deviceId to progress))).toByteArray(Charsets.UTF_8))
     }
 
-    @Synchronized override fun pending(frontier: SyncFrontier): List<SyncOperationEntity> {
+    @Synchronized override fun pending(frontier: SyncFrontier, relayRemoved: Boolean): List<SyncOperationEntity> {
         frontier.validate()
-        val vaultId = requireNotNull(snapshot()).vaultId
+        val mirror = requireNotNull(snapshot())
+        val vaultId = mirror.vaultId
+        // A receiver rejects a change by a device that is not an active member, and that ends the
+        // session. Changes of a removed device go only to a peer that accepts them up to the cutoff.
+        val authors = relayableAuthors(mirror.members)
+        val cutoffs = if (relayRemoved) RemovalCutoff.cutoffsOf(mirror.membershipEvents) else emptyMap()
         return outgoingPointers().asSequence().filter { it.vaultId == vaultId &&
+            (it.deviceId in authors || RemovalCutoff.allows(cutoffs[it.deviceId], it.sequence, it.hash)) &&
             it.sequence > (frontier.counters[it.deviceId] ?: 0L) }.take(100).map { pointer ->
             val bytes = readProtected(File(outgoing, pointer.hash))
             try {
@@ -351,9 +391,11 @@ internal class LockedSyncStore(private val context: Context,
     @Synchronized override fun queue(operation: SyncOperationEntity) {
         val mirror = requireNotNull(snapshot())
         require(operation.vaultId == mirror.vaultId)
-        val member = requireNotNull(mirror.members.firstOrNull {
-            it.deviceId == operation.deviceId && it.status == MemberStatus.ACTIVE.name
-        }) { "Unknown or revoked sender" }
+        val member = requireNotNull(mirror.members.firstOrNull { it.deviceId == operation.deviceId }) { "Unknown sender" }
+        require(member.status == MemberStatus.ACTIVE.name || RemovalCutoff.allows(
+            RemovalCutoff.cutoffsOf(mirror.membershipEvents)[operation.deviceId], operation.sequence, operation.hash)) {
+            "Unknown or revoked sender"
+        }
         val change = operation.toSyncChange()
         change.validate()
         require(DeviceIdentityCrypto.verify(Base64.getUrlDecoder().decode(member.identityPublicKey),

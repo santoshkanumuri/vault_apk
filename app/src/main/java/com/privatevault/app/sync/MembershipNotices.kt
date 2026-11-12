@@ -100,6 +100,8 @@ internal object MembershipWire {
     const val LEFT = "left1"
     const val NOT_MANAGER = "notmanager1"
     const val BUSY = "busy1"
+    /** Windows up to 2.1.6 answers a held sync lock with this word instead of [BUSY]. */
+    const val LEGACY_BUSY = "busy"
     const val LEAVE_PREFIX = "leave1."
     const val CONTROL_FRAME = 4096
     const val HISTORY_FRAME = 1_000_000
@@ -146,6 +148,11 @@ internal object MembershipWire {
         val end = events.indexOfFirst { it.keyEpoch > provedEpoch }
         return if (end < 0) events else events.take(end + 1)
     }
+
+    /** True when the first frame of a connection is a busy reply (from Android or Windows), not a challenge. */
+    fun isBusyReply(frame: ByteArray): Boolean =
+        frame.contentEquals(BUSY.toByteArray(Charsets.US_ASCII)) ||
+            frame.contentEquals(LEGACY_BUSY.toByteArray(Charsets.US_ASCII))
 
     fun proofMatches(supplied: ByteArray, secret: String, challenge: ByteArray): Boolean =
         MessageDigest.isEqual(supplied, TransportEpochs.probeProof(secret, challenge))
@@ -218,7 +225,7 @@ internal object LeaveRequestHandler {
      */
     fun handle(frame: MembershipWire.LeaveFrame, challenge: ByteArray, rootSecret: String,
         history: List<SyncMembershipEvent>, acceptedEpochs: Set<Long>, localDeviceId: String, now: Long,
-        signer: (ByteArray) -> ByteArray): LeaveDecision {
+        signer: (ByteArray) -> ByteArray, cutoffFor: (String) -> String = { "" }): LeaveDecision {
         val verified = runCatching { SyncMembershipManager.verify(history) }.getOrNull() ?: return LeaveDecision.Reject
         val request = frame.request
         val vaultId = verified.events.first().vaultId
@@ -244,7 +251,7 @@ internal object LeaveRequestHandler {
         if (pending != null) events += SyncMembershipEvent.sign(vaultId, events.size + 1L, events.last().hash,
             MembershipAction.CANCEL_TRANSFER, localDeviceId, pending, "", verified.keyEpoch, signer)
         events += SyncMembershipEvent.sign(vaultId, events.size + 1L, events.last().hash,
-            MembershipAction.REMOVE, localDeviceId, request.deviceId, "", verified.keyEpoch + 1, signer)
+            MembershipAction.REMOVE, localDeviceId, request.deviceId, cutoffFor(request.deviceId), verified.keyEpoch + 1, signer)
         SyncMembershipManager.verify(events)
         return LeaveDecision.Left(events.drop(history.size))
     }

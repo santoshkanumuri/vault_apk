@@ -47,8 +47,9 @@ internal class SyncFrames(input: InputStream, output: OutputStream) {
     }
 }
 
+/** [peerFeatures] are what the peer announced in its hello; advisory, never trusted for access. */
 internal data class HandshakeResult(val peer: DeviceIdentity, val key: ByteArray, val confirmation: String,
-    val peerPlatform: String)
+    val peerPlatform: String, val peerFeatures: Set<String> = emptySet())
 
 /** J-PAKE authenticates the shared secret; its result binds both public device identities. */
 internal fun pairingHandshake(frames: SyncFrames, local: DeviceIdentity, code: CharArray,
@@ -67,11 +68,16 @@ internal fun pairingHandshake(frames: SyncFrames, local: DeviceIdentity, code: C
         addProperty("device", local.deviceId)
         addProperty("key", local.publicKeyBase64Url)
         addProperty("platform", "android")
+        // Older builds ignore this list; a peer without it supports none of these features.
+        add("features", JsonArray().apply { RemovalCutoff.FEATURES.forEach(::add) })
     })
     require(hello.get("protocol").asInt == SYNC_WIRE_VERSION && hello.get("session").asString == sessionId &&
         hello.get("vault").asString == vaultId && hello.get("creator").asBoolean != creator) { "Pairing session mismatch" }
     val peerId = hello.get("device").asString
     val peerPlatform = hello.get("platform")?.asString ?: "android"
+    val peerFeatures = hello.get("features")?.takeIf { it.isJsonArray }?.asJsonArray
+        ?.mapNotNull { item -> item.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString?.takeIf { it.length <= 40 } }
+        ?.take(32)?.toSet().orEmpty()
     require(peerPlatform == "android" || peerPlatform == "windows") { "Unsupported pairing platform" }
     require(peerId.isNotBlank() && peerId.length <= 128 && peerId != local.deviceId)
     val peer = DeviceIdentity(peerId, Base64.getUrlDecoder().decode(hello.get("key").asString))
@@ -106,7 +112,7 @@ internal fun pairingHandshake(frames: SyncFrames, local: DeviceIdentity, code: C
             target.deviceId, target.publicKeyBase64Url))
     val digest = MessageDigest.getInstance("SHA-256").digest(key)
     val confirmation = digest.take(4).joinToString("") { "%02X".format(it) }.chunked(4).joinToString(" ")
-    return HandshakeResult(peer, key, confirmation, peerPlatform)
+    return HandshakeResult(peer, key, confirmation, peerPlatform, peerFeatures)
 }
 
 private fun proof(values: Array<BigInteger>) = JsonArray().apply { values.forEach { add(it.toString(16)) } }

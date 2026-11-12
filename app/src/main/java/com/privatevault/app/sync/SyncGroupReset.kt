@@ -30,7 +30,7 @@ internal suspend fun VaultDatabase.leaveRemovedSyncGroup(identityStore: AndroidD
  * them to the transport mirror too.
  */
 internal suspend fun VaultDatabase.removeSyncMember(identityStore: AndroidDeviceIdentityStore,
-    deviceId: String): List<SyncMembershipEventEntity> = withTransaction {
+    deviceId: String, cutoff: String = ""): List<SyncMembershipEventEntity> = withTransaction {
     val identity = identityStore.getOrCreate()
     val vaultId = requireNotNull(dao().settings()).vaultId
     val sync = syncDao()
@@ -47,7 +47,7 @@ internal suspend fun VaultDatabase.removeSyncMember(identityStore: AndroidDevice
     if (pending != null) added += SyncMembershipEvent.sign(vaultId, history.size + 1L, verified.head,
         MembershipAction.CANCEL_TRANSFER, identity.deviceId, deviceId, "", verified.keyEpoch, identityStore::sign)
     added += SyncMembershipEvent.sign(vaultId, history.size + added.size + 1L, (history + added).last().hash,
-        MembershipAction.REMOVE, identity.deviceId, deviceId, "", verified.keyEpoch + 1, identityStore::sign)
+        MembershipAction.REMOVE, identity.deviceId, deviceId, cutoff, verified.keyEpoch + 1, identityStore::sign)
     val after = SyncMembershipManager.verify(history + added)
     added.forEach { sync.insertMembershipEvent(SyncMembershipEventEntity.from(it)) }
     after.members.forEach { member ->

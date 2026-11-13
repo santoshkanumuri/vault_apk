@@ -142,12 +142,49 @@ internal class PhotoSyncBlobs(private val directory: File) {
             }
             output.fd.sync()
         }
-        if (digest(partial) != ref.hash) {
+        finish(partial, ref.hash)
+    }
+
+    /**
+     * Receives a whole blob from [input] (a cloud download), from offset 0. Like [receive], it keeps
+     * the blob only when it has exactly [PhotoBlobRef.size] bytes and their SHA-256 is the hash.
+     */
+    fun receive(input: java.io.InputStream, ref: PhotoBlobRef) {
+        require(valid(ref))
+        directory.mkdirs()
+        discardPartial(ref.hash)
+        val partial = File(directory, "${ref.hash}.part")
+        if (directory.usableSpace < ref.size) throw PhotoStorageFullException()
+        try {
+            FileOutputStream(partial).use { output ->
+                val buffer = ByteArray(64 * 1024)
+                try {
+                    var total = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        check(total <= ref.size) { "Photo data is larger than expected" }
+                        output.write(buffer, 0, count)
+                    }
+                    check(total == ref.size) { "Photo data is incomplete" }
+                } finally { buffer.fill(0) }
+                output.fd.sync()
+            }
+        } catch (failure: Exception) {
+            partial.delete()
+            throw failure
+        }
+        finish(partial, ref.hash)
+    }
+
+    private fun finish(partial: File, hash: String) {
+        if (digest(partial) != hash) {
             partial.delete()
             error("Photo data failed verification")
         }
-        val target = File(directory, ref.hash)
-        if (target.exists() && digest(target) != ref.hash) check(target.delete())
+        val target = File(directory, hash)
+        if (target.exists() && digest(target) != hash) check(target.delete())
         if (target.exists()) check(partial.delete())
         else check(partial.renameTo(target)) { "Could not finish photo transfer" }
     }

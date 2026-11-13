@@ -22,8 +22,8 @@ android {
         applicationId = "com.application.private_vault"
         minSdk = 29
         targetSdk = 36
-        versionCode = 57
-        versionName = "2.1.6"
+        versionCode = 58
+        versionName = "2.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -89,6 +89,8 @@ dependencies {
     implementation("net.zetetic:sqlcipher-android:4.6.1@aar")
     implementation("com.google.protobuf:protobuf-java:3.25.5")
     implementation("com.google.android.gms:play-services-wearable:20.0.1")
+    // Google Drive sync: Identity authorization for the drive.appdata scope (no client ID in the app).
+    implementation("com.google.android.gms:play-services-auth:22.0.0")
     implementation("com.google.crypto.tink:tink-android:1.23.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.github.devnied.emvnfccard:library:3.2.0")

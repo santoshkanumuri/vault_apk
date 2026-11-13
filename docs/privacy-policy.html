@@ -1,5 +1,5 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nuvori privacy policy</title><style>body{font:18px/1.6 system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;color:#17221d;background:#fafafa}pre{white-space:pre-wrap;font:inherit}</style><main><pre>Nuvori privacy policy
-Effective date: September 19, 2026
+Effective date: November 13, 2026
 
 Developer: Santosh Kanumuri
 Contact: santosh.kanumuri@hotmail.com
@@ -7,7 +7,27 @@ Contact: santosh.kanumuri@hotmail.com
 What stays on your device
 Nuvori stores the cards, passwords, authenticator setup keys, security questions, notes, groups, folders, app links, and photos you choose to save. Vault records and photos are encrypted in the app&#x27;s private storage. The master password protects the vault key; the app does not store your master password. Appearance and optional-feature preferences are stored locally.
 
-The app has no Internet permission, server account, advertising, analytics, or developer-operated cloud sync. It does not send your vault contents or app usage history to the developer. Processing inside the app takes place on your device.
+Nuvori has no developer server, Nuvori account, advertising, or analytics. It does not send your vault contents or app usage history to the developer. The app uses the network only for the optional device sync described below. All other processing takes place on your device.
+
+Optional device sync
+You can keep one vault on your own Android phones and Windows PCs. Pairing happens on the same Wi-Fi network. You confirm a code on both devices before the vault is copied. After pairing, your devices send each other encrypted, signed changes directly over the local network. To find each other, devices announce a random service name on the local network. It does not contain your name or your device name.
+
+Google Drive sync is off by default. You can turn it on to sync your devices when they are not on the same Wi-Fi. When you connect a Google account, Nuvori asks Google for one permission: access to a hidden app folder that belongs to Nuvori in that account&#x27;s Google Drive (the drive.appdata scope). Nuvori cannot see, open, or change your other Google Drive files. Requests go directly from your device to Google, with no developer server in between.
+
+Your device encrypts every change and photo before it uploads it, with a key that only your paired devices have. Google and the developer cannot read your vault contents. Google can see the number of Nuvori files, their sizes, their creation times, and their file names. File names contain random-looking codes and counters, not item names, device names, or account names. Google processes your Google account and these encrypted files under its own privacy policy.
+
+Nuvori reads your Google account&#x27;s email address to show which account is connected. It stores the address only on your device. On Android, Google Play services keeps the sign-in. On Windows, the sign-in token is stored inside the encrypted vault. Nuvori does not use Google user data for advertising, does not sell it, and does not transfer it to anyone, including the developer. Nuvori&#x27;s use and transfer of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.
+
+Select Disconnect in Nuvori to stop Google Drive sync on a device. The encrypted files stay in your Google Drive for your other devices. To delete them, open Google Drive on the web, go to Settings, then Manage apps, find Nuvori, and choose Delete hidden app data. To remove Nuvori&#x27;s access to your Google account, open your Google Account, go to Security, then Your connections to third-party apps &amp; services.
+
+Nuvori for Windows and the browser extension
+Nuvori for Windows keeps its vault encrypted on your PC, in your Windows user profile. It has no developer server or Nuvori account, and it uses the network only for the device sync described above.
+
+The optional Nuvori Password Fill extension for Chrome, Edge, and Brave works only together with Nuvori for Windows on the same PC. It runs on HTTPS pages to find sign-in, card, address, and authenticator-code fields. It sends the website&#x27;s origin and your fill or save requests to Nuvori for Windows through the browser&#x27;s native messaging, which stays on your PC. Nuvori for Windows answers only with account names saved for that exact website, and with the one login, card, address, or code you choose. The extension never receives your master password, your vault key, or your vault.
+
+After you submit a form, the extension can offer to save the login, card, or address. Nuvori for Windows encrypts the captured details before the extension keeps them. Details you have not answered yet stay in the browser&#x27;s session storage. Logins you approved while Nuvori was locked stay encrypted in the extension&#x27;s local storage until Nuvori saves them, for at most 7 days. The extension also stores its settings, the site lists you choose (Never save and Don&#x27;t suggest), and its last 20 diagnostic events. Diagnostic events contain the action, the status, the website host, and the time, with no usernames or passwords.
+
+The extension makes no network requests of its own. It does not send browsing history, page content, or form data to the developer or to anyone else. If you choose Copy password, the password goes to the clipboard, and the extension tries to clear it after about 30 seconds. If you turn on "Use Nuvori instead of the browser&#x27;s password manager", the extension asks for the browser&#x27;s privacy permission and turns off the browser&#x27;s own password saving and autofill. To delete the extension&#x27;s stored data, remove the extension in your browser&#x27;s extension settings.
 
 Optional permissions
 Camera access is used to scan authenticator setup QR codes or capture photos you choose to save. The QR scanner does not save camera frames. Photo capture may open your camera app, whose own privacy practices apply. Imported photo originals remain outside the vault.
@@ -24,6 +44,8 @@ Optional password autofill uses Android&#x27;s Autofill service, which you must 
 Supported signup and password-change forms can receive a locally generated password after authentication and confirmation. The app saves it as a separate encrypted login before filling, so it remains recoverable if the browser does not offer a save prompt. Your current login stays unchanged. Submit the website form yourself and check that it accepted the new password before removing an older login.
 
 On Android 14 or newer, you can enable Nuvori as a passkey provider. Supported website requests require a verified browser and exact website host. Native app requests use Android&#x27;s calling-app signing identity as their origin; the app name and requested site are shown before you confirm. Your vault must be unlocked to create or use a passkey. Passkey private keys stay in the encrypted vault and are included in authenticated encrypted backups. The requesting app or website receives a public credential or a signature, never the private key. Passkey account labels appear after unlocking. Some apps may require their own provider or passkey features that Nuvori does not support. Related or parent-domain browser requests are not supported. Deleting a passkey from the vault does not delete its registration or remove it from older backup files.
+
+Optional passkey import uses Android Credential Transfer and the FIDO Credential Exchange Format. Android shows compatible credential providers and transfers the selected passkeys directly to Nuvori. Nuvori validates supported P-256 private keys, shows the website and account labels for review, and saves approved passkeys in the encrypted vault. Nuvori does not create a plaintext transfer file. Providers that do not support Android Credential Transfer will not appear in the selector. Unsupported key types and passkey extensions are skipped.
 
 For supported browser login forms, Android can offer to save the login. After you accept that prompt, Nuvori temporarily holds the submitted username and password in process memory for up to two minutes while you unlock and review it. It saves or updates the encrypted record only after your confirmation. Cancellation or expiry clears the pending password. No plaintext form file is created. Username-first filling checks each page separately and does not carry passwords to a different website.
 

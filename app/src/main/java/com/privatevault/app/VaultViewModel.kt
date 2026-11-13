@@ -113,6 +113,9 @@ data class PasskeyTransferPreview(
     val unsupported: Int
 )
 
+/** How often an unlocked app in the foreground checks Google Drive. */
+private const val CLOUD_SYNC_INTERVAL_MS = 60_000L
+
 internal data class PasswordImportMappingRequest(
     val columns: List<PasswordColumnPreview>,
     val suggested: PasswordColumnMapping
@@ -126,6 +129,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val devicePairing = com.privatevault.app.sync.AndroidPairing(application)
     private val lockedSyncStore = com.privatevault.app.sync.LanSyncService.store(application)
     private var incomingSyncJob: kotlinx.coroutines.Job? = null
+    private var cloudSyncJob: kotlinx.coroutines.Job? = null
+    /** Google Drive sync: connection, last pass and the last problem, for the Devices screen. */
+    val cloudSyncStatus = com.privatevault.app.sync.CloudSyncRunner.status
     val devicePairingState = devicePairing.state
     val deviceSyncStatus: kotlinx.coroutines.flow.StateFlow<com.privatevault.app.sync.DeviceSyncStatus> =
         com.privatevault.app.sync.LanSyncService.status
@@ -746,6 +752,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 } finally { syncKey.fill(0) }
             }
         }
+        // Cloud sync after unlock, then about every minute while the app is in the foreground.
+        cloudSyncJob?.cancel()
+        cloudSyncJob = viewModelScope.launch {
+            com.privatevault.app.sync.CloudSyncRunner.refresh(getApplication())
+            com.privatevault.app.sync.CloudSyncRunner.request(getApplication())
+            while (database === db && _status.value is VaultStatus.Unlocked) {
+                delay(CLOUD_SYNC_INTERVAL_MS)
+                if (!backgrounded) com.privatevault.app.sync.CloudSyncRunner.request(getApplication())
+            }
+        }
     }
 
     fun dailyBiometricEncryptionCipher(): Cipher? = runCatching { biometricGate.dailyEncryptionCipher() }
@@ -765,6 +781,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun lock(reason: LockReason) {
         incomingSyncJob?.cancel()
+        cloudSyncJob?.cancel()
         com.privatevault.app.sync.RemoteEntryChanges.clear()
         devicePairing.cancel()
         cancelPasswordImport()
@@ -853,7 +870,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         backgroundJob?.cancel()
         backgroundDeadline = null
         backgrounded = false
-        if (_status.value is VaultStatus.Unlocked) scheduleInactivity()
+        if (_status.value is VaultStatus.Unlocked) {
+            scheduleInactivity()
+            com.privatevault.app.sync.CloudSyncRunner.request(getApplication())
+        }
         val activeDatabase = database
         if (activeDatabase != null && _status.value is VaultStatus.Unlocked) viewModelScope.launch {
             // Autofill's separate authenticated activity can save while this screen is away.
@@ -1414,8 +1434,61 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun syncDevicesNow() = securedLaunch {
         lockedSyncStore.publish(requireNotNull(database))
+        // A manual sync lists the whole Drive folder, in case files changed out of order.
+        com.privatevault.app.sync.CloudSyncRunner.request(getApplication(), full = true)
         com.privatevault.app.sync.LanSyncService.syncNow(getApplication())
         notify("Checking paired devices…", StatusKind.PROGRESS)
+    }
+
+    /**
+     * Connects Google Drive. Call it first with no [answer]; when it returns a screen, the UI shows
+     * it and calls again with Google's [answer]. Returns null when finished; a notice says how.
+     * A canceled sign-in or missing Google Play services changes nothing.
+     */
+    suspend fun connectGoogleDrive(answer: android.content.Intent? = null, fromGoogle: Boolean = false): android.app.PendingIntent? {
+        touch()
+        val app = getApplication<Application>()
+        val signIn = com.privatevault.app.sync.GoogleDriveSignIn
+        try {
+            val outcome = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                if (fromGoogle) signIn.fromIntent(app, answer) else signIn.authorize(app)
+            }
+            when (outcome) {
+                is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.NeedsUser -> {
+                    if (!fromGoogle) return outcome.intent
+                    notify("Google didn't allow access to Drive. Nothing changed.", StatusKind.WARNING)
+                }
+                com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Canceled ->
+                    notify("Google sign-in was canceled. Nothing changed.", StatusKind.INFO)
+                is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Failed -> notify(outcome.message, StatusKind.ERROR)
+                is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Token -> {
+                    val account = com.privatevault.app.sync.CloudSyncRunner.connect(app, outcome.accessToken)
+                    // Every change this device made goes back into the transport store for the first upload.
+                    database?.let { db ->
+                        runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { lockedSyncStore.publish(db) } }
+                    }
+                    com.privatevault.app.sync.CloudSyncRunner.request(app, full = true)
+                    notify("Google Drive connected as $account. Connect the same Google account on your other devices.",
+                        StatusKind.SUCCESS)
+                }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (failure: com.privatevault.app.sync.CloudException) { notify(failure.error.message, StatusKind.ERROR) }
+        catch (_: Exception) { notify("Couldn't connect Google Drive. Try again.", StatusKind.ERROR) }
+        return null
+    }
+
+    /** Signs out of Google Drive on this device. Wi-Fi sync and the files in the Drive stay. */
+    fun disconnectGoogleDrive() = viewModelScope.launch {
+        try {
+            com.privatevault.app.sync.CloudSyncRunner.disconnect(getApplication())
+            // Changes kept only for the Drive can now go once every peer has them.
+            database?.let { db ->
+                runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { lockedSyncStore.publish(db) } }
+            }
+            notify("Google Drive disconnected on this device", StatusKind.SUCCESS)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { notify("Couldn't disconnect Google Drive. Try again.", StatusKind.ERROR) }
     }
 
     fun setDeviceSyncAddress(deviceId: String, address: String) = securedLaunch {
@@ -1623,6 +1696,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         incomingSyncJob?.cancel()
+        cloudSyncJob?.cancel()
         devicePairing.close()
         cancelPasswordImport()
         cancelPasswordDuplicateReview()

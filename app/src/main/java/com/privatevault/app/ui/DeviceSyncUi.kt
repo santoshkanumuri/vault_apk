@@ -760,6 +760,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         viewModel.deviceSyncQueueStatus()?.let { StatusBanner(kind = StatusKind.ERROR, message = it) }
     }
 
+    // 4b. Optional sync through the user's own Google Drive, for devices that are apart.
+    if (devices.isNotEmpty()) CloudSyncCard(viewModel)
+
     // 5. Add a device (after the devices people already have).
     if (devices.isNotEmpty()) addDeviceCard()
 
@@ -1022,4 +1025,101 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                 Text("Cancel")
             }
         })
+}
+
+@Composable
+private fun CloudPoint(title: String, detail: String) {
+    Row(Modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Icon(NuvoriIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 2.dp).size(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(detail, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/**
+ * Sync through the user's own Google Drive, for devices that are not on the same Wi-Fi. Same
+ * wording as the Windows Sync page card. Shown only while this device is in a sync group.
+ */
+@Composable
+internal fun CloudSyncCard(viewModel: VaultViewModel) {
+    val status by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    var waiting by remember { mutableStateOf(false) }
+    var confirmDisconnect by remember { mutableStateOf(false) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(status.lastSyncAt) {
+        while (true) { now = System.currentTimeMillis(); delay(30_000) }
+    }
+    val googleScreen = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        if (result.resultCode != android.app.Activity.RESULT_OK) {
+            waiting = false
+            viewModel.notify("Google sign-in was canceled. Nothing changed.", StatusKind.INFO)
+        } else scope.launch {
+            try { viewModel.connectGoogleDrive(result.data, fromGoogle = true) } finally { waiting = false }
+        }
+    }
+    val connect: () -> Unit = {
+        waiting = true
+        scope.launch {
+            var opened = false
+            try {
+                viewModel.connectGoogleDrive()?.let { screen ->
+                    googleScreen.launch(androidx.activity.result.IntentSenderRequest.Builder(screen).build())
+                    opened = true
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { viewModel.notify("Couldn't open Google sign-in. Try again.", StatusKind.ERROR) }
+            finally { if (!opened) waiting = false }
+        }
+    }
+    val (chipKind, chipLabel) = when {
+        status.syncing -> StatusKind.PROGRESS to "Syncing"
+        status.needsSignIn -> StatusKind.WARNING to "Sign in again"
+        status.lastError != null -> StatusKind.WARNING to "Needs attention"
+        else -> StatusKind.SUCCESS to "On"
+    }
+    HairlineCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp).animateContentSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                SettingsIconBadge(NuvoriIcons.Cloud)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(if (status.connected) "Google Drive" else "Sync when your devices are apart",
+                        modifier = Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium)
+                    Text(if (status.connected) status.account else "Optional. Uses your own Google Drive, not a Nuvori server.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                if (status.connected) StatusChip(chipKind, chipLabel)
+            }
+            if (!status.connected) {
+                CloudPoint("Works anywhere", "Your devices sync through your Drive when they are not on the same Wi-Fi.")
+                CloudPoint("Google can't read it", "Every change is encrypted on this device before it is uploaded.")
+                CloudPoint("Only a hidden Nuvori folder", "Nuvori can't see or change your other Drive files.")
+                CloudPoint("One account for all devices", "Use the same Google account on every device.")
+                SettingsPrimaryButton(if (waiting) "Waiting for Google…" else "Connect Google Drive", onClick = connect,
+                    icon = NuvoriIcons.Cloud, enabled = !waiting)
+            } else {
+                if (status.needsSignIn) StatusBanner(kind = StatusKind.WARNING, title = "Google needs you to sign in again",
+                    message = "Access was removed or expired. Nothing is lost. Sync over Wi-Fi keeps working.",
+                    actionLabel = if (waiting) null else "Sign in again", onAction = connect)
+                else status.lastError?.let { StatusBanner(kind = StatusKind.WARNING, title = "Last Drive sync didn't finish", message = it) }
+                Text("Last Drive sync: ${if (status.lastSyncAt > 0) relativeTime(status.lastSyncAt, now) else "not yet"}",
+                    style = MaterialTheme.typography.bodyMedium)
+                Text("Your Drive stores encrypted changes only. On your other devices, connect the same Google account. Changes then sync through Drive whenever a device is unlocked and online.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SettingsSecondaryButton("Disconnect", onClick = { confirmDisconnect = true }, icon = NuvoriIcons.LogOut)
+            }
+        }
+    }
+    if (confirmDisconnect) AlertDialog(onDismissRequest = { confirmDisconnect = false },
+        title = { Text("Disconnect Google Drive on this device?") },
+        text = { Text("This device stops syncing through Google Drive. Sync over Wi-Fi keeps working. The encrypted files stay in your Drive for your other devices.") },
+        confirmButton = { TextButton(onClick = {
+            confirmDisconnect = false
+            viewModel.disconnectGoogleDrive()
+        }) { Text("Disconnect") } },
+        dismissButton = { TextButton(onClick = { confirmDisconnect = false }) { Text("Cancel") } })
 }

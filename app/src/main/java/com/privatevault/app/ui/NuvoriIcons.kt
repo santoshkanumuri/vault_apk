@@ -243,6 +243,12 @@ internal object NuvoriIcons {
         path("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4")
         path("m7 10 5 5 5-5")
     } }
+    val Cloud by lazy { lucide("cloud") { path("M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z") } }
+    val LogOut by lazy { lucide("log-out") {
+        path("m16 17 5-5-5-5")
+        path("M21 12H9")
+        path("M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4")
+    } }
     val History by lazy { lucide("history") {
         path("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8")
         path("M3 3v5h5")

@@ -17,7 +17,7 @@ Android version code 57. Windows version 2.1.8. Browser extension version 0.7.1.
 
 ## Windows 2.1.8 and browser extension 0.7.1
 
-Released together with this phone version. Highlights: the PC applies changes that point to deleted folders or codes, sets aside an unreadable change instead of failing every sync, uses the phone's sync status words and per-device counts, and answers leave requests. The extension follows two-step sign-ins, offers logins saved for another page of the same site, and fills card, address and code fields inside payment frames. Windows 2.1.8 also connects the browser extension by itself, with no PowerShell step. See the Windows repository's `docs/RELEASE-2.1.7.md` and `docs/RELEASE-2.1.8.md`.
+Released together with this phone version. Highlights: the PC applies changes that point to deleted folders or codes, sets aside an unreadable change instead of failing every sync, uses the phone's sync status words and per-device counts, and answers leave requests. The extension follows two-step sign-ins, offers logins saved for another page of the same site, and fills card, address and code fields inside payment frames. Windows 2.1.8 also connects the browser extension by itself, with no PowerShell step. See the Windows repository's `docs/RELEASE-2.1.7.md` and `docs/RELEASE-2.1.8.md`. Windows 2.1.9 followed with the same sync behavior; it adds a passkey status row in Settings and lets the Store build take over from the installer build (`docs/RELEASE-2.1.9.md`).
 
 ## Verification
 

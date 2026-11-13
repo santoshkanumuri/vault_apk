@@ -38,7 +38,9 @@ internal data class TransportMirror(val vaultId: String, val localDeviceId: Stri
     val epochRetiredAt: Map<String, Long> = emptyMap(),
     val clientOnlyPeers: Set<String> = emptySet(),
     /** What each peer announced in its last sync handshake (see [RemovalCutoff.FEATURE]). */
-    val peerFeatures: Map<String, List<String>> = emptyMap())
+    val peerFeatures: Map<String, List<String>> = emptyMap(),
+    /** Photo blob hashes the vault's attachments reference, for the cloud upload ([CloudSyncPass]). */
+    val attachmentHashes: Set<String> = emptySet())
 
 /**
  * A leave request kept after this device already left locally. It holds only what is needed to
@@ -63,9 +65,51 @@ internal fun relayableAuthors(members: List<SyncMembershipEntity>): Set<String> 
 
 internal class SyncQueueFullException : Exception("Unlock this device to apply queued changes")
 
+/**
+ * Checks a received change against the signed membership in [mirror]: an active member, or a removed
+ * one within its [RemovalCutoff], with a valid signature and hash. Shared by Wi-Fi and cloud sync.
+ */
+internal fun verifyIncomingOperation(mirror: TransportMirror, operation: SyncOperationEntity) {
+    require(operation.vaultId == mirror.vaultId)
+    val member = requireNotNull(mirror.members.firstOrNull { it.deviceId == operation.deviceId }) { "Unknown sender" }
+    require(member.status == MemberStatus.ACTIVE.name || RemovalCutoff.allows(
+        RemovalCutoff.cutoffsOf(mirror.membershipEvents)[operation.deviceId], operation.sequence, operation.hash)) {
+        "Unknown or revoked sender"
+    }
+    val change = operation.toSyncChange()
+    change.validate()
+    require(DeviceIdentityCrypto.verify(Base64.getUrlDecoder().decode(member.identityPublicKey),
+        change.signingBytes(), Base64.getUrlDecoder().decode(change.deviceSignature))) { "Invalid sender signature" }
+}
+
+/**
+ * [mirror] with the signed history [events] adopted, or null when [events] adds nothing. Throws for
+ * an invalid chain, another vault, an older key epoch or a history that conflicts with the stored one.
+ */
+internal fun mirrorWithMembership(mirror: TransportMirror, events: List<SyncMembershipEventEntity>): TransportMirror? {
+    val current = mirror.membershipEvents.map { it.toEvent() }
+    val incoming = events.map { it.toEvent() }
+    SyncMembershipManager.verify(current)
+    val verified = SyncMembershipManager.verify(incoming)
+    require(verified.events.first().vaultId == mirror.vaultId && verified.keyEpoch >= mirror.keyEpoch)
+    require(current.zip(incoming).all { (left, right) -> left.hash == right.hash }) {
+        "Conflicting membership history"
+    }
+    if (incoming.size <= current.size) return null
+    val members = verified.members.map { member ->
+        val label = mirror.members.firstOrNull { it.deviceId == member.deviceId }?.displayName
+        member.copy(displayName = label ?: member.displayName)
+    }
+    val retiredAt = if (verified.keyEpoch <= mirror.keyEpoch) mirror.epochRetiredAt else {
+        val now = System.currentTimeMillis()
+        mirror.epochRetiredAt + (mirror.keyEpoch until verified.keyEpoch).associate { it.toString() to now }
+    }
+    return mirror.copy(membershipEvents = events, members = members, keyEpoch = verified.keyEpoch, epochRetiredAt = retiredAt)
+}
+
 /** Contains transport secrets and encrypted operations only. It never stores a vault content key. */
 internal class LockedSyncStore(private val context: Context,
-    private val directory: File = File(context.noBackupFilesDir, "sync-transport")) : SyncSessionStore {
+    private val directory: File = File(context.noBackupFilesDir, "sync-transport")) : CloudSyncStore {
     private data class OperationPointer(val vaultId: String, val deviceId: String,
         val sequence: Long, val hash: String, val previousHash: String)
     private data class QueuedPointer(val vaultId: String, val link: ChainLink, val meta: QueuedOperationMeta)
@@ -75,6 +119,8 @@ internal class LockedSyncStore(private val context: Context,
     private val rejected = File(directory, "rejected")
     private val leaveNoticeFile = File(directory, "leave-notice")
     private val removalNoticeFile = File(directory, "removal-notice")
+    private val cloudStateFile = File(directory, "cloud-state")
+    private val cloudFilesFile = File(directory, "cloud-files")
     override val photoBlobs = PhotoSyncBlobs(File(directory, "blobs"))
     private val gson = Gson()
     private var outgoingIndex: List<OperationPointer>? = null
@@ -100,7 +146,7 @@ internal class LockedSyncStore(private val context: Context,
                 database.syncDao().attachments().mapTo(hashSetOf()) { it.ciphertextHash },
                 database.syncDao().conflicts().any { it.resolvedAtUtc.isEmpty() })
         }
-        publishState(mirror, operations, photoHashes, hasConflicts)
+        publishState(mirror.copy(attachmentHashes = photoHashes), operations, photoHashes, hasConflicts)
     }
 
     private data class PublishedState(val mirror: TransportMirror, val operations: List<SyncOperationEntity>,
@@ -131,8 +177,14 @@ internal class LockedSyncStore(private val context: Context,
         val activePeers = selected.members.filter {
             it.status == MemberStatus.ACTIVE.name && it.deviceId != selected.localDeviceId
         }
+        // Cloud sync needs a gap-free history on the drive, so this device keeps its own changes
+        // until the drive holds them, even after every peer applied them over Wi-Fi.
+        val cloud = cloudState().normalized()
+        val cloudCovered = if (!cloud.enabled) null
+            else if (cloud.vaultId == selected.vaultId) cloud.covered[selected.localDeviceId] ?: 0L else 0L
         val retained = operations.filter { operation ->
-            operation.deviceId != selected.localDeviceId || activePeers.isEmpty() || activePeers.any { peer ->
+            operation.deviceId != selected.localDeviceId || activePeers.isEmpty() ||
+                (cloudCovered != null && operation.sequence > cloudCovered) || activePeers.any { peer ->
                 (selected.peerProgress[peer.deviceId]?.applied?.get(operation.deviceId)?.sequence ?: 0L) < operation.sequence
             }
         }
@@ -162,7 +214,7 @@ internal class LockedSyncStore(private val context: Context,
             .sortedWith(compareBy({ it.deviceId }, { it.sequence }))
     }
 
-    @Synchronized fun snapshot(): TransportMirror? {
+    @Synchronized override fun snapshot(): TransportMirror? {
         val file = File(directory, "peers")
         if (!file.exists() && !File(file.path + ".bak").exists()) return null
         val bytes = readProtected(file)
@@ -176,30 +228,15 @@ internal class LockedSyncStore(private val context: Context,
                 pendingPhotoHashes = mirror.pendingPhotoHashes ?: emptySet(),
                 epochRetiredAt = mirror.epochRetiredAt ?: emptyMap(),
                 clientOnlyPeers = mirror.clientOnlyPeers ?: emptySet(),
-                peerFeatures = mirror.peerFeatures ?: emptyMap())
+                peerFeatures = mirror.peerFeatures ?: emptyMap(),
+                attachmentHashes = mirror.attachmentHashes ?: emptySet())
         }
         finally { bytes.fill(0) }
     }
 
-    @Synchronized fun acceptMembershipEvents(events: List<SyncMembershipEventEntity>) {
-        val mirror = requireNotNull(snapshot())
-        val current = mirror.membershipEvents.map { it.toEvent() }
-        val incoming = events.map { it.toEvent() }
-        SyncMembershipManager.verify(current)
-        val verified = SyncMembershipManager.verify(incoming)
-        require(verified.events.first().vaultId == mirror.vaultId && verified.keyEpoch >= mirror.keyEpoch)
-        require(current.zip(incoming).all { (left, right) -> left.hash == right.hash }) {
-            "Conflicting membership history"
-        }
-        if (incoming.size <= current.size) return
-        val members = verified.members.map { member ->
-            val label = mirror.members.firstOrNull { it.deviceId == member.deviceId }?.displayName
-            member.copy(displayName = label ?: member.displayName)
-        }
-        writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
-            membershipEvents = events, members = members, keyEpoch = verified.keyEpoch,
-            epochRetiredAt = retire(mirror.epochRetiredAt, mirror.keyEpoch, verified.keyEpoch)))
-            .toByteArray(Charsets.UTF_8))
+    @Synchronized override fun acceptMembershipEvents(events: List<SyncMembershipEventEntity>) {
+        val accepted = mirrorWithMembership(requireNotNull(snapshot()), events) ?: return
+        writeProtected(File(directory, "peers"), gson.toJson(accepted).toByteArray(Charsets.UTF_8))
     }
 
     /** Signs nothing itself: [events] are already signed by this device as the manager. */
@@ -259,6 +296,74 @@ internal class LockedSyncStore(private val context: Context,
             lastExchangeAt = if (completed) mirror.lastExchangeAt + (deviceId to now)
                 else mirror.lastExchangeAt)).toByteArray(Charsets.UTF_8))
     }
+
+    /** A peer's progress report on the drive was written at [at]; contact times never move backward. */
+    @Synchronized override fun recordPeerSeen(deviceId: String, at: Long) {
+        val mirror = requireNotNull(snapshot())
+        require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })
+        if (at <= (mirror.lastContactAt[deviceId] ?: 0L)) return
+        writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
+            lastContactAt = mirror.lastContactAt + (deviceId to at))).toByteArray(Charsets.UTF_8))
+    }
+
+    @Synchronized override fun heldOperations(author: String, after: Long, limit: Int): List<SyncOperationEntity> {
+        val mirror = requireNotNull(snapshot())
+        return outgoingPointers().asSequence()
+            .filter { it.vaultId == mirror.vaultId && it.deviceId == author && it.sequence > after }
+            .sortedBy { it.sequence }.take(limit).map { pointer ->
+                val bytes = readProtected(File(outgoing, pointer.hash))
+                try {
+                    gson.fromJson(bytes.toString(Charsets.UTF_8), SyncOperationEntity::class.java).also {
+                        require(it.vaultId == pointer.vaultId && it.deviceId == pointer.deviceId &&
+                            it.sequence == pointer.sequence && it.hash == pointer.hash) { "Outgoing index changed" }
+                    }
+                } finally { bytes.fill(0) }
+            }.toList()
+    }
+
+    // Cloud sync settings and state. They survive [clear]: the Drive connection is per device, and
+    // the pass state names the group it belongs to (see [CloudSyncState.forGroup]).
+
+    @Synchronized override fun cloudState(): CloudSyncState {
+        if (!cloudStateFile.exists() && !File(cloudStateFile.path + ".bak").exists()) return CloudSyncState()
+        return runCatching {
+            val bytes = readProtected(cloudStateFile)
+            try { gson.fromJson(bytes.toString(Charsets.UTF_8), CloudSyncState::class.java).normalized() }
+            finally { bytes.fill(0) }
+        }.getOrDefault(CloudSyncState())
+    }
+
+    @Synchronized override fun updateCloudState(transform: (CloudSyncState) -> CloudSyncState) {
+        writeProtected(cloudStateFile, gson.toJson(transform(cloudState()).normalized()).toByteArray(Charsets.UTF_8))
+    }
+
+    @Synchronized override fun cloudFiles(): List<CloudFile> {
+        if (!cloudFilesFile.exists() && !File(cloudFilesFile.path + ".bak").exists()) return emptyList()
+        return runCatching {
+            val bytes = readProtected(cloudFilesFile, CLOUD_FILES_LIMIT)
+            try {
+                @Suppress("SENSELESS_COMPARISON")
+                gson.fromJson(bytes.toString(Charsets.UTF_8), Array<CloudFile>::class.java).filter {
+                    it != null && it.id != null && it.name != null && it.modified != null
+                }
+            } finally { bytes.fill(0) }
+        }.getOrDefault(emptyList())
+    }
+
+    /** A list too large to keep is dropped; the next pass then lists the whole folder again. */
+    @Synchronized override fun saveCloudFiles(files: List<CloudFile>) {
+        val bytes = gson.toJson(files).toByteArray(Charsets.UTF_8)
+        if (bytes.size <= CLOUD_FILES_LIMIT) writeProtected(cloudFilesFile, bytes, CLOUD_FILES_LIMIT)
+        else { bytes.fill(0); forgetCloudFiles() }
+    }
+
+    /** Signs out locally: the connection, the cached file list and the pass state go. */
+    @Synchronized fun forgetCloud() {
+        AtomicFile(cloudStateFile).delete()
+        forgetCloudFiles()
+    }
+
+    private fun forgetCloudFiles() { AtomicFile(cloudFilesFile).delete() }
 
     /** Platform metadata for enrollment limits. Every platform can accept sync connections. */
     @Synchronized fun recordPeerPlatform(deviceId: String, platform: String) {
@@ -390,16 +495,8 @@ internal class LockedSyncStore(private val context: Context,
 
     @Synchronized override fun queue(operation: SyncOperationEntity) {
         val mirror = requireNotNull(snapshot())
-        require(operation.vaultId == mirror.vaultId)
-        val member = requireNotNull(mirror.members.firstOrNull { it.deviceId == operation.deviceId }) { "Unknown sender" }
-        require(member.status == MemberStatus.ACTIVE.name || RemovalCutoff.allows(
-            RemovalCutoff.cutoffsOf(mirror.membershipEvents)[operation.deviceId], operation.sequence, operation.hash)) {
-            "Unknown or revoked sender"
-        }
+        verifyIncomingOperation(mirror, operation)
         val change = operation.toSyncChange()
-        change.validate()
-        require(DeviceIdentityCrypto.verify(Base64.getUrlDecoder().decode(member.identityPublicKey),
-            change.signingBytes(), Base64.getUrlDecoder().decode(change.deviceSignature))) { "Invalid sender signature" }
         val file = File(incoming, change.hash)
         // A resend of something already held is acknowledged again without a second copy.
         if (file.exists() || File(outgoing, change.hash).exists()) return
@@ -604,9 +701,9 @@ internal class LockedSyncStore(private val context: Context,
             finally { bytes.fill(0) }
         }
 
-    private fun writeProtected(file: File, plaintext: ByteArray) {
+    private fun writeProtected(file: File, plaintext: ByteArray, limit: Int = SyncFrames.MAX_FRAME) {
         try {
-            require(plaintext.size <= SyncFrames.MAX_FRAME)
+            require(plaintext.size <= limit)
             file.parentFile!!.mkdirs()
             val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
                 init(Cipher.ENCRYPT_MODE, wrappingKey())
@@ -620,9 +717,9 @@ internal class LockedSyncStore(private val context: Context,
         } finally { plaintext.fill(0) }
     }
 
-    private fun readProtected(file: File): ByteArray {
+    private fun readProtected(file: File, limit: Int = SyncFrames.MAX_FRAME): ByteArray {
         val bytes = AtomicFile(file).openRead().use { input ->
-            require(input.channel.size() in 28..(SyncFrames.MAX_FRAME + 28L)) { "Invalid protected sync file" }
+            require(input.channel.size() in 28..(limit + 28L)) { "Invalid protected sync file" }
             input.readBytes()
         }
         return Cipher.getInstance("AES/GCM/NoPadding").run {
@@ -648,6 +745,8 @@ internal class LockedSyncStore(private val context: Context,
 
     private companion object {
         const val KEY_ALIAS = "nuvori_sync_transport_v1"
+        /** The cached Drive file list (about 150 bytes a file); Windows stops listing at 200,000 files. */
+        const val CLOUD_FILES_LIMIT = 32 * 1024 * 1024
         val HASH = Regex("[a-f0-9]{64}")
     }
 }

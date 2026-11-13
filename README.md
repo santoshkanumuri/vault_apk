@@ -2,9 +2,9 @@
 
 **Yours, by design.**
 
-An Android app for cards, passwords, authenticator codes, passkeys, security questions, notes, and photos. Vault data works offline; optional device sync uses your local Wi-Fi.
+An Android app for cards, passwords, authenticator codes, passkeys, security questions, notes, and photos. Vault data works offline; optional device sync uses your local Wi-Fi or your own Google Drive.
 
-No account, server, ads, or cloud sync. A paired Android device receives encrypted vault changes over your local Wi-Fi.
+No Nuvori account, server, or ads. Paired devices receive encrypted vault changes over your local Wi-Fi. When they are apart, they can also sync through your own Google Drive, which stores only encrypted files.
 
 <p align="center">
   <img src="docs/assets/nuvori-logo-transparent.png" alt="Nuvori logo" width="150">
@@ -29,15 +29,15 @@ The screenshots contain synthetic demonstration data only.
 
 ## Download
 
-**[Download Nuvori 2.1.6 phone preview APK](downloads/nuvori-v2.1.6-phone.apk?raw=true)**
+**[Download Nuvori 2.2.0 phone preview APK](downloads/nuvori-v2.2.0-phone.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.1.6.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.2.0.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 
 **Moving from v1.5.2 or earlier:** v1.6.0 uses the new package `com.application.private_vault` and installs as a separate app. Export an encrypted backup from the old app, restore it into the new app, and check your records before removing the old installation. Later updates using the same package and signing identity can install over this version.
 
-For Google Play, use the [2.1.6 phone AAB](downloads/nuvori-v2.1.6-phone.aab?raw=true) and [release build guide](docs/PUBLISHING.md). An AAB is for store upload; install the APK directly on a phone.
+For Google Play, use the [2.2.0 phone AAB](downloads/nuvori-v2.2.0-phone.aab?raw=true) and [release build guide](docs/PUBLISHING.md). An AAB is for store upload; install the APK directly on a phone.
 
 Wear OS companion version 2.1.1, code 360011: [watch APK](downloads/nuvori-v2.1.1-watch.apk?raw=true), [watch AAB](downloads/nuvori-v2.1.1-watch.aab?raw=true), and [setup guide](docs/WATCH-COMPANION.md). Install the watch APK on the watch. For local setup, the phone and watch apps must share the package name and signing certificate; these download builds match.
 
@@ -56,6 +56,7 @@ Wear OS companion version 2.1.1, code 360011: [watch APK](downloads/nuvori-v2.1.
 - **App-linked codes:** choose Linked apps when editing an authenticator account. Optional Usage access lets the tile suggest accounts for the previous app. Codes start masked, with Copy, Show/Hide, and Show all controls. App links are included in encrypted backups. Browser websites cannot be identified this way.
 - **Photos:** full-resolution capture and original-file import, encrypted thumbnails, crop, rotate, cover selection, and zoom. Imported originals remain outside the vault.
 - **Device sync:** pair up to six mobile devices and two Windows PCs on a reachable local network. Devices discover one another and can exchange or relay signed changes directly. Windows must be unlocked for automatic sync. Entries and photos sync through an encrypted local connection. The Android devices page starts with the sync status, last check time, and **Sync now**, then shows problems, your devices, the Automatic sync switch and check interval, pairing, and a Danger zone for leaving the group. Status colors mean the same everywhere: green checked, blue in progress, amber waiting, red needs attention. Keep an encrypted backup while testing this preview.
+- **Google Drive sync (optional):** when your devices are not on the same Wi-Fi, connect your own Google Drive under **Settings > Devices & sync**. Nuvori uses only its hidden app folder, encrypts every change and photo before upload, and checks the same signatures as Wi-Fi sync. Connect the same Google account on every device. First pairing still needs the same Wi-Fi.
 - **Windows sync preview:** copy the vault to an unlocked Nuvori Windows vault over an encrypted local connection. Scan the phone's QR on the PC or use **Copy link**. If the PC cannot reach the phone, show a QR in Windows Sync and choose **Scan Windows QR** on the managing phone. Enter the phone's master password in Windows and confirm the matching code on both devices. Windows keeps its existing local items. Later edits and photos sync in both directions when Windows connects to the phone. This repository supplies the Android build; it does not include a Windows installer.
 - **Home:** favorites, recently opened entries, expiry warnings, and quick add. Search across entry types, usernames, questions, card last four digits, folders, groups, tags, and notes. Passwords, answers, CVVs, full card numbers, and authenticator keys stay out of search.
 - **Clear feedback:** saving, updating, deleting, copying, and sync actions show a short colored confirmation. Messages never include passwords, codes, or card numbers.
@@ -74,7 +75,7 @@ Password history and saving credentials spread across multiple pages remain unsu
 
 ## How it works
 
-Kotlin and Jetpack Compose handle the interface. Room with SQLCipher stores the encrypted database. AES-GCM encrypts photos in private app storage. The app has Internet permission for direct local Wi-Fi sync; it does not use a Nuvori server.
+Kotlin and Jetpack Compose handle the interface. Room with SQLCipher stores the encrypted database. AES-GCM encrypts photos in private app storage. The app has Internet permission for direct local Wi-Fi sync and optional Google Drive sync; it does not use a Nuvori server.
 
 A random key encrypts the vault. Argon2id derives a key from your master password to protect that vault key. The app does not store the master password itself.
 

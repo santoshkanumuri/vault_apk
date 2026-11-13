@@ -441,15 +441,9 @@ class LanSyncService : Service() {
         return false
     }
 
-    private fun recordRemoval(notice: RemovalNotice.Removed) {
-        val mirror = runCatching { store(this).snapshot() }.getOrNull()
-        val name = mirror?.members?.firstOrNull { it.deviceId == notice.issuerDeviceId }?.displayName
-            ?.takeIf { it.isNotBlank() && it != "Android device" && it != "This device" }.orEmpty()
-        runCatching {
-            store(this).recordRemoval(SyncRemovalNotice(mirror?.vaultId.orEmpty(), notice.issuerDeviceId, name,
-                System.currentTimeMillis()))
-        }
-        mutableRemovalEvents.value = mutableRemovalEvents.value + 1
+    private fun recordRemoval(notice: RemovalNotice.Removed) = recordRemoval(this, notice)
+
+    private fun stopAfterRemoval() {
         setStatus(DeviceSyncPhase.ATTENTION,
             "This device was removed from the sync group. Your items stay on this device.")
         clearConnectedPeers("Removed from the sync group.")
@@ -709,9 +703,27 @@ class LanSyncService : Service() {
         internal fun store(context: Context): LockedSyncStore = sharedStore ?: synchronized(this) {
             sharedStore ?: LockedSyncStore(context.applicationContext).also { sharedStore = it }
         }
+        /**
+         * Keeps a verified signed removal of this device (from Wi-Fi or from the cloud drive) for the
+         * unlocked app, which then leaves the group locally. A running service stops.
+         */
+        internal fun recordRemoval(context: Context, notice: RemovalNotice.Removed) {
+            val mirror = runCatching { store(context).snapshot() }.getOrNull()
+            val name = mirror?.members?.firstOrNull { it.deviceId == notice.issuerDeviceId }?.displayName
+                ?.takeIf { it.isNotBlank() && it != "Android device" && it != "This device" }.orEmpty()
+            runCatching {
+                store(context).recordRemoval(SyncRemovalNotice(mirror?.vaultId.orEmpty(), notice.issuerDeviceId, name,
+                    System.currentTimeMillis()))
+            }
+            mutableRemovalEvents.value = mutableRemovalEvents.value + 1
+            activeInstance?.stopAfterRemoval()
+        }
+
         internal suspend fun publishCredentialChanges(context: Context, database: com.privatevault.app.data.VaultDatabase) {
             try {
                 store(context).publish(database)
+                // Cloud sync does not depend on Wi-Fi sync running or being paused.
+                CloudSyncRunner.request(context)
                 if (!isPaused(context)) {
                     val running = activeInstance
                     if (running != null) running.signals.trySend(Unit)
@@ -757,6 +769,7 @@ class LanSyncService : Service() {
         }
 
         fun syncNow(context: Context) {
+            CloudSyncRunner.request(context)
             context.startForegroundService(Intent(context, LanSyncService::class.java).setAction(SYNC_NOW))
         }
     }

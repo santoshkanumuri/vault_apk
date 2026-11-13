@@ -1046,6 +1046,7 @@ private fun CloudPoint(title: String, detail: String) {
 @Composable
 internal fun CloudSyncCard(viewModel: VaultViewModel) {
     val status by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
+    val checkInterval by com.privatevault.app.sync.CloudSyncRunner.checkInterval.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var waiting by remember { mutableStateOf(false) }
     var confirmDisconnect by remember { mutableStateOf(false) }
@@ -1107,6 +1108,29 @@ internal fun CloudSyncCard(viewModel: VaultViewModel) {
                 else status.lastError?.let { StatusBanner(kind = StatusKind.WARNING, title = "Last Drive sync didn't finish", message = it) }
                 Text("Last Drive sync: ${if (status.lastSyncAt > 0) relativeTime(status.lastSyncAt, now) else "not yet"}",
                     style = MaterialTheme.typography.bodyMedium)
+                Text("Check Google Drive every", style = MaterialTheme.typography.labelLarge)
+                com.privatevault.app.sync.CloudSyncRunner.CHECK_INTERVALS.chunked(2).forEach { options ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        options.forEach { option ->
+                            val label = when (option) {
+                                15_000L -> "15 s"
+                                60_000L -> "1 min"
+                                300_000L -> "5 min"
+                                else -> "Sync now only"
+                            }
+                            FilterChip(selected = checkInterval == option,
+                                onClick = { if (checkInterval != option) viewModel.setCloudCheckInterval(option) },
+                                label = { Text(label) }, modifier = Modifier.weight(1f),
+                                leadingIcon = if (checkInterval == option) {
+                                    { Icon(NuvoriIcons.Check, contentDescription = null,
+                                        modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+                                } else null)
+                        }
+                    }
+                }
+                Text(if (checkInterval == 0L) "Checks when you open or unlock Nuvori and when you tap Sync now. This phone's own changes still upload right away."
+                    else "While Nuvori is open. Shorter means other devices' changes arrive sooner. This phone's own changes upload right away.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("Your Drive stores encrypted changes only. On your other devices, connect the same Google account. Changes then sync through Drive whenever a device is unlocked and online.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 SettingsSecondaryButton("Disconnect", onClick = { confirmDisconnect = true }, icon = NuvoriIcons.LogOut)

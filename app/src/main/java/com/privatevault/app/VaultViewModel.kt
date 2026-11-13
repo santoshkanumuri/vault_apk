@@ -37,6 +37,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.crypto.Cipher
 import java.util.UUID
@@ -114,7 +115,6 @@ data class PasskeyTransferPreview(
 )
 
 /** How often an unlocked app in the foreground checks Google Drive. */
-private const val CLOUD_SYNC_INTERVAL_MS = 60_000L
 
 internal data class PasswordImportMappingRequest(
     val columns: List<PasswordColumnPreview>,
@@ -752,14 +752,20 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 } finally { syncKey.fill(0) }
             }
         }
-        // Cloud sync after unlock, then about every minute while the app is in the foreground.
+        // Cloud sync after unlock, then at the chosen interval while the app is in the foreground.
+        // A new interval takes effect at once: the wait ends when the setting changes.
         cloudSyncJob?.cancel()
         cloudSyncJob = viewModelScope.launch {
-            com.privatevault.app.sync.CloudSyncRunner.refresh(getApplication())
-            com.privatevault.app.sync.CloudSyncRunner.request(getApplication())
+            val runner = com.privatevault.app.sync.CloudSyncRunner
+            runner.loadCheckInterval(getApplication())
+            runner.refresh(getApplication())
+            runner.request(getApplication())
             while (database === db && _status.value is VaultStatus.Unlocked) {
-                delay(CLOUD_SYNC_INTERVAL_MS)
-                if (!backgrounded) com.privatevault.app.sync.CloudSyncRunner.request(getApplication())
+                val every = runner.checkInterval.value
+                val changed = kotlinx.coroutines.withTimeoutOrNull(if (every > 0) every else Long.MAX_VALUE) {
+                    runner.checkInterval.first { it != every }
+                }
+                if (changed == null && every > 0 && !backgrounded) runner.request(getApplication())
             }
         }
     }
@@ -1432,6 +1438,17 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("Checks every $label", StatusKind.SUCCESS)
     }
 
+    /** How often Google Drive is checked while Nuvori is open; 0 = only on unlock and Sync now. */
+    fun setCloudCheckInterval(interval: Long) {
+        com.privatevault.app.sync.CloudSyncRunner.setCheckInterval(getApplication(), interval)
+        notify(when (interval) {
+            15_000L -> "Checks Google Drive every 15 seconds"
+            60_000L -> "Checks Google Drive every minute"
+            300_000L -> "Checks Google Drive every 5 minutes"
+            else -> "Checks Google Drive when you open Nuvori and on Sync now"
+        }, StatusKind.SUCCESS)
+    }
+
     fun syncDevicesNow() = securedLaunch {
         lockedSyncStore.publish(requireNotNull(database))
         // A manual sync lists the whole Drive folder, in case files changed out of order.
@@ -1600,9 +1617,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     val vaultId = requireNotNull(it.dao().settings()).vaultId
                     val notice = it.prepareLeaveNotice(deviceIdentityStore, addresses,
                         com.privatevault.app.sync.LanSyncService.syncPort(vaultId))
+                    // With Google Drive sync on, the request also goes to Drive, sealed while this
+                    // device still holds the group keys. The managing device finds it from anywhere.
+                    val drive = runCatching { com.privatevault.app.sync.CloudSyncRunner.leaveFile(lockedSyncStore, notice) }.getOrNull()
                     it.leaveSyncGroup(deviceIdentityStore)
                     lockedSyncStore.clear()
-                    lockedSyncStore.savePendingLeave(notice)
+                    lockedSyncStore.savePendingLeave(if (drive == null) notice else notice.copy(driveName = drive.first,
+                        driveFile = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(drive.second)))
+                    if (drive != null) com.privatevault.app.sync.CloudSyncRunner.request(getApplication())
                 }
                 else {
                     it.removeOnlyPairedDevice(deviceIdentityStore, deviceId)

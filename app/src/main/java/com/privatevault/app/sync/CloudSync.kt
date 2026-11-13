@@ -37,6 +37,7 @@ import javax.crypto.spec.SecretKeySpec
  *   nv1.<group>.o.<device>.<first>.<last>  JSON array of changes by one author (as sent over Wi-Fi)
  *   nv1.<group>.p.<device>                 {deviceId, updatedAt, progress}
  *   nv1.<group>.b.<sha256>                 a photo blob as stored (no envelope)
+ *   nv1.<group>.l.<device>                 {request, signature}: a signed leave request ([CloudLeave])
  *
  * cloud key = HMAC-SHA256(epoch-1 transport secret, "nuvori-cloud-v1:<vaultId>");
  * <group> and <device> = first 8 bytes, hex, of HMAC-SHA256(cloud key, "tag" / "device:<id>");
@@ -98,6 +99,33 @@ internal sealed interface CloudName {
     data class Operations(val device: String, val first: Long, val last: Long) : CloudName
     data class Progress(val device: String) : CloudName
     data class Blob(val hash: String) : CloudName
+    data class Leave(val device: String) : CloudName
+}
+
+/**
+ * A signed leave request on Google Drive: the same request and Ed25519 signature as the Wi-Fi
+ * `leave1` frame, as JSON `{"request": {vaultId, deviceId, membershipHead, keyEpoch, createdAt},
+ * "signature": "<base64url, no padding>"}` in a sealed envelope. The managing device answers it
+ * with [LeaveRequestHandler.handleFromDrive].
+ */
+internal object CloudLeave {
+    const val MAX_BYTES = 4096L
+
+    fun encode(request: LeaveRequest, signature: String): ByteArray = JsonObject().apply {
+        add("request", JsonParser.parseString(request.toJson()))
+        addProperty("signature", signature)
+    }.toString().toByteArray(Charsets.UTF_8).also { require(it.size <= MAX_BYTES) }
+
+    /** Null for anything but exactly that shape with a valid request. */
+    fun parse(bytes: ByteArray): Pair<LeaveRequest, ByteArray>? = runCatching {
+        require(bytes.size <= MAX_BYTES)
+        val o = JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject
+        require(o.keySet() == setOf("request", "signature"))
+        val request = LeaveRequest.parseJson(o.getAsJsonObject("request").toString())
+        val signature = Base64.getUrlDecoder().decode(o.getAsJsonPrimitive("signature").also { require(it.isString) }.asString)
+        require(signature.size == DeviceIdentityCrypto.SIGNATURE_BYTES)
+        request to signature
+    }.getOrNull()
 }
 
 /** Names and the envelope for one sync group. */
@@ -111,6 +139,7 @@ internal class CloudKeys private constructor(private val key: ByteArray) {
         "${prefix}o.${deviceTag(deviceId)}.${first.toString().padStart(12, '0')}.${last.toString().padStart(12, '0')}"
     fun progressName(deviceId: String) = "${prefix}p.${deviceTag(deviceId)}"
     fun blobName(hash: String) = "${prefix}b.$hash"
+    fun leaveName(deviceId: String) = "${prefix}l.${deviceTag(deviceId)}"
 
     /** Null for a file of another group or with a name this version does not know. */
     fun parse(name: String): CloudName? {
@@ -127,6 +156,7 @@ internal class CloudKeys private constructor(private val key: ByteArray) {
             }
             parts.size == 2 && parts[0] == "p" && hexField(parts[1], 16) -> CloudName.Progress(parts[1])
             parts.size == 2 && parts[0] == "b" && parts[1].matches(HASH) -> CloudName.Blob(parts[1])
+            parts.size == 2 && parts[0] == "l" && hexField(parts[1], 16) -> CloudName.Leave(parts[1])
             else -> null
         }
     }
@@ -228,6 +258,8 @@ internal interface CloudSyncStore : SyncSessionStore {
     fun updateCloudState(transform: (CloudSyncState) -> CloudSyncState)
     fun cloudFiles(): List<CloudFile>
     fun saveCloudFiles(files: List<CloudFile>)
+    /** Managing device: answers a leave request found on the drive. True when it signed new events. */
+    fun answerDriveLeave(request: LeaveRequest, signature: ByteArray): Boolean = false
 }
 
 internal data class CloudPassReport(val received: Int = 0, val sent: Int = 0, val photosReceived: Int = 0,
@@ -278,8 +310,28 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
         listed.forEach(::remember)
         save(false)
 
-        // 2. Membership: take a longer signed history, or publish ours when the drive lacks it.
+        // 1b. Leave requests: the managing device answers a new `l.` file of an active member as it
+        // answers a Wi-Fi leave request. Step 2 then publishes the history with the REMOVE.
         var events = mirror.membershipEvents
+        val managing = runCatching {
+            SyncMembershipManager.verify(events.map { it.toEvent() }).managerDeviceId == local
+        }.getOrDefault(false)
+        if (managing) {
+            val members = mirror.members.filter { it.status == MemberStatus.ACTIVE.name && it.deviceId != local }
+                .associateBy { keys.deviceTag(it.deviceId) }
+            for (file in listed) {
+                val name = keys.parse(file.name) as? CloudName.Leave ?: continue
+                val member = members[name.device] ?: continue
+                val leave = runCatching {
+                    CloudLeave.parse(requireNotNull(keys.open(file.name, drive.downloadBytes(file.id, CloudLeave.MAX_BYTES))))
+                }.getOrNull() ?: continue
+                if (leave.first.deviceId != member.deviceId) continue
+                if (runCatching { store.answerDriveLeave(leave.first, leave.second) }.getOrDefault(false))
+                    events = requireNotNull(store.snapshot()).membershipEvents
+            }
+        }
+
+        // 2. Membership: take a longer signed history, or publish ours when the drive lacks it.
         val histories = parsed().mapNotNull { (file, name) -> (name as? CloudName.Membership)?.let { it.count to file } }
             .sortedByDescending { it.first }
         var published = histories.any { it.first == events.size.toLong() }

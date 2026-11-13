@@ -50,7 +50,9 @@ internal data class TransportMirror(val vaultId: String, val localDeviceId: Stri
 @Keep
 internal data class PendingLeaveNotice(val vaultId: String, val deviceId: String, val membershipHead: String,
     val keyEpoch: Long, val createdAt: Long, val signature: String, val transportSecret: String,
-    val addresses: List<String> = emptyList(), val port: Int = 0, val lastAttemptAt: Long = 0) {
+    val addresses: List<String> = emptyList(), val port: Int = 0, val lastAttemptAt: Long = 0,
+    /** The sealed Google Drive copy of the request ([CloudLeave]), made before leaving; empty without Drive sync. */
+    val driveName: String = "", val driveFile: String = "", val driveUploadedAt: Long = 0) {
     fun request() = LeaveRequest(vaultId, deviceId, membershipHead, keyEpoch, createdAt)
 }
 
@@ -237,6 +239,20 @@ internal class LockedSyncStore(private val context: Context,
     @Synchronized override fun acceptMembershipEvents(events: List<SyncMembershipEventEntity>) {
         val accepted = mirrorWithMembership(requireNotNull(snapshot()), events) ?: return
         writeProtected(File(directory, "peers"), gson.toJson(accepted).toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * Managing device: answers a signed leave request found on Google Drive, as [LanSyncExchange]
+     * answers one over Wi-Fi. True when it appended new signed events (the REMOVE).
+     */
+    @Synchronized override fun answerDriveLeave(request: LeaveRequest, signature: ByteArray): Boolean {
+        val mirror = snapshot() ?: return false
+        val decision = LeaveRequestHandler.handleFromDrive(request, signature, mirror.membershipEvents.map { it.toEvent() },
+            setOf(mirror.keyEpoch) + retainedEpochs(), mirror.localDeviceId, System.currentTimeMillis(),
+            ::signIdentity, ::removalCutoff)
+        if (decision !is LeaveDecision.Left || decision.append.isEmpty()) return false
+        appendMembershipEvents(decision.append.map { SyncMembershipEventEntity.from(it) })
+        return true
     }
 
     /** Signs nothing itself: [events] are already signed by this device as the manager. */
@@ -639,7 +655,8 @@ internal class LockedSyncStore(private val context: Context,
             return null
         }
         @Suppress("USELESS_ELVIS")
-        return notice.copy(addresses = notice.addresses ?: emptyList())
+        return notice.copy(addresses = notice.addresses ?: emptyList(), driveName = notice.driveName ?: "",
+            driveFile = notice.driveFile ?: "")
     }
 
     @Synchronized fun recordLeaveAttempt(now: Long = System.currentTimeMillis()) {

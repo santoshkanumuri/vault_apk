@@ -35,6 +35,30 @@ internal object CloudSyncRunner {
     private val mutableStatus = MutableStateFlow(CloudSyncStatus())
     val status: StateFlow<CloudSyncStatus> = mutableStatus.asStateFlow()
 
+    /**
+     * How often the phone checks Google Drive while Nuvori is open and unlocked. 0 = only when it
+     * unlocks and on Sync now; this phone's own changes still upload right after each change.
+     * The same choices as Windows.
+     */
+    val CHECK_INTERVALS = listOf(15_000L, 60_000L, 300_000L, 0L)
+    private const val DEFAULT_CHECK_INTERVAL = 15_000L
+    private const val PREFERENCES = "cloud_sync"
+    private val mutableCheckInterval = MutableStateFlow(DEFAULT_CHECK_INTERVAL)
+    val checkInterval: StateFlow<Long> = mutableCheckInterval.asStateFlow()
+
+    /** Reads the saved check interval into [checkInterval]. */
+    fun loadCheckInterval(context: Context) {
+        mutableCheckInterval.value = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getLong("check_interval_ms", DEFAULT_CHECK_INTERVAL).takeIf { it in CHECK_INTERVALS } ?: DEFAULT_CHECK_INTERVAL
+    }
+
+    fun setCheckInterval(context: Context, interval: Long) {
+        require(interval in CHECK_INTERVALS)
+        context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
+            .putLong("check_interval_ms", interval).apply()
+        mutableCheckInterval.value = interval
+    }
+
     const val QUEUE_FULL = "Unlock Nuvori to apply waiting changes."
     private const val PHOTO_SPACE = "Photo sync needs more free space. Free space, then sync again."
     /** One request may run a few passes when the work bound of a pass stopped it early. */
@@ -105,10 +129,35 @@ internal object CloudSyncRunner {
         }
     }
 
+    /**
+     * The sealed Google Drive copy of [notice], made while this device still holds the group keys.
+     * Null when Google Drive sync is off.
+     */
+    fun leaveFile(store: LockedSyncStore, notice: PendingLeaveNotice): Pair<String, ByteArray>? {
+        if (!runCatching { store.cloudState().enabled }.getOrDefault(false)) return null
+        val mirror = store.snapshot() ?: return null
+        val secret = java.util.Base64.getUrlDecoder().decode(mirror.transportSecret)
+        val derived = try { CloudKeys.derive(secret, mirror.vaultId) } finally { secret.fill(0) }
+        val keys = derived ?: return null
+        val name = keys.leaveName(notice.deviceId)
+        return name to keys.seal(name, CloudLeave.encode(notice.request(), notice.signature))
+    }
+
+    /** Uploads the Drive copy of a pending leave request once; a failure retries on the next request. */
+    private fun uploadPendingLeave(store: LockedSyncStore, app: Context) {
+        val notice = store.pendingLeave() ?: return
+        if (notice.driveName.isEmpty() || notice.driveFile.isEmpty() || notice.driveUploadedAt > 0) return
+        runCatching {
+            GoogleDrive(GoogleDriveAccess(app)).uploadBytes(notice.driveName, java.util.Base64.getUrlDecoder().decode(notice.driveFile))
+            store.pendingLeave()?.let { store.savePendingLeave(it.copy(driveUploadedAt = System.currentTimeMillis())) }
+        }
+    }
+
     private suspend fun pass(app: Context, full: Boolean) {
         val store = LanSyncService.store(app)
         val state = runCatching { store.cloudState() }.getOrNull()
         if (state == null || !state.enabled) { mutableStatus.value = CloudSyncStatus(); return }
+        uploadPendingLeave(store, app)
         val mirror = runCatching { store.snapshot() }.getOrNull() ?: return
         val active = mirror.members.filter { it.status == MemberStatus.ACTIVE.name }
         if (active.none { it.deviceId == mirror.localDeviceId } || active.size < 2) return

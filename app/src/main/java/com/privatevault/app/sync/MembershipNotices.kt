@@ -232,6 +232,31 @@ internal object LeaveRequestHandler {
         if (request.vaultId != vaultId || request.keyEpoch !in acceptedEpochs) return LeaveDecision.Reject
         if (!MembershipWire.proofMatches(frame.proof, TransportEpochs.secret(rootSecret, vaultId, request.keyEpoch),
                 challenge)) return LeaveDecision.Reject
+        return decide(request, frame.signature, history, verified, localDeviceId, now, signer, cutoffFor)
+    }
+
+    /**
+     * A leave request read from Google Drive ([CloudLeave]). There is no session challenge: only
+     * group members hold the cloud key that sealed the file, and the device signature is checked as
+     * in [handle]. The request must also come from the device's current membership: one made before
+     * the device's last ADD is rejected, so an old file cannot remove a device that paired again.
+     */
+    fun handleFromDrive(request: LeaveRequest, signature: ByteArray, history: List<SyncMembershipEvent>,
+        acceptedEpochs: Set<Long>, localDeviceId: String, now: Long, signer: (ByteArray) -> ByteArray,
+        cutoffFor: (String) -> String = { "" }): LeaveDecision {
+        val verified = runCatching { SyncMembershipManager.verify(history) }.getOrNull() ?: return LeaveDecision.Reject
+        if (request.vaultId != verified.events.first().vaultId || request.keyEpoch !in acceptedEpochs) return LeaveDecision.Reject
+        if (signature.size != DeviceIdentityCrypto.SIGNATURE_BYTES) return LeaveDecision.Reject
+        val headIndex = verified.events.indexOfFirst { it.hash == request.membershipHead }
+        val lastAdd = verified.events.indexOfLast { it.action == MembershipAction.ADD && it.subjectDeviceId == request.deviceId }
+        if (headIndex < lastAdd) return LeaveDecision.Reject
+        return decide(request, signature, history, verified, localDeviceId, now, signer, cutoffFor)
+    }
+
+    private fun decide(request: LeaveRequest, signature: ByteArray, history: List<SyncMembershipEvent>,
+        verified: VerifiedMembership, localDeviceId: String, now: Long, signer: (ByteArray) -> ByteArray,
+        cutoffFor: (String) -> String): LeaveDecision {
+        val vaultId = verified.events.first().vaultId
         if (request.createdAt > now + MAX_CLOCK_SKEW_MILLIS || request.createdAt < now - MAX_AGE_MILLIS)
             return LeaveDecision.Reject
         val headIndex = verified.events.indexOfFirst { it.hash == request.membershipHead }
@@ -241,7 +266,7 @@ internal object LeaveRequestHandler {
         val member = verified.members.firstOrNull { it.deviceId == request.deviceId } ?: return LeaveDecision.Reject
         val publicKey = runCatching { Base64.getUrlDecoder().decode(member.identityPublicKey) }.getOrNull()
             ?: return LeaveDecision.Reject
-        if (!DeviceIdentityCrypto.verify(publicKey, request.signingBytes(), frame.signature)) return LeaveDecision.Reject
+        if (!DeviceIdentityCrypto.verify(publicKey, request.signingBytes(), signature)) return LeaveDecision.Reject
         if (member.status == MemberStatus.REVOKED.name) return LeaveDecision.Left(emptyList())
         if (request.deviceId == verified.managerDeviceId) return LeaveDecision.Reject
         if (verified.managerDeviceId != localDeviceId) return LeaveDecision.NotManager

@@ -1,3 +1,0 @@
-468dcb0adf78cbc1a32880ed368edf0d263c90b2c20c02b8f5a696d0f43b8636  nuvori-v2.2.1-phone.aab
-7613eff03daaecd009371908ef04087ed771fc2248ea74d52caa96074a91c379  nuvori-v2.2.1-phone.apk
-5f768771a237b5006aec701265b45ccfd0475dfcec93b4541088940b7fa0ffe5  nuvori-v2.2.1-phone-mapping.zip

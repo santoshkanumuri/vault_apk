@@ -27,7 +27,4 @@ Google matches the phone app by its application ID and its signing certificate. 
 
 ## Download files
 
-- [Phone APK](../downloads/nuvori-v2.2.1-phone.apk)
-- [Phone AAB](../downloads/nuvori-v2.2.1-phone.aab) for Google Play upload
-- [R8 mapping](../downloads/nuvori-v2.2.1-phone-mapping.zip)
-- [Android checksums](../downloads/SHA256SUMS-2.2.1.txt)
+Replaced by [2.2.2](RELEASE-2.2.2.md).

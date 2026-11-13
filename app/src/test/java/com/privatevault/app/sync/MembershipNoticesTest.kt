@@ -110,6 +110,34 @@ class MembershipNoticesTest {
         assertEquals(MemberStatus.REVOKED.name, verified.members.first { it.deviceId == V.CLIENT_ID }.status)
     }
 
+    // Leave requests found on Google Drive: no session challenge; the drive envelope is the proof.
+
+    private fun clientSigns(request: LeaveRequest) = DeviceIdentityCrypto.sign(V.clientSeed, request.signingBytes())
+    private fun fromDrive(request: LeaveRequest = V.leaveRequest(), signature: ByteArray = clientSigns(request),
+        history: List<SyncMembershipEvent> = V.clientHistory(), server: String = V.MANAGER_ID, at: Long = now) =
+        LeaveRequestHandler.handleFromDrive(request, signature, history, setOf(1L), server, at, signManager)
+
+    @Test fun aLeaveRequestFromTheDriveIsAnsweredLikeOneOverWiFi() {
+        val left = fromDrive() as LeaveDecision.Left
+        assertEquals((handle() as LeaveDecision.Left).append.map { it.action }, left.append.map { it.action })
+        assertEquals(MembershipAction.REMOVE, left.append.single().action)
+        assertEquals(V.CLIENT_ID, left.append.single().subjectDeviceId)
+        assertEquals(LeaveDecision.NotManager, fromDrive(server = V.OTHER_ID))
+        assertEquals(LeaveDecision.Left(emptyList()), fromDrive(history = V.removedHistory()))
+    }
+
+    @Test fun aDriveLeaveRequestNeedsTheDevicesOwnSignatureAndCurrentMembership() {
+        assertEquals(LeaveDecision.Reject, fromDrive(signature = DeviceIdentityCrypto.sign(V.otherSeed, V.leaveRequest().signingBytes())))
+        assertEquals(LeaveDecision.Reject, fromDrive(signature = ByteArray(12)))
+        assertEquals(LeaveDecision.Reject, fromDrive(at = V.CREATED_AT + LeaveRequestHandler.MAX_AGE_MILLIS + 1))
+        // A request that names the history before this device joined is not its current membership.
+        val beforeJoining = V.leaveRequest().copy(membershipHead = V.clientHistory().first().hash)
+        assertEquals(LeaveDecision.Reject, fromDrive(request = beforeJoining))
+        // The managing device cannot leave this way either.
+        val manager = LeaveRequest(V.VAULT_ID, V.MANAGER_ID, V.clientHistory().last().hash, 1, V.CREATED_AT)
+        assertEquals(LeaveDecision.Reject, fromDrive(request = manager, signature = signManager(manager.signingBytes())))
+    }
+
     @Test fun aNonManagerAnswersNotManager() {
         assertEquals(LeaveDecision.NotManager, handle(server = V.OTHER_ID))
     }

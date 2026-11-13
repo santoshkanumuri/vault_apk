@@ -150,6 +150,47 @@ class CloudSyncPassTest {
         assertEquals(removed.size, a.mirror.membershipEvents.size)
     }
 
+    @Test fun theManagerAnswersASignedLeaveFileAndOtherDevicesLearnTheRemoval() {
+        val drive = MemoryDrive()
+        val manager = device(V.MANAGER_ID)
+        val other = device(V.OTHER_ID)
+        manager.pass(drive)
+        val request = V.leaveRequest()
+        val signature = DeviceIdentityCrypto.sign(V.clientSeed, request.signingBytes())
+        val b64 = Base64.getUrlEncoder().withoutPadding()
+        // The client's request under another device's name, and a forged signature, change nothing.
+        val wrongName = keys.leaveName(V.OTHER_ID)
+        drive.put(wrongName, keys.seal(wrongName, CloudLeave.encode(request, b64.encodeToString(signature))))
+        val name = keys.leaveName(V.CLIENT_ID)
+        drive.put(name, keys.seal(name, CloudLeave.encode(request,
+            b64.encodeToString(DeviceIdentityCrypto.sign(V.otherSeed, request.signingBytes())))))
+        manager.pass(drive)
+        assertEquals(3, manager.mirror.membershipEvents.size)
+        // A non-managing device ignores the real request; the managing device removes the client.
+        drive.put(name, keys.seal(name, CloudLeave.encode(request, b64.encodeToString(signature))))
+        other.pass(drive)
+        assertEquals(3, other.mirror.membershipEvents.size)
+        manager.pass(drive)
+        assertEquals(4, manager.mirror.membershipEvents.size)
+        assertEquals(MembershipAction.REMOVE, manager.mirror.membershipEvents.last().toEvent().action)
+        // The new history went to the drive in the same pass; the other device adopts it.
+        assertNull(other.pass(drive, full = true).removed)
+        assertEquals(4, other.mirror.membershipEvents.size)
+    }
+
+    @Test fun leaveFilesHaveOneExactShape() {
+        val request = V.leaveRequest()
+        val signature = DeviceIdentityCrypto.sign(V.clientSeed, request.signingBytes())
+        val encoded = CloudLeave.encode(request, Base64.getUrlEncoder().withoutPadding().encodeToString(signature))
+        val (parsed, parsedSignature) = requireNotNull(CloudLeave.parse(encoded))
+        assertEquals(request, parsed)
+        assertTrue(signature.contentEquals(parsedSignature))
+        val withExtraField = encoded.toString(Charsets.UTF_8).dropLast(1) + ",\"extra\":1}"
+        assertNull(CloudLeave.parse(withExtraField.toByteArray()))
+        assertNull(CloudLeave.parse("not json".toByteArray()))
+        assertEquals(CloudName.Leave(keys.deviceTag(V.CLIENT_ID)), keys.parse(keys.leaveName(V.CLIENT_ID)))
+    }
+
     private fun membershipJson(events: List<SyncMembershipEvent>) =
         com.google.gson.Gson().toJson(events.map { SyncMembershipEventEntity.from(it) }).toByteArray(Charsets.UTF_8)
 
@@ -270,5 +311,13 @@ class CloudSyncPassTest {
         override fun updateCloudState(transform: (CloudSyncState) -> CloudSyncState) { state = transform(state) }
         override fun cloudFiles() = cached
         override fun saveCloudFiles(files: List<CloudFile>) { cached = files }
+        override fun answerDriveLeave(request: LeaveRequest, signature: ByteArray): Boolean {
+            val decision = LeaveRequestHandler.handleFromDrive(request, signature, mirror.membershipEvents.map { it.toEvent() },
+                setOf(mirror.keyEpoch), mirror.localDeviceId, V.CREATED_AT + 60_000,
+                { DeviceIdentityCrypto.sign(V.managerSeed, it) })
+            if (decision !is LeaveDecision.Left || decision.append.isEmpty()) return false
+            acceptMembershipEvents(mirror.membershipEvents + decision.append.map { SyncMembershipEventEntity.from(it) })
+            return true
+        }
     }
 }

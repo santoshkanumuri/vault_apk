@@ -27,6 +27,12 @@ class CloudSyncFormatTest {
         assertEquals(text("operationsName"), keys.operationsName(device, 7, 42))
         assertEquals(text("progressName"), keys.progressName(device))
         assertEquals(text("blobName"), keys.blobName("cd".repeat(32)))
+        assertEquals(text("leaveName"), keys.leaveName(device))
+        // A leave file body is byte for byte the same on Windows and Android.
+        val request = LeaveRequest(text("vaultId"), device, "ab".repeat(32), 1, 1_767_225_600_000L)
+        val signature = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(64) { 7 })
+        assertEquals(text("leaveBody"), CloudLeave.encode(request, signature).toString(Charsets.UTF_8))
+        assertEquals(request, CloudLeave.parse(text("leaveBody").toByteArray(Charsets.UTF_8))?.first)
         val name = text("operationsName")
         val plain = text("plaintext").toByteArray(Charsets.UTF_8)
         val sealed = keys.sealWithNonce(name, plain, unhex(text("nonceHex")))

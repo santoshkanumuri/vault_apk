@@ -20,7 +20,7 @@ Pairing and later sync both select a local route for the peer's address. A phone
 
 Matching-code confirmation has its own two-minute window on Android and Windows. Expiry produces a visible failure. A connection timeout and a timeout after the secure handshake starts now have different messages.
 
-The reported initial pairing succeeded after switching to a hotspot. That points to reachability restrictions on the original Wi-Fi, but does not establish which router setting caused them. The later hotspot sync report exposed the app's Wi-Fi-only routing assumption. [Release 2.1.5 checks](RELEASE-2.1.5.md) distinguish automated verification from the physical hotspot check still needed.
+The reported initial pairing succeeded after switching to a hotspot. That points to reachability restrictions on the original Wi-Fi, but does not establish which router setting caused them. The later hotspot sync report exposed the app's Wi-Fi-only routing assumption. The 2.1.5 release checks distinguished automated verification from the physical hotspot check still needed.
 
 The product target is one user-facing master password across the owner's devices, while each installation keeps a separate random local vault key and salt. Current installations have independent passwords. This release slice does not silently change those passwords or claim they are already synchronized.
 

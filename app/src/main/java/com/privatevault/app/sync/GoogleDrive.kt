@@ -319,13 +319,15 @@ internal object GoogleDriveSignIn {
         }
     } catch (failure: Exception) {
         val api = (failure as? ExecutionException)?.cause as? ApiException ?: failure as? ApiException
+        // The status code only; never the token or account. It tells a setup problem from a cancel.
+        android.util.Log.w("NuvoriDrive", "Google authorization failed: status=${api?.statusCode} ${failure.javaClass.simpleName}")
         when {
             failure is TimeoutException -> Outcome.Failed(CloudError.OFFLINE.message)
             api?.statusCode == CommonStatusCodes.NETWORK_ERROR -> Outcome.Failed(CloudError.OFFLINE.message)
             api?.statusCode == CommonStatusCodes.CANCELED -> Outcome.Canceled
             api?.statusCode == CommonStatusCodes.DEVELOPER_ERROR ->
-                Outcome.Failed("Google Drive sync is not set up in this build of Nuvori. Sync over Wi-Fi works as usual.")
-            else -> Outcome.Failed("Couldn't connect Google Drive. Try again.")
+                Outcome.Failed("Google doesn't recognize this copy of Nuvori (Google code 10). Google Drive sync isn't set up for it. Sync over Wi-Fi works as usual.")
+            else -> Outcome.Failed("Couldn't connect Google Drive (Google code ${api?.statusCode ?: "none"}). Try again.")
         }
     }
 }

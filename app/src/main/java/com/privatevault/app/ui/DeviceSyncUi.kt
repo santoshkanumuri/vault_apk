@@ -1054,10 +1054,9 @@ internal fun CloudSyncCard(viewModel: VaultViewModel) {
         while (true) { now = System.currentTimeMillis(); delay(30_000) }
     }
     val googleScreen = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
-        if (result.resultCode != android.app.Activity.RESULT_OK) {
-            waiting = false
-            viewModel.notify("Google sign-in was canceled. Nothing changed.", StatusKind.INFO)
-        } else scope.launch {
+        // Google also closes its screen with RESULT_CANCELED when the sign-in fails (for example an
+        // unregistered app or account), and puts the reason in the answer. Read it in every case.
+        scope.launch {
             try { viewModel.connectGoogleDrive(result.data, fromGoogle = true) } finally { waiting = false }
         }
     }

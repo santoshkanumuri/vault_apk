@@ -37,10 +37,7 @@ Not run for this release: Android device tests on an emulator or phone. In parti
 
 ## Download files
 
-- [Phone APK](../downloads/nuvori-v2.2.0-phone.apk) for updating Android phones.
-- [Phone AAB](../downloads/nuvori-v2.2.0-phone.aab) for Google Play upload.
-- [R8 mapping](../downloads/nuvori-v2.2.0-phone-mapping.zip) for decoding crash reports.
-- [Android checksums](../downloads/SHA256SUMS-2.2.0.txt).
+- Phone files: see [2.2.1](RELEASE-2.2.1.md), which replaced these.
 - Windows setup EXE, MSI and Store test package are in `card_app_windows/artifacts/`.
 
 ## Updating

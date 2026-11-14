@@ -161,6 +161,9 @@ internal object CloudSyncRunner {
         val mirror = runCatching { store.snapshot() }.getOrNull() ?: return
         val active = mirror.members.filter { it.status == MemberStatus.ACTIVE.name }
         if (active.none { it.deviceId == mirror.localDeviceId } || active.size < 2) return
+        // An unlocked app writes a pending appearance (if the group allows it); a Drive pass itself
+        // never learns handshake features, so it cannot open the appearance gate.
+        AppearanceSync.requestFlush()
         mutableStatus.update { it.copy(connected = true, account = state.account, syncing = true) }
         var error: String? = null
         var needsSignIn = false

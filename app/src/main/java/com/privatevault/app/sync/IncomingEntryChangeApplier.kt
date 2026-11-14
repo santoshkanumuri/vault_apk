@@ -2,6 +2,7 @@ package com.privatevault.app.sync
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.privatevault.app.appearance.AppearanceStore
 import com.privatevault.app.data.EntryType
 import com.privatevault.app.data.SyncConflictEntity
 import com.privatevault.app.data.SyncAttachmentManifestEntity
@@ -53,7 +54,8 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
         }
         require(operation.entityType == "entry" || operation.entityType == "group" ||
             operation.entityType == "passkey" || operation.entityType == "photo" ||
-            operation.entityType == "photo_cover" || operation.entityType == "device_name") {
+            operation.entityType == "photo_cover" || operation.entityType == "device_name" ||
+            operation.entityType == AppearanceSyncRules.ENTITY_TYPE) {
             "Unsupported sync entity"
         }
         val change = operation.toChangeRecord()
@@ -74,6 +76,16 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
                 }
             }
         } else null
+        // One record per vault, never deleted. An invalid id makes the whole change invalid.
+        val appearance = if (change.entityType == AppearanceSyncRules.ENTITY_TYPE) {
+            require(change.kind == ChangeKind.UPSERT && change.entityId == AppearanceSyncRules.ENTITY_ID) {
+                "Invalid appearance change"
+            }
+            AppearanceSyncRules.parsePayload(payload.toString())
+        } else null
+        // The stored appearance lives in the app's preferences. Every unlocked path (LockedSyncStore)
+        // passes a context; without one the change waits instead of being set aside.
+        val appearanceContext = if (appearance != null) checkNotNull(context) { "Appearance needs the app context" } else null
         val entry = if (change.kind == ChangeKind.UPSERT && change.entityType == "entry")
             SyncEntryCodec.parseEntry(payload.getJSONObject("entry").toString(), change.entityId) else null
         val group = if (change.kind == ChangeKind.UPSERT && change.entityType == "group")
@@ -125,7 +137,23 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             val localVersion = state?.let { RecordVersion.parse(it.recordVersionJson) }
                 ?: RecordVersion(emptyMap())
             val relation = ConflictVersions.incomingRelation(change.recordVersion, state?.let { localVersion })
-            val result = when (relation) {
+            val result = if (appearance != null) {
+                // Never a conflict to review: last writer wins (AppearanceSyncRules.decide). The stored
+                // value is read and set inside this transaction, so a local write cannot interleave.
+                // Applying never marks the value pending and never writes a change: no echo.
+                val appContext = requireNotNull(appearanceContext)
+                val stored = AppearanceStore.read(appContext)
+                val localId = if (stored.pendingSync && stored.updatedByDevice == null)
+                    AndroidDeviceIdentityStore(appContext).getOrCreate().deviceId else null
+                val outcome = AppearanceSyncRules.decide(relation, stored, localId, change.occurredAtUtc, change.deviceId)
+                if (outcome != AppearanceOutcome.OBSOLETE) syncDao.upsertRecordState(SyncRecordStateEntity(
+                    change.entityType, change.entityId, maxOf(state?.revision ?: 0L, change.baseRevision) + 1L,
+                    AppearanceSyncRules.merge(localVersion, change.recordVersion).toJson()))
+                if (outcome == AppearanceOutcome.APPLY) {
+                    AppearanceStore.applyRemote(appContext, appearance, change.occurredAtUtc, change.deviceId)
+                    IncomingResult.APPLIED
+                } else IncomingResult.OBSOLETE
+            } else when (relation) {
                 VersionRelation.AFTER -> {
                     if (deviceName != null) syncDao.upsertMembership(
                         SyncMembershipEntity.from(currentMember.copy(displayName = deviceName)))

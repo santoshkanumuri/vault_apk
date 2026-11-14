@@ -78,6 +78,19 @@ internal fun profileField(hints: Set<String>, attributes: Map<String, String>, i
     }
 }
 
+/**
+ * Whether a locked vault should offer "Unlock to fill your details" for a profile form, as the Windows extension decides:
+ * two or more different kinds, or one kind other than e-mail or phone. A lone e-mail or phone box (or several boxes of
+ * that one kind) is usually a sign-in, newsletter or search box. Every Android match other than e-mail and phone comes
+ * from an exact hint or name ([profileField]), so a lone street or postal code field counts as explicit.
+ * A form with a password, new-password or code field is a login and never qualifies.
+ */
+internal fun lockedProfileOfferWorthwhile(kinds: Collection<ProfileField>, loginForm: Boolean): Boolean {
+    if (loginForm) return false
+    val distinct = kinds.toSet()
+    return distinct.size >= 2 || distinct.singleOrNull()?.let { it != ProfileField.EMAIL && it != ProfileField.PHONE } == true
+}
+
 internal fun profileFields(structure: AssistStructure, browser: Boolean): Map<AutofillId, ProfileField>? {
     val tree = formTree(structure) ?: return null
     return classifyProfileForm(tree.roots, browser)?.entries?.associate { (index, field) -> tree.ids[index] to field }

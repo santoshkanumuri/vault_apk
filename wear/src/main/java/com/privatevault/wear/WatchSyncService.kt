@@ -7,6 +7,7 @@ import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import com.privatevault.app.watch.WatchSync
+import com.privatevault.app.watch.parseWatchAppearance
 import java.io.ByteArrayInputStream
 import java.io.DataInputStream
 import java.util.concurrent.TimeUnit
@@ -48,6 +49,12 @@ class WatchSyncService : WearableListenerService() {
                 runCatching { event.dataItem.data?.let(store::apply) }.onSuccess { applied ->
                     if (applied == true) sendBroadcast(Intent(ACTION_UPDATED).setPackage(packageName))
                 }
+            }
+            if (event.dataItem.uri.path == WatchSync.APPEARANCE_PATH) {
+                // Only the accent id is read. Other paths stay ignored, so older phones and watches keep working.
+                val accent = if (event.type == DataEvent.TYPE_DELETED) null
+                    else event.dataItem.data?.let(::parseWatchAppearance) ?: return@forEach
+                if (store.setAccent(accent)) sendBroadcast(Intent(ACTION_UPDATED).setPackage(packageName))
             }
         }
     }

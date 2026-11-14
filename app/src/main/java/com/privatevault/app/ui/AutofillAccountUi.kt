@@ -5,6 +5,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,9 +47,20 @@ internal fun AccountLetterAvatar(title: String, modifier: Modifier = Modifier, s
 internal fun accountSiteLabel(entry: VaultEntry): String? =
     (httpsOrigin(entry.tertiaryValue) ?: httpsOrigin("https://${entry.tertiaryValue.trim()}"))?.removePrefix("https://")
 
-/** One saved login in the account picker. The password is never shown, spoken or measured. */
+/**
+ * One saved login in the account picker. The password is never shown, spoken or measured.
+ * [moreAction] adds an overflow menu with one more choice, such as "Fill and link…".
+ */
 @Composable
-internal fun AutofillAccountRow(entry: VaultEntry, action: String, codeLinked: Boolean = false, onClick: () -> Unit) {
+internal fun AutofillAccountRow(
+    entry: VaultEntry,
+    action: String,
+    codeLinked: Boolean = false,
+    moreAction: String? = null,
+    onMore: () -> Unit = {},
+    onClick: () -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
     val account = entry.primaryValue.ifBlank { entry.title }
     val showTitle = entry.primaryValue.isNotBlank() && entry.title != entry.primaryValue
     val site = accountSiteLabel(entry)?.takeIf { it != entry.title }
@@ -67,6 +82,15 @@ internal fun AutofillAccountRow(entry: VaultEntry, action: String, codeLinked: B
                 if (codeLinked) StatusChip(StatusKind.INFO, "Code linked", Modifier.padding(top = 4.dp))
             }
             Text(action, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, maxLines = 1)
+            if (moreAction != null) Box {
+                IconButton(onClick = { menu = true }) {
+                    Icon(NuvoriIcons.More, contentDescription = "More choices for $account")
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text(moreAction) }, onClick = { menu = false; onMore() },
+                        modifier = Modifier.heightIn(min = 48.dp))
+                }
+            }
         }
     }
 }

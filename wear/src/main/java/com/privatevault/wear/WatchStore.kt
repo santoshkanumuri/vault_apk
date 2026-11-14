@@ -28,12 +28,15 @@ internal class WatchStore private constructor(private val context: Context) {
         cipher.init(Cipher.ENCRYPT_MODE, wrappingKey())
         val wrapped = cipher.doFinal(key)
         val previous = prefs.getString("vault_id", null)
+        val previousKey = readKey()
+        val keyChanged = previousKey?.contentEquals(key) != true
+        previousKey?.fill(0)
         require(prefs.edit().putString("vault_id", vaultId)
             .putString("wrapped_key", android.util.Base64.encodeToString(cipher.iv + wrapped, android.util.Base64.NO_WRAP)).commit())
         if (previous != vaultId) {
             snapshotFile.delete()
             prefs.edit().remove(SYNCED_AT).remove(RECENT_IDS).commit()
-        }
+        } else if (keyChanged) snapshotFile.delete() // Each pairing sends a new key; the old copy can no longer be read.
     }
 
     @Synchronized fun apply(payload: ByteArray): Boolean {
@@ -79,6 +82,18 @@ internal class WatchStore private constructor(private val context: Context) {
         prefs.edit().putString(RECENT_IDS, WatchDisplay.recordRecent(recentIds(), id).joinToString("\n")).apply()
     }
 
+    private val appearancePrefs = context.getSharedPreferences("watch_appearance", Context.MODE_PRIVATE)
+
+    /** The vault accent id sent by the phone, or null for the default green. Not secret, so not in the pairing file. */
+    fun accent(): String? = appearancePrefs.getString("accent", null)
+
+    /** Stores a validated accent id, or clears it for null. Returns true when the stored value changed. */
+    @Synchronized fun setAccent(id: String?): Boolean {
+        if (accent() == id) return false
+        appearancePrefs.edit().apply { if (id == null) remove("accent") else putString("accent", id) }.commit()
+        return true
+    }
+
     @Synchronized fun clear() {
         snapshotFile.delete()
         prefs.edit().clear().commit()
@@ -96,6 +111,8 @@ internal class WatchStore private constructor(private val context: Context) {
         }.getOrNull()
     }
 
+    // No setUnlockedDeviceRequired: WatchSyncService applies snapshots in the background, often while the watch is
+    // locked or off the wrist. With that flag, a removal (empty snapshot) could not erase codes on a locked, lost watch.
     private fun wrappingKey(): SecretKey {
         (keyStore.getKey("nuvori_watch_wrap", null) as? SecretKey)?.let { return it }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {

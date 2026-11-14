@@ -38,6 +38,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.crypto.Cipher
 import java.util.UUID
@@ -130,6 +133,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val lockedSyncStore = com.privatevault.app.sync.LanSyncService.store(application)
     private var incomingSyncJob: kotlinx.coroutines.Job? = null
     private var cloudSyncJob: kotlinx.coroutines.Job? = null
+    private var appearanceSyncJob: kotlinx.coroutines.Job? = null
     /** Google Drive sync: connection, last pass and the last problem, for the Devices screen. */
     val cloudSyncStatus = com.privatevault.app.sync.CloudSyncRunner.status
     val devicePairingState = devicePairing.state
@@ -514,6 +518,50 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         persistSettings()
     }
 
+    /** Accent and background ids. Device-only copy; see [com.privatevault.app.appearance.AppearanceStore]. */
+    internal val appearance = com.privatevault.app.appearance.AppearanceStore.flow(application)
+    // The watch follows the vault accent while watch sync is on and the vault is unlocked. Colors are not secret.
+    private val watchAppearanceJob = viewModelScope.launch {
+        kotlinx.coroutines.flow.combine(
+            appearance.map { it.appearance.accent },
+            _securitySettings.map { it.watchSyncEnabled },
+            _status.map { it is VaultStatus.Unlocked },
+        ) { accent, enabled, unlocked -> accent.takeIf { enabled && unlocked } }
+            .filterNotNull().distinctUntilChanged()
+            .collect { accent -> runCatching { watchSyncPublisher.publishAppearance(accent) } }
+    }
+
+    /** Applies at once on this device, then [publishAppearance] shares it with the sync group when the group allows it. */
+    fun setAppearance(accent: String, surface: String) {
+        val next = runCatching { com.privatevault.app.appearance.Appearance(accent, surface) }.getOrNull() ?: return
+        if (appearance.value.appearance == next) return
+        runCatching {
+            com.privatevault.app.appearance.AppearanceStore.setLocal(getApplication(), next, java.time.Instant.now().toString(), null)
+        }.onFailure { notify("Could not save appearance preference.", StatusKind.ERROR); return }
+        publishAppearance()
+    }
+
+    /**
+     * Writes a pending appearance to the sync group when the group allows it (see
+     * [com.privatevault.app.sync.AppearanceSync]), then publishes it. Needs the open vault; a locked
+     * device keeps the value pending until the next unlock.
+     */
+    private fun publishAppearance() {
+        val db = database ?: return
+        if (_status.value !is VaultStatus.Unlocked) return
+        val key = sessionKey?.copyOf() ?: return
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                if (database === db && com.privatevault.app.sync.AppearanceSync.flush(getApplication(), db,
+                        deviceIdentityStore, lockedSyncStore, key))
+                    com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            // The value stays pending; the next sync pass or unlock tries again.
+            catch (_: Exception) { }
+            finally { key.fill(0) }
+        }
+    }
+
     private val _nfcEnabled = MutableStateFlow(preferences.getBoolean("nfc_enabled", false))
     val nfcEnabled = _nfcEnabled.asStateFlow()
     val nfcSupported = application.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_NFC)
@@ -555,7 +603,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val current = requireNotNull(db.dao().settings())
             val accounts = db.dao().authenticatorEntries()
-            val delivered = watchSyncPublisher.pair(current.vaultId, key, accounts)
+            val delivered = watchSyncPublisher.pair(current.vaultId, key, accounts, appearance.value.appearance.accent)
             if (database !== db || _status.value !is VaultStatus.Unlocked) return@securedLaunch
             val updated = current.copy(watchSyncEnabled = true)
             db.dao().saveSettings(updated)
@@ -576,7 +624,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val current = requireNotNull(db.dao().settings())
             _securitySettings.value = current.copy(watchSyncEnabled = false)
-            try { watchSyncPublisher.publish(current.vaultId, key, emptyList()) }
+            // Sends the empty snapshot with the current key, then deletes that key on this phone.
+            try { watchSyncPublisher.remove(current.vaultId, key) }
             catch (failure: Exception) { _securitySettings.value = current; throw failure }
             if (database !== db || _status.value !is VaultStatus.Unlocked) return@securedLaunch
             val updated = current.copy(watchSyncEnabled = false)
@@ -598,7 +647,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshWatchConnection() {
         viewModelScope.launch {
             val names = watchSyncPublisher.connectedWatches()
-            _watchConnection.value = com.privatevault.app.watch.WatchConnection(names, preferences.getLong("watch_last_sent_at", 0L))
+            _watchConnection.value = com.privatevault.app.watch.WatchConnection(names, preferences.getLong("watch_last_sent_at", 0L),
+                watchSyncPublisher.usesLegacyKey())
         }
     }
 
@@ -768,6 +818,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 if (changed == null && every > 0 && !backgrounded) runner.request(getApplication())
             }
         }
+        // A pending appearance is written at unlock and whenever a sync pass starts or a peer's
+        // handshake features arrive (the state flow delivers its current value at once).
+        appearanceSyncJob?.cancel()
+        appearanceSyncJob = viewModelScope.launch {
+            com.privatevault.app.sync.AppearanceSync.requests.collect {
+                if (database === db && _status.value is VaultStatus.Unlocked) publishAppearance()
+            }
+        }
     }
 
     fun dailyBiometricEncryptionCipher(): Cipher? = runCatching { biometricGate.dailyEncryptionCipher() }
@@ -788,7 +846,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun lock(reason: LockReason) {
         incomingSyncJob?.cancel()
         cloudSyncJob?.cancel()
+        appearanceSyncJob?.cancel()
         com.privatevault.app.sync.RemoteEntryChanges.clear()
+        // A remembered "just signed in" login must not outlive a lock.
+        com.privatevault.app.autofill.RecentLoginFills.clear()
         devicePairing.cancel()
         cancelPasswordImport()
         cancelPasswordDuplicateReview()
@@ -1226,6 +1287,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         getApplication<Application>().stopService(android.content.Intent(getApplication(), com.privatevault.app.sync.LanSyncService::class.java))
         lockedSyncStore.clear()
         _lightMode.value = prepared.data.lightMode
+        // Backups made before Nuvori 2.2.4 have no colors; the vault then keeps the colors of this device.
+        prepared.data.appearanceAccent?.let { accent -> prepared.data.appearanceSurface?.let { surface ->
+            runCatching { com.privatevault.app.appearance.AppearanceStore.setLocal(getApplication(), com.privatevault.app.appearance.Appearance(accent, surface), java.time.Instant.now().toString(), null) }
+        } }
         _nfcEnabled.value = prepared.data.nfcEnabled && nfcSupported
         _securitySettings.value = (dao().settings() ?: com.privatevault.app.data.VaultSettings())
         preferences.edit().putBoolean("light_mode", _lightMode.value).putBoolean("nfc_enabled", _nfcEnabled.value).commit()
@@ -1334,8 +1399,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             watchPublishJob = viewModelScope.launch {
                 try {
                     if (database === activeDatabase && _status.value is VaultStatus.Unlocked) {
-                        watchSyncPublisher.publish(_securitySettings.value.vaultId, key, current)
-                        recordWatchSent()
+                        if (watchSyncPublisher.publish(_securitySettings.value.vaultId, key, current)) recordWatchSent()
                     }
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                     throw cancelled

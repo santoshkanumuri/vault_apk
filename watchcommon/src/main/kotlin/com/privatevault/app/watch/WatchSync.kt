@@ -25,9 +25,15 @@ object WatchSync {
     const val SNAPSHOT_PATH = "/nuvori/watch-codes/v1"
     const val PAIR_PATH = "/nuvori/watch-pair/v1"
     const val PROBE_PATH = "/nuvori/watch-probe/v1"
+    /** Plain JSON {"accent":"<id>"}. A color id is not secret and never holds vault data. */
+    const val APPEARANCE_PATH = "/nuvori/watch-appearance/v1"
     private val label = "nuvori-watch-totp-v1".toByteArray(Charsets.UTF_8)
     private val gson = Gson()
 
+    /**
+     * Legacy: the watch key used before each pairing got a random key. It never changes for a vault, so the phone
+     * uses it only for watches paired before that change, until the next Connect replaces it. Do not use it for new pairings.
+     */
     fun keyFromVault(vaultKey: ByteArray): ByteArray {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(vaultKey, "HmacSHA256"))
@@ -79,4 +85,20 @@ object WatchSync {
             Totp.validate(it.secret, it.algorithm, it.digits, it.period)
         }
     }
+}
+
+private val appearanceId = Regex("[a-z][a-z0-9-]{0,31}")
+
+/** The accent id in an appearance DataItem, or null for bad JSON, a wrong shape or an invalid id. */
+fun parseWatchAppearance(bytes: ByteArray): String? {
+    if (bytes.size > 256) return null
+    return runCatching {
+        val root = JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject
+        root.get("accent").asString.takeIf { appearanceId.matches(it) }
+    }.getOrNull()
+}
+
+fun encodeWatchAppearance(accent: String): ByteArray {
+    require(appearanceId.matches(accent))
+    return """{"accent":"$accent"}""".toByteArray(Charsets.UTF_8)
 }

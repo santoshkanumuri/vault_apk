@@ -24,9 +24,9 @@ internal fun profileSuggestions(context: Context, fields: Map<AutofillId, Profil
     var added = 0
     profiles.take(slots).forEachIndexed { index, (title, profile) ->
         // Which kinds this profile fills, by label only: the stored values stay out of the suggestion.
-        val filled = fields.filter { (_, field) -> profile.value(field).isNotBlank() }
+        val filled = profileFillValues(profile, fields)
         if (filled.isEmpty()) return@forEachIndexed
-        val summary = profileFillSummary(filled.values)
+        val summary = profileFillSummary(filled.keys.map(fields::getValue))
         val menu = RemoteViews(context.packageName, R.layout.autofill_suggestion).apply {
             setTextViewText(R.id.autofill_suggestion_title, title)
             setTextViewText(R.id.autofill_suggestion_subtitle, summary)
@@ -44,9 +44,7 @@ internal fun profileSuggestions(context: Context, fields: Map<AutofillId, Profil
             InlinePresentation(content.slice, spec, false)
         }.getOrNull() else null
         val dataset = Dataset.Builder(menu).setId("profile-$index")
-        filled.forEach { (id, field) ->
-            dataset.presentField(id, AutofillValue.forText(profile.value(field)), menu, inline)
-        }
+        filled.forEach { (id, value) -> dataset.presentField(id, AutofillValue.forText(value), menu, inline) }
         response.addDataset(dataset.build()); added++
     }
     return if (added > 0) response.build() else null

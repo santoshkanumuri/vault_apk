@@ -5,6 +5,8 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Process
+import android.os.SystemClock
+import com.privatevault.app.autofill.RecentAutofillApps
 import com.privatevault.app.data.VaultEntry
 
 internal fun linkedAppPackages(value: String): Set<String> = value.lineSequence().filter { it.isNotBlank() }.toSet()
@@ -15,9 +17,15 @@ internal fun matchingCodeEntries(entries: List<VaultEntry>, app: String?): List<
 internal fun usageAccessGranted(context: Context): Boolean = context.getSystemService(AppOpsManager::class.java)
     .unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName) == AppOpsManager.MODE_ALLOWED
 
-/** A suggestion only. Recent app events cannot identify a browser tab or verify a login. */
+/**
+ * A suggestion only. Recent app events cannot identify a browser tab or verify a login. The last app that asked
+ * Nuvori's autofill service for a login or code comes first and needs no Usage access; Usage access is the
+ * fallback for people who keep another autofill provider. Both follow the same opt-in switch.
+ */
 internal fun recentCodeApp(context: Context): String? {
-    if (!context.getSharedPreferences("vault_preferences", Context.MODE_PRIVATE).getBoolean("code_app_detection", false) || !usageAccessGranted(context)) return null
+    if (!context.getSharedPreferences("vault_preferences", Context.MODE_PRIVATE).getBoolean("code_app_detection", false)) return null
+    RecentAutofillApps.recent(SystemClock.elapsedRealtime())?.takeIf { it != context.packageName }?.let { return it }
+    if (!usageAccessGranted(context)) return null
     return runCatching {
         val now = System.currentTimeMillis()
         val events = context.getSystemService(UsageStatsManager::class.java).queryEvents(now - 300_000, now) ?: return null

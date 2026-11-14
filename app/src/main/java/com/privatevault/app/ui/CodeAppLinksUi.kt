@@ -43,9 +43,9 @@ internal fun CodeAppDetectionPreference() {
         prefs.edit().putBoolean("code_app_detection", it).apply()
     })
     if (enabled) {
-        Text("Usage access lets the vault inspect recent app activity when you open the tile. No usage history is stored. Browsers do not identify the website.", style = MaterialTheme.typography.bodySmall)
+        Text("When Nuvori is your Autofill service, the tile uses the last app that asked Nuvori to fill a login or code in the past 5 minutes. No extra permission is needed. Usage access is only needed when Nuvori is not your Autofill service: it lets the vault inspect recent app activity when you open the tile. No usage history is stored. Browsers do not identify the website.", style = MaterialTheme.typography.bodySmall)
         if (!granted) {
-            StatusBanner(kind = StatusKind.WARNING, message = "Allow Usage access to put codes for your previous app first.")
+            StatusBanner(kind = StatusKind.WARNING, message = "If you use another Autofill service, allow Usage access to put codes for your previous app first.")
             SettingsSecondaryButton("Allow Usage access", onClick = {
                 context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:${context.packageName}")))
             })

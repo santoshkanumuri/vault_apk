@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import com.privatevault.app.data.VaultEntry
 import com.privatevault.app.data.EntryType
+import com.privatevault.app.autofill.RecentLoginFill
 import java.security.MessageDigest
 import java.security.SecureRandom
 
@@ -24,6 +25,108 @@ internal fun loginAuthorizedForDestination(entry: VaultEntry, packageName: Strin
     else entry.type == EntryType.PASSWORD && trustedBrowser(packageName, identity) &&
         httpsOrigin(origin) == origin && (httpsOrigin(entry.tertiaryValue) == origin ||
             entry.autofillOrigins.lineSequence().any { it == origin })
+
+/** The https origins a login is saved for: its website (an https URL or a bare host) and its linked origins. Never http. */
+internal fun savedLoginOrigins(entry: VaultEntry): List<String> {
+    val website = entry.tertiaryValue.trim()
+    val primary = httpsOrigin(website)
+        ?: website.takeIf { it.isNotEmpty() && "://" !in it }?.let { httpsOrigin("https://$it") }
+    return (listOfNotNull(primary) + entry.autofillOrigins.lineSequence().mapNotNull { httpsOrigin(it.trim()) }).distinct()
+}
+
+/**
+ * The saved origin that makes [entry] a same-site login for [origin], or null. Same site means an equal registrable
+ * domain under the full Public Suffix List (private section included, so a.github.io and b.github.io differ) and
+ * a different exact origin. Only a verified browser with an exact https origin qualifies; apps and embedded
+ * WebViews never do. This is not an authorization: it never feeds keyboard suggestions, and the picker fills
+ * such a login once, after an explicit tap, without linking it.
+ */
+internal fun sameSiteSavedOrigin(
+    entry: VaultEntry,
+    packageName: String,
+    identity: String,
+    origin: String?,
+    embeddedWebView: Boolean,
+): String? {
+    if (origin == null || embeddedWebView || entry.type != EntryType.PASSWORD || entry.secondaryValue.isEmpty() ||
+        !trustedBrowser(packageName, identity) || httpsOrigin(origin) != origin ||
+        loginAuthorizedForDestination(entry, packageName, identity, origin)) return null
+    val site = registrableDomain(origin) ?: return null
+    return savedLoginOrigins(entry).firstOrNull { it != origin && registrableDomain(it) == site }
+}
+
+/** Why the picker may fill a login. [pickerFillAllowed] re-checks it right before every fill. */
+internal enum class PickerFillGrant {
+    /** The login is linked to this exact app identity or https origin. */
+    LINKED,
+    /** One tap on a same-site login in the unlocked picker. Fills once; writes no link. */
+    SAME_SITE_ONCE,
+    /** "Fill once" in the confirmation dialog that names the destination. Fills once; writes no link. */
+    CONFIRMED_ONCE,
+    /** The linked code for the login just filled here ([codeAfterLoginMatches]). Code fields only; writes no link. */
+    CODE_AFTER_LOGIN,
+}
+
+/**
+ * True when a code request comes from where [remembered] was just filled. Same package and signing identity always.
+ * A website also needs a verified browser and an equal registrable domain: code pages often sit on another
+ * subdomain, but a.github.io and b.github.io are different sites. Apps and embedded WebViews match on package and
+ * identity only (an embedded page's origin is chosen by the app). A website never matches an app, and the reverse.
+ */
+internal fun codeAfterLoginMatches(
+    remembered: RecentLoginFill?,
+    packageName: String,
+    identity: String,
+    origin: String?,
+    embeddedWebView: Boolean,
+    now: Long,
+): Boolean {
+    if (remembered == null || remembered.expiresAt <= now || identity.isBlank() ||
+        remembered.packageName != packageName || remembered.identity != identity) return false
+    val website = origin != null && !embeddedWebView
+    if (website != (remembered.origin != null && !remembered.embeddedWebView)) return false
+    if (!website) return true
+    val requested = origin ?: return false
+    val filled = remembered.origin ?: return false
+    if (!trustedBrowser(packageName, identity) || httpsOrigin(requested) != requested || httpsOrigin(filled) != filled) return false
+    val site = registrableDomain(requested) ?: return false
+    return registrableDomain(filled) == site
+}
+
+/**
+ * The trust check for a picker fill. A one-time grant re-proves its own condition here instead of skipping the
+ * check: same site again for [PickerFillGrant.SAME_SITE_ONCE], and for [PickerFillGrant.CONFIRMED_ONCE] the
+ * dialog must still show this entry ([confirmedEntryId]) and a website request must come from a verified browser.
+ * [PickerFillGrant.CODE_AFTER_LOGIN] needs a code request ([otpRequest]), the unexpired [rememberedLogin] for this
+ * entry at a matching destination, and the entry's linked authenticator in the vault ([linkedCodeExists]).
+ */
+internal fun pickerFillAllowed(
+    entry: VaultEntry,
+    packageName: String,
+    identity: String,
+    origin: String?,
+    embeddedWebView: Boolean,
+    grant: PickerFillGrant,
+    confirmedEntryId: String? = null,
+    otpRequest: Boolean = false,
+    rememberedLogin: RecentLoginFill? = null,
+    now: Long = 0L,
+    linkedCodeExists: Boolean = false,
+): Boolean {
+    val authorized = loginAuthorizedForDestination(entry, packageName, identity, origin)
+    return when (grant) {
+        PickerFillGrant.LINKED -> authorized
+        PickerFillGrant.SAME_SITE_ONCE -> authorized ||
+            sameSiteSavedOrigin(entry, packageName, identity, origin, embeddedWebView) != null
+        PickerFillGrant.CONFIRMED_ONCE -> entry.type == EntryType.PASSWORD && entry.secondaryValue.isNotEmpty() &&
+            confirmedEntryId == entry.id &&
+            (origin == null || (trustedBrowser(packageName, identity) && httpsOrigin(origin) == origin))
+        // Never a username or password: only the code field of the screen that follows this login's fill.
+        PickerFillGrant.CODE_AFTER_LOGIN -> otpRequest && entry.type == EntryType.PASSWORD &&
+            entry.linkedAuthenticatorId.isNotEmpty() && linkedCodeExists && rememberedLogin?.entryId == entry.id &&
+            codeAfterLoginMatches(rememberedLogin, packageName, identity, origin, embeddedWebView, now)
+    }
+}
 
 internal fun authorizedPasswordSuggestions(
     entries: List<VaultEntry>,

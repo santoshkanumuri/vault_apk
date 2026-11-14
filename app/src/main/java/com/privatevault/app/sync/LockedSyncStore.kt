@@ -396,9 +396,19 @@ internal class LockedSyncStore(private val context: Context,
         val mirror = requireNotNull(snapshot())
         require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })
         val list = features.sorted().take(32)
-        if (mirror.peerFeatures[deviceId] == list) return
-        writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
+        if (mirror.peerFeatures[deviceId] != list) writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
             peerFeatures = mirror.peerFeatures + (deviceId to list))).toByteArray(Charsets.UTF_8))
+        // The appearance gate may have opened; the unlocked app writes a pending appearance.
+        AppearanceSync.requestFlush()
+    }
+
+    /**
+     * True when this device may write an appearance change: every other active member announced
+     * [SyncFeatures.APPEARANCE] in its last Wi-Fi handshake (see [AppearanceSyncRules.gateOpen]).
+     */
+    @Synchronized fun appearanceSyncOpen(): Boolean {
+        val mirror = snapshot() ?: return false
+        return AppearanceSyncRules.gateOpen(mirror.localDeviceId, mirror.members, mirror.peerFeatures)
     }
 
     /**
@@ -494,6 +504,10 @@ internal class LockedSyncStore(private val context: Context,
         val vaultId = mirror.vaultId
         // A receiver rejects a change by a device that is not an active member, and that ends the
         // session. Changes of a removed device go only to a peer that accepts them up to the cutoff.
+        // Single changes are never left out by type (for example an appearance change for a peer
+        // without SyncFeatures.APPEARANCE): each author's changes form a hash chain, so a gap would
+        // stop every later change of that author on the peer just as a rejected change does. The
+        // writer's gate (AppearanceSyncRules.gateOpen) keeps such changes out of the chain instead.
         val authors = relayableAuthors(mirror.members)
         val cutoffs = if (relayRemoved) RemovalCutoff.cutoffsOf(mirror.membershipEvents) else emptyMap()
         return outgoingPointers().asSequence().filter { it.vaultId == vaultId &&

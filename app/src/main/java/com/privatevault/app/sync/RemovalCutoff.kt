@@ -17,8 +17,8 @@ import com.privatevault.app.data.SyncMembershipEventEntity
  */
 internal object RemovalCutoff {
     const val FEATURE = "removal-cutoff-v1"
-    /** What this build announces in the sync handshake `features` list. */
-    val FEATURES: List<String> = listOf(FEATURE)
+    /** What this build announces in the sync handshake `features` list (the single list is [SyncFeatures.ANNOUNCED]). */
+    val FEATURES: List<String> get() = SyncFeatures.ANNOUNCED
     private const val PREFIX = "cutoff1:"
     private val HASH = Regex("[a-f0-9]{64}")
     private val SEQUENCE = Regex("[1-9][0-9]{0,18}")

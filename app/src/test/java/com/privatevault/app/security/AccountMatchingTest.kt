@@ -17,6 +17,9 @@ class AccountMatchingTest {
         assertEquals("example", siteKeyword("https://shop.example.com.au/login"))
         assertEquals("mybank", siteKeyword("https://online.mybank.com.br"))
         assertEquals("example", siteKeyword("https://example.com:8443"))
+        // Suffixes the old hand-written list missed; the full Public Suffix List gets them right.
+        assertEquals("example", siteKeyword("https://shop.example.co.at"))
+        assertEquals("shop", siteKeyword("https://www.shop.s3.amazonaws.com"))
     }
 
     @Test fun siteKeywordRejectsAddressesAndSingleLabels() {

@@ -204,58 +204,6 @@ import java.util.UUID
 import java.util.Calendar
 import java.util.Locale
 
-internal val VaultColors = darkColorScheme(
-    primary = Color(0xFF78D47B),
-    onPrimary = Color(0xFF09210B),
-    primaryContainer = Color(0xFF173B1B),
-    onPrimaryContainer = Color(0xFFB9F3B9),
-    secondary = Color(0xFFB8CCB5),
-    onSecondary = Color(0xFF243424),
-    secondaryContainer = Color(0xFF334832),
-    onSecondaryContainer = Color(0xFFD4E8D0),
-    tertiary = Color(0xFFC6CBB8),
-    background = Color(0xFF050705),
-    surface = Color(0xFF050705),
-    surfaceVariant = Color(0xFF192019),
-    onBackground = Color(0xFFF0F4ED),
-    onSurface = Color(0xFFF0F4ED),
-    onSurfaceVariant = Color(0xFFBEC9BB),
-    outline = Color(0xFF879184),
-    outlineVariant = Color(0xFF2A332A),
-    surfaceContainerLowest = Color(0xFF050705),
-    surfaceContainerLow = Color(0xFF0A0D0A),
-    surfaceContainer = Color(0xFF0C100C),
-    surfaceContainerHigh = Color(0xFF131913),
-    surfaceContainerHighest = Color(0xFF192019),
-    error = Color(0xFFFFB4AB)
-)
-
-internal val VaultLightColors = lightColorScheme(
-    primary = Color(0xFF2E7034),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFB9F3B9),
-    onPrimaryContainer = Color(0xFF08210A),
-    secondary = Color(0xFF536451),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFD6E8D2),
-    onSecondaryContainer = Color(0xFF111F11),
-    tertiary = Color(0xFF5D6253),
-    background = Color(0xFFF8FAF5),
-    surface = Color(0xFFF8FAF5),
-    surfaceVariant = Color(0xFFE7EDE4),
-    onBackground = Color(0xFF181D17),
-    onSurface = Color(0xFF181D17),
-    onSurfaceVariant = Color(0xFF424940),
-    outline = Color(0xFF727970),
-    outlineVariant = Color(0xFFD3DBD0),
-    surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow = Color(0xFFFFFFFF),
-    surfaceContainer = Color(0xFFFFFFFF),
-    surfaceContainerHigh = Color(0xFFEEF2EB),
-    surfaceContainerHighest = Color(0xFFE7EDE4),
-    error = Color(0xFFB3261E)
-)
-
 @Composable
 private fun DeleteButton(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, label: String = "Delete") {
     Button(onClick = onClick, modifier = modifier, enabled = enabled,
@@ -328,7 +276,7 @@ fun PrivateVaultApp(
         if (requestDailyBiometric) onEnableDailyBiometric()
     }
     val lightMode by viewModel.lightMode.collectAsStateWithLifecycle()
-    MaterialTheme(colorScheme = if (lightMode) VaultLightColors else VaultColors) {
+    NuvoriTheme(dark = !lightMode) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Box(Modifier.fillMaxSize().pointerInput(status) {
                 awaitPointerEventScope { while (true) { awaitPointerEvent(); viewModel.touchFromUser() } }
@@ -1744,10 +1692,20 @@ private fun AutofillFormAvailability(refreshCopy: () -> Unit) {
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences("vault_preferences", android.content.Context.MODE_PRIVATE) }
     var enabled by remember { mutableStateOf(preferences.getBoolean("autofill_unlocked_profiles", false)) }
+    var offerLocked by remember { mutableStateOf(com.privatevault.app.autofill.AutofillPreferences.offerLockedProfiles(context)) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle("Form filling")
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Offer saved details in forms", Modifier.weight(1f))
+            Text("Offer to fill contact details", Modifier.weight(1f))
+            Switch(checked = offerLocked, onCheckedChange = { selected ->
+                offerLocked = selected
+                com.privatevault.app.autofill.AutofillPreferences.setOfferLockedProfiles(context, selected)
+            })
+        }
+        Text("Forms show \"Unlock to fill your details\". After you unlock, you choose which details to fill.",
+            style = MaterialTheme.typography.bodySmall)
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Fill without vault unlock", Modifier.weight(1f))
             Switch(checked = enabled, onCheckedChange = { selected ->
                 enabled = selected
                 preferences.edit().putBoolean("autofill_unlocked_profiles", selected).apply()
@@ -1755,7 +1713,7 @@ private fun AutofillFormAvailability(refreshCopy: () -> Unit) {
                 else com.privatevault.app.autofill.UnlockedProfileStore(context).clear()
             })
         }
-        Text("Uses an encrypted device copy without vault unlock. Applies to all saved profiles.",
+        Text("On: forms fill these details from an encrypted device copy without unlocking. Off: Nuvori asks you to unlock first. Applies to all saved profiles.",
             style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = {
             context.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE,
@@ -2319,6 +2277,11 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     },
                         description = "Turn off for a black background.")
                 }
+                val storedAppearance by viewModel.appearance.collectAsStateWithLifecycle()
+                AppearanceColorSections(storedAppearance.appearance.accent, storedAppearance.appearance.surface,
+                    pendingSyncNote = storedAppearance.pendingSync && pairedDevices.any { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name }) { accent, surface ->
+                    viewModel.setAppearance(accent, surface)
+                }
             }
             if (page == "Android devices") DeviceSyncSettings(viewModel, copyPairingLink,
                 joiningExisting = initialImportChoice == FirstRunChoice.JOIN)
@@ -2466,6 +2429,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     SettingsPrimaryButton(if (security.watchSyncEnabled) "Sync codes now" else "Connect watch and sync codes",
                         icon = Icons.Outlined.Watch, onClick = viewModel::connectWatch)
                     if (security.watchSyncEnabled) {
+                        if (watchConnection.legacyKey) Text("Tap Sync codes now once with the watch connected to switch it to a new watch key.",
+                            style = MaterialTheme.typography.bodySmall)
                         SettingsDangerButton("Remove codes from watch", icon = Icons.Outlined.DeleteOutline,
                             onClick = viewModel::removeWatchCodes)
                         Text("A disconnected watch keeps its current codes until it reconnects and receives the removal.", style = MaterialTheme.typography.bodySmall)

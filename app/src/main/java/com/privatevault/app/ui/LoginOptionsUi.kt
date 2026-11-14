@@ -33,6 +33,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
     var keyboardSuggestions by remember { mutableStateOf(preferences.getBoolean("autofill_keyboard_suggestions", true)) }
     var unlockedProfiles by remember { mutableStateOf(preferences.getBoolean("autofill_unlocked_profiles", false)) }
     var copyLinkedCode by remember { mutableStateOf(AutofillPreferences.copyLinkedCode(context)) }
+    var offerLockedProfiles by remember { mutableStateOf(AutofillPreferences.offerLockedProfiles(context)) }
     val autofillEnabled = rememberAutofillServiceEnabled()
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         SettingsSection("Autofill service") {
@@ -78,15 +79,19 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
             SettingsSwitchRow("Copy linked code after filling", copyLinkedCode, { enabled ->
                 copyLinkedCode = enabled
                 AutofillPreferences.setCopyLinkedCode(context, enabled)
-            }, description = "When you pick a login in the account picker, Nuvori copies its linked authenticator code so you can paste it on the next screen. The copy is marked sensitive.")
+            }, description = "Off by default. After you pick a login, Nuvori fills its linked authenticator code on the next screen when the app or site has a code field Nuvori recognizes. Turn this on as a fallback to also put the code on the clipboard for 30 seconds. Your keyboard and the app in front can read the clipboard.")
         }
         SettingsSection("Everyday details") {
+            SettingsSwitchRow("Offer to fill contact details", offerLockedProfiles, { enabled ->
+                offerLockedProfiles = enabled
+                AutofillPreferences.setOfferLockedProfiles(context, enabled)
+            }, description = "On by default. Address and contact forms show \"Unlock to fill your details\". After you unlock, you choose which saved details to fill. The suggestion itself shows none of your details.")
             SettingsSwitchRow("Offer saved details without vault unlock", unlockedProfiles, { enabled ->
                 unlockedProfiles = enabled
                 preferences.edit().putBoolean("autofill_unlocked_profiles", enabled).apply()
                 if (enabled) refreshCopy()
                 else com.privatevault.app.autofill.UnlockedProfileStore(context).clear()
-            }, description = "Off by default. When on, email, phone, name and address profiles get a separate device-encrypted copy for Autofill. They sync through the vault, then refresh here after this device unlocks.")
+            }, description = "Off by default. When on, email, phone, name and address profiles get a separate device-encrypted copy, and forms fill them without unlocking. When off, Nuvori asks you to unlock first. Profiles sync through the vault, then the copy refreshes here after this device unlocks.")
             StatusBanner(kind = if (unlockedProfiles) StatusKind.WARNING else StatusKind.INFO,
                 message = "Anyone using your unlocked phone can choose these details without the vault password. Passwords and authenticator codes still require unlock.")
         }

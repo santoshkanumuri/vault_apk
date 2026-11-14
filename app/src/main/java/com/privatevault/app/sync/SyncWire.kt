@@ -69,7 +69,7 @@ internal fun pairingHandshake(frames: SyncFrames, local: DeviceIdentity, code: C
         addProperty("key", local.publicKeyBase64Url)
         addProperty("platform", "android")
         // Older builds ignore this list; a peer without it supports none of these features.
-        add("features", JsonArray().apply { RemovalCutoff.FEATURES.forEach(::add) })
+        add("features", JsonArray().apply { SyncFeatures.ANNOUNCED.forEach(::add) })
     })
     require(hello.get("protocol").asInt == SYNC_WIRE_VERSION && hello.get("session").asString == sessionId &&
         hello.get("vault").asString == vaultId && hello.get("creator").asBoolean != creator) { "Pairing session mismatch" }

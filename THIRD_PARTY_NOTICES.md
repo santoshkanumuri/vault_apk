@@ -18,6 +18,7 @@ These are the main libraries used by Private Vault. Their code remains subject t
 | WebAuthn4J | Passkey authenticator and attestation encoding | Apache-2.0 |
 | Lucide icons (vendored path data in `ui/NuvoriIcons.kt`) | Interface icons shared with Nuvori for Windows | ISC (portions MIT, from Feather) |
 | Jackson | WebAuthn4J JSON and CBOR encoding | Apache-2.0 |
+| Public Suffix List (`app/src/main/resources/nuvori/public_suffix_list.dat`) | Same-site login matching in autofill | MPL-2.0 |
 
 AndroidX Autofill and Credentials provide keyboard suggestions and Android Credential Manager integration under Apache-2.0.
 
@@ -74,3 +75,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Public Suffix List
+
+`app/src/main/resources/nuvori/public_suffix_list.dat` is an unmodified copy of the
+[Public Suffix List](https://publicsuffix.org/) (ICANN and PRIVATE sections), version
+`2026-11-13_14-44-35_UTC`, commit `71c235dd3f888dd4ecd066817050a7482da710e5`, downloaded from
+https://publicsuffix.org/list/public_suffix_list.dat. Nuvori reads it offline to decide which websites are the same site.
+The list is subject to the terms of the Mozilla Public License, v. 2.0 (MPL-2.0). You can obtain a copy of the license at
+https://mozilla.org/MPL/2.0/. Its source form is the file itself, which keeps the license header. To update it, replace
+the file with a new download and run the unit tests.

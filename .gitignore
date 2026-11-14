@@ -33,3 +33,5 @@ captures/
 !docs/PERSONAL-DEVICE-SYNC.md
 !docs/PUBLISHING.md
 !docs/WATCH-COMPANION.md
+__pycache__/
+.claude/

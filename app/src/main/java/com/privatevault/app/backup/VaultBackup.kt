@@ -49,7 +49,8 @@ class VaultBackupManager(
 
     suspend fun export(output: OutputStream, password: CharArray, vaultKey: ByteArray) {
         require(password.size >= PasswordCrypto.MIN_PASSWORD_LENGTH)
-        val snapshot = dao.backupSnapshot()
+        val appearance = com.privatevault.app.appearance.AppearanceStore.read(context).appearance
+        val snapshot = dao.backupSnapshot().copy(appearanceAccent = appearance.accent, appearanceSurface = appearance.surface)
         val keyset = KeysetHandle.generateNew(KeyTemplates.get("AES128_GCM_HKDF_1MB"))
         val serialized = ByteArrayOutputStream().also {
             CleartextKeysetHandle.write(keyset, BinaryKeysetWriter.withOutputStream(it))
@@ -223,6 +224,7 @@ class VaultBackupManager(
         require(snapshot.vaultId.isNotBlank()) { "Vault ID is missing" }
         val root = JSONObject().put("version", 9)
             .put("lightMode", snapshot.lightMode).put("nfcEnabled", snapshot.nfcEnabled)
+            .apply { snapshot.appearanceAccent?.let { put("appearanceAccent", it) }; snapshot.appearanceSurface?.let { put("appearanceSurface", it) } }
             .put("vaultId", snapshot.vaultId)
             .put("backgroundTimeoutMs", snapshot.backgroundTimeoutMs)
             .put("inactivityTimeoutMs", snapshot.inactivityTimeoutMs)
@@ -257,6 +259,8 @@ class VaultBackupManager(
             },
             lightMode = root.optBoolean("lightMode", false),
             nfcEnabled = root.optBoolean("nfcEnabled", false),
+            appearanceAccent = root.optString("appearanceAccent", "").takeIf { com.privatevault.app.appearance.isValidAppearanceId(it) },
+            appearanceSurface = root.optString("appearanceSurface", "").takeIf { com.privatevault.app.appearance.isValidAppearanceId(it) },
             backgroundTimeoutMs = root.optLong("backgroundTimeoutMs", 10_000L).also { require(it in com.privatevault.app.security.backgroundTimeouts) },
             inactivityTimeoutMs = root.optLong("inactivityTimeoutMs", 60_000L).also { require(it in com.privatevault.app.security.inactivityTimeouts) },
             masterPasswordIntervalMs = root.optLong("masterPasswordIntervalMs", 86_400_000L).also { require(it in com.privatevault.app.security.masterPasswordIntervals) },
@@ -386,6 +390,9 @@ data class BackupData(
     val backgroundTimeoutMs: Long = 10_000L,
     val inactivityTimeoutMs: Long = 60_000L,
     val masterPasswordIntervalMs: Long = 86_400_000L,
+    /** Optional appearance ids. Null in backups made before Nuvori 2.2.4; restore then keeps the default colors. */
+    val appearanceAccent: String? = null,
+    val appearanceSurface: String? = null,
 )
 
 class PreparedRestore internal constructor(val data: BackupData, private val files: List<String>, private val store: EncryptedPhotoStore) : AutoCloseable {

@@ -31,7 +31,7 @@ internal data class FormNode(
 
 internal data class LoginFormFields(val username: Int?, val password: Int?, val otp: Int?, val origin: String? = null,
     val newPasswords: List<Int> = emptyList(), val embeddedWebView: Boolean = false, val pinPassword: Boolean = false,
-    val usernameGuessed: Boolean = false)
+    val usernameGuessed: Boolean = false, val embeddedSite: String? = null)
 
 private const val MAX_NODES = 2000
 private const val MAX_DEPTH = 40
@@ -47,7 +47,7 @@ private val FALLBACK_HTML_TYPES = setOf("", "text", "email")
 
 /** A node in document order with what it inherits from its ancestors. */
 private class FormItem(val node: FormNode, val index: Int, val window: Int, val form: Int, val origin: String?,
-    val web: Boolean, val shown: Boolean) {
+    val web: Boolean, val shown: Boolean, val insecure: Boolean = false) {
     val attrs: Map<String, String> = node.htmlAttributes.entries.associate { it.key.lowercase(Locale.ROOT) to it.value }
     val tokens: Set<String> = purposeTokens(node.hints, attrs["autocomplete"])
     val norm: Set<String> = tokens.map(::normalizeToken).filter { it.isNotEmpty() }.toSet()
@@ -58,9 +58,15 @@ private class FormItem(val node: FormNode, val index: Int, val window: Int, val 
     var role: FieldRole? = null
 }
 
-private class FormScan(val items: List<FormItem>, val origins: Set<String>, val forms: Int, val embeddedWebView: Boolean)
+/** [unknownOrigin]: some node reported a web domain that is not an https origin (no scheme, or not https). */
+private class FormScan(val items: List<FormItem>, val origins: Set<String>, val forms: Int, val embeddedWebView: Boolean,
+    val unknownOrigin: Boolean)
 
-/** Walks every window once. Null when the structure is unsafe: too big or deep, a frame, or an untrusted origin. */
+/**
+ * Walks every window once. Null when the structure is unsafe: too big or deep, a frame in an app's WebView or in a
+ * profile form, or an untrusted origin. In a trusted browser a frame or a non-https document is not unsafe by itself:
+ * its nodes carry their own origin (or none, or [FormItem.insecure]) and [classifyLoginForm] decides on them.
+ */
 private fun scanForm(roots: List<FormNode>, browser: Boolean, profile: Boolean): FormScan? {
     val items = ArrayList<FormItem>()
     val origins = LinkedHashSet<String>()
@@ -68,33 +74,42 @@ private fun scanForm(roots: List<FormNode>, browser: Boolean, profile: Boolean):
     var forms = 0
     var embedded = false
     var unsafe = false
-    fun visit(node: FormNode, depth: Int, window: Int, parentForm: Int, parentOrigin: String?, parentShown: Boolean, parentWeb: Boolean) {
+    var unknown = false
+    fun visit(node: FormNode, depth: Int, window: Int, parentForm: Int, parentOrigin: String?, parentShown: Boolean, parentWeb: Boolean,
+        parentInsecure: Boolean) {
         if (unsafe) return
         if (++count > MAX_NODES || depth > MAX_DEPTH) { unsafe = true; return }
         val web = parentWeb || !node.webDomain.isNullOrBlank() || node.htmlTag != null || node.className?.contains("WebView", true) == true
         if (web && !browser) embedded = true
-        var origin = parentOrigin
+        val tag = node.htmlTag?.lowercase(Locale.ROOT)
+        val frame = tag == "iframe" || tag == "frame"
+        // An app's WebView and every profile form stay strict: any frame is unsafe.
+        if (frame && (profile || !browser)) unsafe = true
+        // A frame is its own document and never inherits its parent's origin. A frame that reports none leaves its
+        // fields without an origin, and those are never filled.
+        var origin = if (frame) null else parentOrigin
+        var insecure = parentInsecure
         if (!node.webDomain.isNullOrBlank()) {
             origin = if (node.webScheme == "https") httpsOrigin("https://${node.webDomain}") else null
             if (profile) { if (node.webScheme != null && origin == null) unsafe = true }
             else {
-                if (origin == null && browser) unsafe = true
+                // A trusted browser: an http ad frame does not spoil the page, but nothing in or under a non-https
+                // document is filled. The network can change that document and anything it frames.
+                if (origin == null && browser) insecure = true
                 if (!browser && node.webScheme != null && node.webScheme != "https") unsafe = true
             }
-            if (origin != null) origins.add(origin)
+            if (origin != null) origins.add(origin) else unknown = true
         }
-        val tag = node.htmlTag?.lowercase(Locale.ROOT)
-        if (tag == "iframe" || tag == "frame") unsafe = true
         val form = if (tag == "form") forms++ else parentForm
         val shown = parentShown && node.visible
-        val item = FormItem(node, items.size, window, form, origin, web, shown)
+        val item = FormItem(node, items.size, window, form, origin, web, shown, insecure)
         items.add(item)
         // An app cannot ask for a new password or account on a page it hosts, only a trusted browser can.
         if (!profile && !browser && ("newpassword" in item.norm || "newusername" in item.norm)) unsafe = true
-        for (child in node.children) visit(child, depth + 1, window, form, origin, shown, web)
+        for (child in node.children) visit(child, depth + 1, window, form, origin, shown, web, insecure)
     }
-    roots.forEachIndexed { window, root -> visit(root, 0, window, -1, null, true, false) }
-    return if (unsafe) null else FormScan(items, origins, forms, embedded)
+    roots.forEachIndexed { window, root -> visit(root, 0, window, -1, null, true, false, false) }
+    return if (unsafe) null else FormScan(items, origins, forms, embedded, unknown)
 }
 
 private fun roleOf(item: FormItem, browser: Boolean): FieldRole? {
@@ -202,32 +217,49 @@ internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean): LoginFo
         val role = roleOf(item, browser)
         item.role = role
         if (role != null && item.origin == null && (browser || role == FieldRole.NEW_PASSWORD)) return null
+        // Anywhere on the page, a credential-looking field in or under a non-https document makes the request unsafe.
+        if (role != null && browser && item.insecure) return null
     }
-    if (browser && scan.origins.size != 1) return null
     // An embedded app can invent webDomain. Its certificate is the destination trust boundary.
     if (scan.embeddedWebView && scan.origins.size > 1) return null
-    val origin = if (browser) scan.origins.single() else null
     val embedded = scan.embeddedWebView
+    /*
+     * (origin, embeddedSite) for the chosen role fields. A trusted browser fills the origin of the credential fields
+     * themselves, not of the whole page: every field with a role in the chosen group must carry one https origin, or
+     * nothing is filled. Other nodes (ads, embeds) are ignored. A frame's own origin is what the login matches, as in
+     * Chrome's password manager: a login saved for site B fills a B frame even inside a page of site A.
+     * An app's WebView never gets an origin, because the app chose its webDomain. It gets embeddedSite instead: the one
+     * https site the whole WebView reported, a picker hint that never authorizes anything.
+     */
+    fun destination(fields: List<FormItem>): Pair<String?, String?>? {
+        val reported = fields.map { it.origin }.distinct()
+        if (browser) return reported.singleOrNull()?.let { it to null }
+        val hint = if (!embedded || scan.unknownOrigin || scan.origins.size != 1) null else reported.singleOrNull()
+        return null to hint
+    }
     val groups = items.filter { it.role == FieldRole.PASSWORD || it.role == FieldRole.NEW_PASSWORD || it.role == FieldRole.OTP }.map { it.group }.distinct()
     val group = when (groups.size) {
         0 -> {
             // A username-only step (password on the next screen) needs a web page and exactly one candidate.
             if (!(browser || embedded)) return null
             val only = items.filter { it.role == FieldRole.USERNAME }.singleOrNull() ?: return null
-            return LoginFormFields(only.node.id, null, null, origin, emptyList(), embedded)
+            val (origin, site) = destination(listOf(only)) ?: return null
+            return LoginFormFields(only.node.id, null, null, origin, emptyList(), embedded, embeddedSite = site)
         }
         1 -> groups[0]
         // Several forms hold credentials (login plus sign-up, say): only the one the user is in is safe to choose.
         else -> items.filter { it.node.focused }.map { it.group }.distinct().singleOrNull { it in groups } ?: return null
     }
     val members = items.filter { it.group == group }
+    // Role fields of one group in two origins (fields around and inside a frame, say): never mix them.
+    val (origin, site) = destination(members.filter { it.role != null }) ?: return null
     val secrets = members.filter { it.role == FieldRole.PASSWORD || it.role == FieldRole.NEW_PASSWORD }
     val codes = members.filter { it.role == FieldRole.OTP }
     val usernames = members.filter { it.role == FieldRole.USERNAME }
     if (codes.size > 1) return null
     // Separate OTP screens only: do not fill multiple factors in a mixed form.
     if (codes.isNotEmpty()) return if (secrets.isEmpty() && usernames.isEmpty())
-        LoginFormFields(null, null, codes[0].node.id, origin, emptyList(), embedded) else null
+        LoginFormFields(null, null, codes[0].node.id, origin, emptyList(), embedded, embeddedSite = site) else null
     // Without autocomplete hints only a trusted browser may tell a new password from the current one; an app's lone field is current.
     val split: Pair<FormItem?, List<FormItem>> = if (browser) {
         splitPasswords(secrets) ?: return null
@@ -244,7 +276,7 @@ internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean): LoginFo
         guessed = username != null
     }
     val pin = password != null && password.node.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_NUMBER
-    return LoginFormFields(username?.node?.id, password?.node?.id, null, origin, fresh.mapNotNull { it.node.id }, embedded, pin, guessed)
+    return LoginFormFields(username?.node?.id, password?.node?.id, null, origin, fresh.mapNotNull { it.node.id }, embedded, pin, guessed, site)
 }
 
 /** Contact and address fields of one form. Repeated kinds are fine; credentials and card fields never count. */

@@ -72,10 +72,25 @@ import com.privatevault.app.security.appSigningIdentity
 import com.privatevault.app.security.loginAuthorized
 import com.privatevault.app.security.loginAuthorizedForDestination
 import com.privatevault.app.security.possibleLoginMatches
+import com.privatevault.app.security.LoginMatchTier
+import com.privatevault.app.security.PickerFillGrant
+import com.privatevault.app.security.pickerFillAllowed
+import com.privatevault.app.security.rankLoginSearch
+import com.privatevault.app.security.registrableDomain
+import com.privatevault.app.security.sameSiteSavedOrigin
 import com.privatevault.app.autofill.AutofillPreferences
 import com.privatevault.app.autofill.LoginFillRequest
 import com.privatevault.app.autofill.PendingLoginFills
+import com.privatevault.app.autofill.PendingProfileFills
+import com.privatevault.app.autofill.PROFILE_FILL_TOKEN
+import com.privatevault.app.autofill.ProfileFillRequest
+import com.privatevault.app.autofill.autofillProfile
+import com.privatevault.app.autofill.profileFillValues
 import com.privatevault.app.autofill.PendingLoginSaves
+import com.privatevault.app.autofill.CODE_AFTER_LOGIN_MS
+import com.privatevault.app.autofill.RecentLoginFill
+import com.privatevault.app.autofill.RecentLoginFills
+import com.privatevault.app.security.codeAfterLoginMatches
 import com.privatevault.app.autofill.LoginSaveRequest
 import com.privatevault.app.autofill.passwordSuggestions
 import com.privatevault.app.autofill.saveInfo
@@ -99,8 +114,11 @@ import javax.crypto.Cipher
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-/** Who is asking: a website (lock icon and host) or an app (its icon, label and package). */
-private class PickerDestination(val name: String, val detail: String?, val packageName: String?)
+/**
+ * Who is asking: a website (lock icon and host) or an app (its icon, label and package). [claim] is the host an app's
+ * WebView says it shows: secondary text only, because the app (not the site) receives what is filled.
+ */
+private class PickerDestination(val name: String, val detail: String?, val packageName: String?, val claim: String? = null)
 
 /** A separate authenticated session. Never borrows the main activity's unlocked state. */
 class VaultCodesActivity : FragmentActivity() {
@@ -116,10 +134,14 @@ class VaultCodesActivity : FragmentActivity() {
     private var authentication: Job? = null
     private var suggestedApp: String? = null
     private var loginFill: LoginFillRequest? = null
+    /** Profile mode: a contact form's field ids and destination. Only contact-details entries are loaded. */
+    private var profileFill: ProfileFillRequest? = null
     private var loginSave: LoginSaveRequest? = null
     private var saveKey: ByteArray? = null
     private var saving: Job? = null
     private var saveMode = false
+    /** Host an app's WebView claimed when its login was submitted: the default name of a new login, nothing more. */
+    private var saveSite: String? = null
     private var passkeyOperation: com.privatevault.app.passkeys.PasskeyOperation? = null
     private var passwordCredentialOperation: com.privatevault.app.passkeys.PasswordCredentialOperation? = null
     private var passkeys by mutableStateOf<List<com.privatevault.app.data.VaultPasskey>>(emptyList())
@@ -129,11 +151,14 @@ class VaultCodesActivity : FragmentActivity() {
     private var generationEntry by mutableStateOf<VaultEntry?>(null)
     private var generationUsername by mutableStateOf("")
     private var autofillMode = false
+    /** Set when a "Just signed in" tap came too late: the section hides and the normal list remains. */
+    private var codeAfterLoginRefused by mutableStateOf(false)
     private val handler = Handler(Looper.getMainLooper())
     private val timeout = Runnable { dismissPicker() }
     private var inactivityTimeoutMs = 60_000L
     private val screenOff = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) = dismissPicker()
+        // The phone locks: a later code screen must not count as "just signed in".
+        override fun onReceive(context: Context?, intent: Intent?) { RecentLoginFills.clear(); dismissPicker() }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -142,8 +167,12 @@ class VaultCodesActivity : FragmentActivity() {
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
         registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF))
         saveMode = intent.hasExtra("login_save_token") || intent.hasExtra("credential_password_create")
-        autofillMode = intent.hasExtra("login_fill_token") || saveMode || intent.hasExtra("passkey_create") || intent.hasExtra("credential_password_get")
-        if (intent.hasExtra("passkey_create")) {
+        autofillMode = intent.hasExtra("login_fill_token") || saveMode || intent.hasExtra("passkey_create") || intent.hasExtra("credential_password_get") ||
+            intent.hasExtra(PROFILE_FILL_TOKEN)
+        if (intent.hasExtra(PROFILE_FILL_TOKEN)) {
+            profileFill = PendingProfileFills.take(intent.getStringExtra(PROFILE_FILL_TOKEN))
+            if (profileFill == null) { dismissPicker(); return }
+        } else if (intent.hasExtra("passkey_create")) {
             if (Build.VERSION.SDK_INT < 34) { dismissPicker(); return }
             passkeyOperation = runCatching { com.privatevault.app.passkeys.PasskeyOperation.from(this, intent) }.getOrNull()
             if (passkeyOperation == null) { dismissPicker(); return }
@@ -179,6 +208,8 @@ class VaultCodesActivity : FragmentActivity() {
         } else if (saveMode) {
             loginSave = PendingLoginSaves.take(intent.getStringExtra("login_save_token"))
             if (loginSave == null) { dismissPicker(); return }
+            saveSite = intent.getStringExtra(com.privatevault.app.autofill.SAVE_EMBEDDED_SITE)
+                ?.takeIf { loginSave?.origin == null }?.let(::httpsOrigin)?.removePrefix("https://")
             handler.postDelayed({ dismissPicker() }, (requireNotNull(loginSave).expiresAt - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0))
         } else if (autofillMode) {
             loginFill = PendingLoginFills.take(intent.getStringExtra("login_fill_token"))
@@ -193,7 +224,7 @@ class VaultCodesActivity : FragmentActivity() {
                     preferences.edit().putInt("quick_access_tab", tab).apply()
                 }
             }
-            MaterialTheme(colorScheme = if (light) VaultLightColors else VaultColors) {
+            NuvoriTheme(dark = !light) {
                 CompositionLocalProvider(LocalQuickAccessTabStore provides tabStore) {
                     if (pickerVisible) Picker()
                 }
@@ -242,13 +273,18 @@ class VaultCodesActivity : FragmentActivity() {
                 }
                 var loadedPasskeys = emptyList<com.privatevault.app.data.VaultPasskey>()
                 var masterInterval = 86_400_000L
+                val website = loginFill?.origin
                 val loaded = withContext(Dispatchers.IO) {
+                    // Read the bundled Public Suffix List off the main thread before the picker groups same-site logins.
+                    website?.let(::registrableDomain)
                     val database = VaultDatabase.open(applicationContext, requireNotNull(key))
                     try {
                         val settings = database.dao().settings()
                         masterInterval = settings?.masterPasswordIntervalMs ?: 86_400_000L
                         inactivityTimeoutMs = settings?.inactivityTimeoutMs ?: 60_000L
                         if (passkeyOperation != null) { loadedPasskeys = database.dao().allPasskeys(); emptyList() }
+                        // Profile mode never reads passwords or authenticator secrets.
+                        else if (profileFill != null) database.dao().autofillProfileEntries()
                         else database.dao().loginAndCodeEntries()
                     } finally { database.close() }
                 }
@@ -260,7 +296,7 @@ class VaultCodesActivity : FragmentActivity() {
                     catch (_: Exception) { /* Password authentication still permits this visit. */ }
                 }
                 if (pickerVisible) {
-                    if (autofillMode || passkeyOperation != null) saveKey = requireNotNull(key).copyOf()
+                    if ((autofillMode && profileFill == null) || passkeyOperation != null) saveKey = requireNotNull(key).copyOf()
                     passkeys = loadedPasskeys
                     entries = loaded; unlocked = true; onUserInteraction()
                     if (intent.getBooleanExtra("keyboard_suggestions", false)) returnKeyboardSuggestions()
@@ -364,7 +400,20 @@ class VaultCodesActivity : FragmentActivity() {
         dismissPicker()
     }
 
-    /** After a picker fill the next screen often asks for a code, so copy it now. Returns the code's account name. */
+    /**
+     * Remembers where [entry] was just filled, so the code screen that follows can offer its linked code first.
+     * Process memory only, 3 minutes, ids and destination only. Any other fill replaces or clears it.
+     */
+    private fun rememberForCodeStep(entry: VaultEntry?, request: LoginFillRequest): Boolean {
+        RecentLoginFills.clear()
+        if (entry == null || entry.linkedAuthenticatorId.isEmpty() ||
+            entries.none { it.type == EntryType.AUTHENTICATOR && it.id == entry.linkedAuthenticatorId }) return false
+        RecentLoginFills.remember(RecentLoginFill(entry.id, request.packageName, request.identity, request.origin,
+            request.embeddedWebView, android.os.SystemClock.elapsedRealtime() + CODE_AFTER_LOGIN_MS))
+        return true
+    }
+
+    /** Optional fallback (off by default): copy the linked code for a code field Nuvori cannot fill. Returns the code's account name. */
     private fun copyLinkedCode(entry: VaultEntry): String? {
         if (entry.linkedAuthenticatorId.isEmpty() || !AutofillPreferences.copyLinkedCode(this)) return null
         val authenticator = entries.firstOrNull { it.type == EntryType.AUTHENTICATOR && it.id == entry.linkedAuthenticatorId } ?: return null
@@ -383,6 +432,7 @@ class VaultCodesActivity : FragmentActivity() {
         entries = emptyList()
         suggestedApp = null
         loginFill = null
+        profileFill = null
         loginSave?.clear()
         loginSave = null
         saveKey?.fill(0)
@@ -414,15 +464,20 @@ class VaultCodesActivity : FragmentActivity() {
 
     private fun fillDestination(request: LoginFillRequest): String = request.origin ?: appLabel(request.packageName) ?: request.packageName
 
-    private fun destinationFor(packageName: String, origin: String?): PickerDestination {
+    private fun destinationFor(packageName: String, origin: String?, claimedHost: String? = null): PickerDestination {
         if (origin != null) return PickerDestination(origin.removePrefix("https://"), null, null)
         val label = appLabel(packageName)
-        return PickerDestination(label ?: packageName, if (label != null) packageName else null, packageName)
+        return PickerDestination(label ?: packageName, if (label != null) packageName else null, packageName, claimedHost)
     }
 
+    /** The host an app's WebView claims to show, for display and ranking only. Never for a website request. */
+    private fun claimedHost(request: LoginFillRequest): String? =
+        request.embeddedSite?.takeIf { request.origin == null && request.embeddedWebView }?.removePrefix("https://")
+
     private fun pickerDestination(): PickerDestination? {
-        loginSave?.let { return destinationFor(it.packageName, it.origin) }
-        loginFill?.let { return destinationFor(it.packageName, it.origin) }
+        loginSave?.let { return destinationFor(it.packageName, it.origin, saveSite) }
+        loginFill?.let { return destinationFor(it.packageName, it.origin, claimedHost(it)) }
+        profileFill?.let { return destinationFor(it.packageName, it.origin) }
         if (Build.VERSION.SDK_INT >= 34) passkeyOperation?.let { operation ->
             return destinationFor(operation.callerPackage, operation.origin.takeIf { it.startsWith("https://") })
         }
@@ -468,6 +523,14 @@ class VaultCodesActivity : FragmentActivity() {
             catch (_: Exception) { message = "Could not link this login. Nothing was filled." }
             finally { key.fill(0); busy = false }
         }
+    }
+
+    /** "Fill once" in the confirmation dialog: fills this time only and leaves the saved login unchanged. */
+    private fun fillOnce(entry: VaultEntry) {
+        if (busy || pendingLoginLink?.id != entry.id) return
+        fillLogin(entry, confirmedDialogAction = true, grant = PickerFillGrant.CONFIRMED_ONCE)
+        // If the picker is still open, nothing was filled. Close the dialog so any error is visible.
+        pendingLoginLink = null
     }
 
     /**
@@ -605,13 +668,33 @@ class VaultCodesActivity : FragmentActivity() {
         generated: String? = null,
         generatedUsername: String? = null,
         confirmedDialogAction: Boolean = false,
+        grant: PickerFillGrant = PickerFillGrant.LINKED,
     ) {
         val request = loginFill ?: return
         if (!pickerVisible || !unlocked || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) ||
             !com.privatevault.app.security.trustedFillFocus(hasWindowFocus(), confirmedDialogAction, generated != null)) return
-        if (request.expiresAt <= android.os.SystemClock.elapsedRealtime() ||
+        // A one-time fill writes no link, so nothing later can catch a mistake: it is for a plain login request only,
+        // and "Fill once" only from the open confirmation dialog. A code request accepts no one-time grant except
+        // the code-after-login one, and that grant never fills anything but a code field.
+        if (grant == PickerFillGrant.CODE_AFTER_LOGIN) {
+            if (entry == null || generated != null || request.otp == null || request.password != null || request.newPasswords.isNotEmpty()) return
+        } else if (grant != PickerFillGrant.LINKED && (entry == null || generated != null || request.otp != null ||
+                request.newPasswords.isNotEmpty() || (grant == PickerFillGrant.CONFIRMED_ONCE && !confirmedDialogAction))) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        // Re-read the remembered sign-in at tap time: the list on screen can be older than its 3-minute window.
+        val remembered = if (grant == PickerFillGrant.CODE_AFTER_LOGIN) RecentLoginFills.peek(now) else null
+        if (grant == PickerFillGrant.CODE_AFTER_LOGIN && remembered?.entryId != entry?.id) {
+            codeAfterLoginRefused = true
+            message = "That sign-in was too long ago. Choose a login to fill its code."
+            return
+        }
+        val linkedCodeExists = entry != null && entry.linkedAuthenticatorId.isNotEmpty() &&
+            entries.any { it.type == EntryType.AUTHENTICATOR && it.id == entry.linkedAuthenticatorId }
+        if (request.expiresAt <= now ||
             appSigningIdentity(this, request.packageName) != request.identity ||
-            (if (entry != null) !loginAuthorizedForDestination(entry, request.packageName, request.identity, request.origin)
+            (if (entry != null) !pickerFillAllowed(entry, request.packageName, request.identity, request.origin,
+                    request.embeddedWebView, grant, pendingLoginLink?.id, otpRequest = request.otp != null,
+                    rememberedLogin = remembered, now = now, linkedCodeExists = linkedCodeExists)
              else request.newPasswords.isEmpty() || request.password != null || request.origin == null || !trustedBrowser(request.packageName, request.identity))) {
             dismissPicker(); return
         }
@@ -630,6 +713,7 @@ class VaultCodesActivity : FragmentActivity() {
                 }
             }.getOrElse { message = "Could not return this login to the app."; return }
             setResult(RESULT_OK, result)
+            rememberForCodeStep(selected, request)
             dismissPicker()
             return
         }
@@ -668,12 +752,54 @@ class VaultCodesActivity : FragmentActivity() {
                 }
             })
             .putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT_EPHEMERAL_DATASET, true))
-        // The next sign-in screen usually asks for the linked code. Copy it while this window is still in front.
-        if (request.otp == null && request.password != null && request.newPasswords.isEmpty() && entry != null && generated == null) {
-            copyLinkedCode(entry)?.let { toast("Login filled. Code for $it copied.", long = true) }
-        }
+        if (request.otp != null) {
+            // Single use: this sign-in's code step is done.
+            entry?.let { RecentLoginFills.consume(it.id) }
+        } else if (request.password != null && request.newPasswords.isEmpty() && entry != null && generated == null) {
+            // The next sign-in screen usually asks for the linked code: Nuvori offers it there after unlock.
+            val codeNext = rememberForCodeStep(entry, request)
+            // The optional clipboard fallback runs while this window is still in front.
+            val copied = copyLinkedCode(entry)
+            if (copied != null) toast("Login filled. Code for $copied copied.", long = true)
+            else if (codeNext) toast("Login filled. If the next screen asks for a code, choose Nuvori there.", long = true)
+        } else RecentLoginFills.clear()
         dismissPicker()
     }
+
+    /**
+     * Profile mode: fills the picked details into the requested fields only, after the same checks as [fillLogin]:
+     * an unexpired request, this window in front, the app's signing identity unchanged, and a website request still
+     * in a trusted browser at a canonical https origin. Contact details are not credentials, so an app's WebView may
+     * receive them; the picker warns first.
+     */
+    @Suppress("DEPRECATION")
+    private fun fillProfile(entry: VaultEntry) {
+        val request = profileFill ?: return
+        if (busy || !pickerVisible || !unlocked || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) ||
+            !hasWindowFocus()) return
+        val browser = trustedBrowser(request.packageName, request.identity)
+        if (request.expiresAt <= android.os.SystemClock.elapsedRealtime() ||
+            appSigningIdentity(this, request.packageName) != request.identity ||
+            (request.origin == null && browser) || (request.origin != null && (!browser || httpsOrigin(request.origin) != request.origin))) {
+            dismissPicker(); return
+        }
+        val profile = entries.firstOrNull { it.id == entry.id }?.autofillProfile() ?: return
+        val values = profileFillValues(profile, request.fields)
+        if (values.isEmpty()) { message = "These details have nothing this form asks for."; return }
+        val dataset = runCatching {
+            Dataset.Builder(RemoteViews(packageName, R.layout.autofill_suggestion)).apply {
+                values.forEach { (id, value) -> setValue(id, AutofillValue.forText(value)) }
+            }.build()
+        }.getOrElse { message = "Could not fill these details."; return }
+        setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
+            .putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT_EPHEMERAL_DATASET, true))
+        dismissPicker()
+    }
+
+    /** An app's WebView asks for details: the app, not the page it shows, receives them. */
+    private fun profileWarning(request: ProfileFillRequest): String? =
+        if (!request.embeddedWebView || request.origin != null) null
+        else "${appLabel(request.packageName) ?: request.packageName} (${request.packageName}) receives what you fill and can read it. Choose details only if you trust this app."
 
     override fun onUserInteraction() {
         super.onUserInteraction()
@@ -711,10 +837,10 @@ class VaultCodesActivity : FragmentActivity() {
     @Composable
     private fun Picker() {
         var password by remember { mutableStateOf("") }
-        val title = if (passkeyOperation != null) "Passkeys" else if (saveMode) "Save login" else if (passwordCredentialOperation != null) "Sign in" else if (autofillMode) "Nuvori passwords" else "Vault codes"
+        val title = if (passkeyOperation != null) "Passkeys" else if (profileFill != null) "Fill your details" else if (saveMode) "Save login" else if (passwordCredentialOperation != null) "Sign in" else if (autofillMode) "Nuvori passwords" else "Vault codes"
         val destination = remember { pickerDestination() }
         // Short screens hug their content; lists use the full height.
-        val compact = !unlocked || saveMode || (Build.VERSION.SDK_INT >= 34 && passkeyOperation?.create == true)
+        val compact = !unlocked || saveMode || profileFill != null || (Build.VERSION.SDK_INT >= 34 && passkeyOperation?.create == true)
         val submit: () -> Unit = {
             if (!busy && password.isNotEmpty()) { val value = password.toCharArray(); password = ""; authenticate(value) }
         }
@@ -731,6 +857,8 @@ class VaultCodesActivity : FragmentActivity() {
                     val operation = passkeyOperation
                     if (unlocked && operation != null && Build.VERSION.SDK_INT >= 34) {
                         PasskeyContent(operation)
+                    } else if (unlocked && profileFill != null) {
+                        ProfileContent()
                     } else if (unlocked && saveMode) {
                         SaveContent()
                     } else if (unlocked && autofillMode) {
@@ -775,17 +903,27 @@ class VaultCodesActivity : FragmentActivity() {
             }
             AlertDialog(
                 onDismissRequest = { if (!busy) pendingLoginLink = null },
-                title = { Text("Fill and link this login?") },
-                text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                title = { Text("Fill this login here?") },
+                text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     caution?.let { StatusBanner(StatusKind.WARNING, it) }
-                    Text(if (request?.embeddedWebView == true)
+                    val claimed = request?.let(::claimedHost)
+                    Text(if (request?.embeddedWebView == true && claimed != null)
+                    "Fill $account in the embedded browser of $destinationName (${request.packageName})? The app says it shows $claimed, but the app, not $claimed, receives the credentials and can read them. Linking authorizes this app's signing identity for future suggestions, not $claimed."
+                else if (request?.embeddedWebView == true)
                     "Fill $account in the embedded browser of $destinationName (${request.packageName})? This app can read the credentials. Linking authorizes this app's signing identity for future suggestions, not the website shown inside it."
                 else if (request?.origin != null)
                     "Fill $account and link it to the exact website $destinationName. Nuvori can suggest it there next time."
                 else "Fill $account and link it to $destinationName (${request?.packageName.orEmpty()}). Nuvori will also bind the link to the app's current signing certificate.")
+                    Text("Fill once uses it this time only. Nothing in your vault changes.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } },
                 confirmButton = { Button(enabled = !busy, onClick = { linkAndFill(entry) }) { PickerButtonLabel("Fill and link", busy) } },
-                dismissButton = { TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text("Cancel") } },
+                dismissButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text("Cancel") }
+                        OutlinedButton(enabled = !busy, onClick = { fillOnce(entry) }) { Text("Fill once") }
+                    }
+                },
             )
         }
     }
@@ -806,14 +944,31 @@ class VaultCodesActivity : FragmentActivity() {
                     Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+                // The app's own claim about its WebView: shown to help find the login, below the app that receives it.
+                destination.claim?.let {
+                    Text("showing $it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
+        }
+    }
+
+    @Composable
+    private fun ColumnScope.ProfileContent() {
+        val request = profileFill ?: return
+        val choices = remember(entries) { profileChoices(entries, request.fields.values) }
+        ProfileFillContent(choices, entries.isNotEmpty(), busy, profileWarning(request), ::fillProfile) {
+            dismissPicker()
+            startActivity(Intent(this@VaultCodesActivity, MainActivity::class.java))
         }
     }
 
     @Composable
     private fun EmbeddedBrowserWarning(request: LoginFillRequest) {
         StatusBanner(StatusKind.WARNING, title = "Embedded browser",
-            message = "${fillDestination(request)} (${request.packageName}) can read what you fill. Choose a login only if you trust this app. Website links do not authorize this app.")
+            message = "${fillDestination(request)} (${request.packageName}) can read what you fill." +
+                (claimedHost(request)?.let { " It says it shows $it; the app, not that site, receives the login." } ?: "") +
+                " Choose a login only if you trust this app. Website links do not authorize this app.")
     }
 
     @Composable
@@ -834,10 +989,12 @@ class VaultCodesActivity : FragmentActivity() {
                 StatusBanner(StatusKind.INFO, "Open Nuvori to create your vault first.")
             } else {
                 Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation."
+                    else if (profileFill != null) "Unlock to choose your details. Nothing is filled until you select them."
                     else if (saveMode) "Unlock to review this login. Nothing is saved until you confirm."
                     else if (autofillMode) "Unlock to choose a login. Nothing is filled until you select an account."
                     else "Unlock to search and copy passwords or authenticator codes.", style = MaterialTheme.typography.bodyMedium)
                 loginFill?.takeIf { it.embeddedWebView }?.let { EmbeddedBrowserWarning(it) }
+                profileFill?.let(::profileWarning)?.let { StatusBanner(StatusKind.WARNING, it, title = "Embedded browser") }
                 if (fingerprint) FilledTonalButton(onClick = onFingerprint, enabled = !busy,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Icon(NuvoriIcons.Passkey, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
@@ -869,30 +1026,84 @@ class VaultCodesActivity : FragmentActivity() {
     private fun ColumnScope.FillContent() {
         val request = loginFill ?: return
         var search by remember { mutableStateOf("") }
-        var findLogin by remember { mutableStateOf(false) }
         val keyboard = LocalSoftwareKeyboardController.current
+        val searchFocus = remember { FocusRequester() }
         val otp = request.otp != null
         val generation = request.newPasswords.isNotEmpty()
         val searchable = !otp && !generation
         val destination = request.origin?.removePrefix("https://") ?: appLabel(request.packageName) ?: request.packageName
         val authenticatorIds = remember(entries) { entries.filter { it.type == EntryType.AUTHENTICATOR }.map { it.id }.toSet() }
         fun authorized(entry: VaultEntry) = loginAuthorizedForDestination(entry, request.packageName, request.identity, request.origin)
+        fun codeLinked(entry: VaultEntry) = entry.linkedAuthenticatorId.isNotEmpty() && entry.linkedAuthenticatorId in authenticatorIds
         val eligible = remember(entries) {
             entries.filter { it.type == EntryType.PASSWORD && it.secondaryValue.isNotEmpty() && (!otp || it.linkedAuthenticatorId in authenticatorIds) }
+        }
+        // The login just filled at this app or site, offered first on its code screen. fillLogin re-checks it at tap time.
+        val justSignedIn = remember(entries, codeAfterLoginRefused) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!otp || codeAfterLoginRefused) null
+            else RecentLoginFills.peek(now)?.takeIf {
+                codeAfterLoginMatches(it, request.packageName, request.identity, request.origin, request.embeddedWebView, now)
+            }?.let { remembered -> eligible.firstOrNull { it.id == remembered.entryId } }
         }
         val matches = eligible.filter { entry -> authorized(entry) &&
             (!otp || search.isBlank() || listOf(entry.title, entry.primaryValue).any { it.contains(search, true) }) }
         val noMatches = matches.isEmpty()
-        // Heuristic hints only: every one still goes through the "Fill and link" confirmation.
+        val suggested = matches.filter { it.id != justSignedIn?.id }
+        // Entry id to the saved origin on the same site. Verified browsers only; filled once, by an explicit tap here.
+        val sameSite = remember(entries) {
+            if (!searchable) emptyMap() else eligible.mapNotNull { entry ->
+                sameSiteSavedOrigin(entry, request.packageName, request.identity, request.origin, request.embeddedWebView)?.let { entry.id to it }
+            }.toMap()
+        }
+        fun tier(entry: VaultEntry) = when {
+            authorized(entry) -> LoginMatchTier.EXACT
+            entry.id in sameSite -> LoginMatchTier.SAME_SITE
+            else -> LoginMatchTier.OTHER
+        }
+        val sameSiteLogins = remember(entries) { rankLoginSearch(eligible.filter { it.id in sameSite }, "") { LoginMatchTier.SAME_SITE } }
+        // Heuristic hints only: every one still goes through the confirmation dialog.
         val possible = remember(entries, noMatches) {
-            if (searchable && noMatches) possibleLoginMatches(eligible, request.packageName, appLabel(request.packageName), request.origin) { authorized(it) }
+            // An embedded WebView's claimed site ranks logins saved for that site first. Ordering only: still confirmed.
+            if (searchable && noMatches) possibleLoginMatches(eligible, request.packageName, appLabel(request.packageName), request.origin,
+                embeddedSite = request.embeddedSite.takeIf { claimedHost(request) != null }) {
+                authorized(it) || it.id in sameSite
+            } else emptyList()
+        }
+        val searching = searchable && search.isNotBlank()
+        val results = if (searching) rankLoginSearch(eligible, search, ::tier) else emptyList()
+        // Nothing is linked yet: list the rest too, so any login is one scroll away before typing.
+        val others = remember(entries, noMatches, possible) {
+            if (searchable && noMatches) rankLoginSearch(eligible.filter { entry -> entry.id !in sameSite && possible.none { it.id == entry.id } }, "", ::tier)
             else emptyList()
         }
-        val showSearch = searchable && (noMatches || findLogin)
-        val searched = if (!showSearch) emptyList() else eligible.filter { entry ->
-            (search.isNotBlank() || (possible.none { it.id == entry.id } && matches.none { it.id == entry.id })) && (search.isBlank() ||
-                listOf(entry.title, entry.primaryValue, entry.tertiaryValue, entry.autofillOrigins).any { it.contains(search, ignoreCase = true) })
+        // Open the keyboard only when there is nothing better than searching. Exact or same-site logins stay one tap away.
+        LaunchedEffect(Unit) {
+            if (searchable && noMatches && sameSite.isEmpty() && eligible.isNotEmpty()) {
+                runCatching { searchFocus.requestFocus() }
+                keyboard?.show()
+            }
         }
+        @Composable
+        fun LoginRow(entry: VaultEntry, matched: LoginMatchTier, action: String = "Fill") = when (matched) {
+            LoginMatchTier.EXACT -> AutofillAccountRow(entry, action, codeLinked(entry)) { fillLogin(entry) }
+            LoginMatchTier.SAME_SITE -> AutofillAccountRow(entry, "Fill", codeLinked(entry), moreAction = "Fill and link…",
+                onMore = { pendingLoginLink = entry }) { fillLogin(entry, grant = PickerFillGrant.SAME_SITE_ONCE) }
+            LoginMatchTier.OTHER -> AutofillAccountRow(entry, "Fill and link", codeLinked(entry)) { pendingLoginLink = entry }
+        }
+        if (searchable) OutlinedTextField(
+            search,
+            { search = it },
+            label = { Text("Search saved logins") },
+            leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null) },
+            trailingIcon = if (search.isEmpty()) null else {
+                { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = "Clear search") } }
+            },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+            modifier = Modifier.fillMaxWidth().focusRequester(searchFocus),
+        )
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (request.embeddedWebView) item(key = "embedded-browser") { EmbeddedBrowserWarning(request) }
             if (otp) item(key = "code-search") {
@@ -903,63 +1114,66 @@ class VaultCodesActivity : FragmentActivity() {
             if (generation && request.password == null) item(key = "generate-new") {
                 Button(onClick = { prepareGeneration(null) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Generate for a new account") }
             }
-            if (noMatches) {
-                item(key = "no-matches") {
-                    PickerHint(if (otp) {
-                        if (search.isBlank()) "No saved login for $destination has a linked authenticator code. Link a code to its login in Nuvori first."
-                        else "No linked codes match this search."
-                    } else if (eligible.isEmpty()) "You have no saved logins yet. Open Nuvori to add one."
-                    else if (searchable) "No saved login is linked to $destination yet. Pick one below or search your logins. Nuvori asks before it links anything."
-                    else "No saved login is linked to $destination yet.")
-                }
+            if (searching) {
+                // One ranked list across every eligible login: exact, same site, then name matches.
+                if (results.isEmpty()) item(key = "no-search-results") { PickerHint("No saved logins match this search.") }
+                items(results, key = { "search-${it.id}" }) { entry -> LoginRow(entry, tier(entry)) }
             } else {
-                item(key = "suggested-header") { PickerSectionHeader("Suggested for $destination") }
-                items(matches, key = { "matched-${it.id}" }) { entry ->
-                    val codeLinked = entry.linkedAuthenticatorId.isNotEmpty() && entry.linkedAuthenticatorId in authenticatorIds
-                    if (generation) GenerationCard(entry, codeLinked)
-                    else AutofillAccountRow(entry, if (otp) "Fill code" else "Fill login", codeLinked) { fillLogin(entry) }
-                }
-            }
-            if (searchable && !noMatches) item(key = "toggle-saved") {
-                OutlinedButton(
-                    onClick = { findLogin = !findLogin; search = "" },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                ) { Text(if (findLogin) "Hide saved logins" else "Use another saved login") }
-            }
-            if (possible.isNotEmpty()) {
-                item(key = "possible-header") {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        PickerSectionHeader("Possible matches")
-                        PickerHint("These look related to $destination. You confirm before one is filled and linked.")
+                if (justSignedIn != null) {
+                    item(key = "just-signed-in-header") {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            PickerSectionHeader("Just signed in")
+                            PickerHint("You filled this login here a moment ago. Fill code enters its linked authenticator code.")
+                        }
+                    }
+                    item(key = "just-signed-in-${justSignedIn.id}") {
+                        AutofillAccountRow(justSignedIn, "Fill code", codeLinked = true) {
+                            fillLogin(justSignedIn, grant = PickerFillGrant.CODE_AFTER_LOGIN)
+                        }
                     }
                 }
-                items(possible, key = { "possible-${it.id}" }) { entry ->
-                    AutofillAccountRow(entry, "Fill and link", entry.linkedAuthenticatorId in authenticatorIds && entry.linkedAuthenticatorId.isNotEmpty()) {
-                        pendingLoginLink = entry
+                if (noMatches) {
+                    // Under "Just signed in" a missing link is not a problem worth a message.
+                    if (justSignedIn == null) item(key = "no-matches") {
+                        PickerHint(if (otp) {
+                            if (search.isBlank()) "No saved login for $destination has a linked authenticator code. Link a code to its login in Nuvori first."
+                            else "No linked codes match this search."
+                        } else if (eligible.isEmpty()) "You have no saved logins yet. Open Nuvori to add one."
+                        else if (searchable) "No saved login is linked to $destination yet. Pick one below or search your logins. Nuvori asks before it links anything."
+                        else "No saved login is linked to $destination yet.")
+                    }
+                } else if (suggested.isNotEmpty()) {
+                    item(key = "suggested-header") { PickerSectionHeader(if (justSignedIn != null) "Other logins for $destination" else "Suggested for $destination") }
+                    items(suggested, key = { "matched-${it.id}" }) { entry ->
+                        if (generation) GenerationCard(entry, codeLinked(entry))
+                        else LoginRow(entry, LoginMatchTier.EXACT, if (otp) "Fill code" else "Fill login")
                     }
                 }
-            }
-            if (showSearch) {
-                item(key = "login-search") {
-                    OutlinedTextField(
-                        search,
-                        { search = it },
-                        label = { Text(if (noMatches) "Search all saved logins" else "Search saved logins") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                if (searched.isEmpty()) item(key = "no-search-results") {
-                    PickerHint(if (search.isBlank()) "No other saved logins." else "No saved logins match this search.")
-                }
-                items(searched, key = { "search-${it.id}" }) { entry ->
-                    val linked = authorized(entry)
-                    val codeLinked = entry.linkedAuthenticatorId.isNotEmpty() && entry.linkedAuthenticatorId in authenticatorIds
-                    AutofillAccountRow(entry, if (linked) "Fill" else "Fill and link", codeLinked) {
-                        if (linked) fillLogin(entry) else pendingLoginLink = entry
+                if (sameSiteLogins.isNotEmpty()) {
+                    item(key = "same-site-header") {
+                        val savedHosts = sameSiteLogins.mapNotNull { sameSite[it.id]?.removePrefix("https://") }.distinct()
+                        val site = request.origin?.let(::registrableDomain)
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            PickerSectionHeader("Same site, different page")
+                            PickerHint(if (savedHosts.size == 1) "Saved for ${savedHosts.single()}. Fill uses it here once, without linking."
+                                else "Saved for other pages of ${site ?: destination}. Fill uses one here once, without linking.")
+                        }
                     }
+                    items(sameSiteLogins, key = { "same-site-${it.id}" }) { entry -> LoginRow(entry, LoginMatchTier.SAME_SITE) }
+                }
+                if (possible.isNotEmpty()) {
+                    item(key = "possible-header") {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            PickerSectionHeader("Possible matches")
+                            PickerHint(claimedHost(request)?.let { "These look related to $destination or to $it, the site it says it shows. You confirm before one is filled or linked." }
+                                ?: "These look related to $destination. You confirm before one is filled or linked.")
+                        }
+                    }
+                    items(possible, key = { "possible-${it.id}" }) { entry -> LoginRow(entry, LoginMatchTier.OTHER) }
+                }
+                if (others.isNotEmpty()) {
+                    item(key = "others-header") { PickerSectionHeader("All saved logins") }
+                    items(others, key = { "other-${it.id}" }) { entry -> LoginRow(entry, LoginMatchTier.OTHER) }
                 }
             }
             item(key = "hint") {
@@ -1003,7 +1217,8 @@ class VaultCodesActivity : FragmentActivity() {
     @Composable
     private fun ColumnScope.SaveContent() {
         val request = loginSave ?: return
-        val defaultTitle = remember(request) { request.origin?.removePrefix("https://") ?: appLabel(request.packageName) ?: request.packageName }
+        // An embedded WebView's claimed site only names the login, so it is easy to find. It is never saved as its website.
+        val defaultTitle = remember(request) { request.origin?.removePrefix("https://") ?: saveSite ?: appLabel(request.packageName) ?: request.packageName }
         var name by remember(request) { mutableStateOf(defaultTitle) }
         var typedUsername by remember(request) { mutableStateOf(if (request.usernameConfirmed) "" else request.username) }
         var showPassword by remember(request) { mutableStateOf(false) }
@@ -1149,13 +1364,13 @@ private fun PickerLabeledValue(label: String, value: String) {
 }
 
 @Composable
-private fun PickerSectionHeader(text: String) {
+internal fun PickerSectionHeader(text: String) {
     Text(text, Modifier.padding(top = 4.dp).semantics { heading() }, style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable
-private fun PickerHint(text: String) {
+internal fun PickerHint(text: String) {
     Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 

@@ -26,8 +26,9 @@ internal data class AutofillProfile(
     /** The vault stores one name. Given is everything before the last word (or the whole name if it is one word). */
     private fun nameWords(): List<String> = name.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
 
+    /** The stored name keeps its own format (it syncs); only what is filled is trimmed and single-spaced. */
     fun value(field: ProfileField): String = when (field) {
-        ProfileField.NAME -> name
+        ProfileField.NAME -> nameWords().joinToString(" ")
         ProfileField.GIVEN_NAME -> nameWords().let { if (it.size < 2) it.firstOrNull().orEmpty() else it.dropLast(1).joinToString(" ") }
         ProfileField.FAMILY_NAME -> nameWords().let { if (it.size < 2) "" else it.last() }
         ProfileField.EMAIL -> email
@@ -78,6 +79,10 @@ internal fun profileFillSummary(kinds: Collection<ProfileField>, shown: Int = 3)
     if (labels.isEmpty()) return "Autofill details"
     return labels.take(shown).joinToString(" · ") + if (labels.size > shown) " +${labels.size - shown}" else ""
 }
+
+/** What a picked profile fills: each requested field that the profile has a non-blank value for. Nothing else. */
+internal fun <K> profileFillValues(profile: AutofillProfile, fields: Map<K, ProfileField>): Map<K, String> =
+    fields.mapValues { (_, field) -> profile.value(field) }.filterValues { it.isNotBlank() }
 
 internal fun VaultEntry.autofillProfile(): AutofillProfile? =
     if (type == EntryType.AUTOFILL) AutofillProfile.decode(primaryValue) else null

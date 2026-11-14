@@ -147,7 +147,7 @@ internal fun SettingsHub(summary: SettingsHubSummary, open: (String) -> Unit) {
             SettingsHubRow("Import authenticator codes", "Move codes from another app", NuvoriIcons.Code) { open("Import authenticator codes") }
         }
         SettingsHubGroup("App") {
-            SettingsHubRow("Appearance", "Light or black background", if (summary.lightMode) NuvoriIcons.Sun else NuvoriIcons.Moon,
+            SettingsHubRow("Appearance", "Light or dark, accent and background colors", if (summary.lightMode) NuvoriIcons.Sun else NuvoriIcons.Moon,
                 listOf(StatusKind.NEUTRAL to if (summary.lightMode) "Light" else "Dark")) { open("Appearance") }
             SettingsHubDivider()
             SettingsHubRow("Cards and NFC", "Optional contactless card scanning", NuvoriIcons.Nfc,

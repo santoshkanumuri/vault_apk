@@ -85,7 +85,9 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.Wearable
+import com.privatevault.app.appearance.AppearancePalette
 import com.privatevault.app.watch.WatchSync
+import com.privatevault.app.watch.parseWatchAppearance
 import com.privatevault.app.security.Totp
 import com.privatevault.app.watch.WatchAccount
 import com.privatevault.app.watch.WatchDisplay
@@ -104,6 +106,7 @@ class WatchActivity : ComponentActivity() {
     private var secure by mutableStateOf(false)
     private var syncedAt by mutableLongStateOf(0L)
     private var recentIds by mutableStateOf<List<String>>(emptyList())
+    private var accentId by mutableStateOf<String?>(null)
     private val updateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) { reload() }
     }
@@ -113,8 +116,11 @@ class WatchActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         store = WatchStore.get(this)
         setContent {
+            val tones = AppearancePalette.accent(accentId).dark
             MaterialTheme(colorScheme = darkColorScheme(
-                primary = Color(0xFF78D47B), background = Color(0xFF050705),
+                primary = Color(tones.primary), onPrimary = Color(tones.onPrimary),
+                primaryContainer = Color(tones.primaryContainer), onPrimaryContainer = Color(tones.onPrimaryContainer),
+                background = Color(0xFF050705),
                 surface = Color(0xFF192019), onBackground = Color(0xFFF0F4ED),
                 onSurface = Color(0xFFF0F4ED),
             )) {
@@ -139,9 +145,12 @@ class WatchActivity : ComponentActivity() {
             withContext(Dispatchers.IO) {
                 runCatching {
                     val items = Tasks.await(Wearable.getDataClient(this@WatchActivity).dataItems, 10, TimeUnit.SECONDS)
-                    try { items.filter { it.uri.path == WatchSync.SNAPSHOT_PATH }.forEach {
-                        it.data?.let(store::apply)
-                    } } finally { items.release() }
+                    try {
+                        items.filter { it.uri.path == WatchSync.SNAPSHOT_PATH }.forEach { it.data?.let(store::apply) }
+                        // A queued appearance item. No item means the phone removed it, so the default applies.
+                        store.setAccent(items.firstOrNull { it.uri.path == WatchSync.APPEARANCE_PATH }
+                            ?.data?.let(::parseWatchAppearance))
+                    } finally { items.release() }
                 }
             }
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) reload()
@@ -155,6 +164,7 @@ class WatchActivity : ComponentActivity() {
         snapshot = if (secure) store.read() else null
         syncedAt = if (secure) store.syncedAt() else 0L
         recentIds = if (secure) store.recentIds() else emptyList()
+        accentId = store.accent()
     }
 
     private fun markUsed(account: WatchAccount) {

@@ -66,11 +66,12 @@ internal fun passwordSuggestions(context: Context, request: LoginFillRequest, en
         // Shown before unlock, so it names the action rather than any saved account.
         val menu = menu(title, "Search all saved logins", description)
         val inline = inline(visible.size, title, "Nuvori", description)
-        val dataset = Dataset.Builder(menu).setId("nuvori-picker").setAuthentication(picker.intentSender)
+        val dataset = Dataset.Builder(menu).setId(PICKER_DATASET_ID).setAuthentication(picker.intentSender)
         listOfNotNull(request.username, request.password).forEach { dataset.presentField(it, null, menu, inline) }
         response.addDataset(dataset.build())
         request.saveInfo()?.let(response::setSaveInfo)
-        request.saveClientState()?.let(response::setClientState)
+        // Also stamps where and when this strip was built, so a code screen next can offer the picked login's code.
+        response.setClientState(request.suggestionClientState(android.os.SystemClock.elapsedRealtime()))
         return response.build()
     } catch (failure: Exception) {
         PendingLoginFills.remove(token)

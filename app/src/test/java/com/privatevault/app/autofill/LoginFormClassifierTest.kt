@@ -204,6 +204,29 @@ class LoginFormClassifierTest {
             htmlInput(1, type = "password", autocomplete = "current-password")), domain = "fill.dev")))!!
         assertEquals(0, form.username); assertEquals(1, form.password)
         assertTrue(form.embeddedWebView); assertNull(form.origin)
+        // The one https site the WebView reported: a picker hint, never an origin.
+        assertEquals("https://fill.dev", form.embeddedSite)
+    }
+
+    @Test fun embeddedSiteHintOnlyForOneHttpsSite() {
+        val fields = htmlForm(htmlInput(0, autocomplete = "username"), htmlInput(1, type = "password"))
+        assertEquals("https://accounts.example.com",
+            login(appScreen(webPage(fields, domain = "accounts.example.com")))!!.embeddedSite)
+        // Username-only and code steps carry it too.
+        assertEquals("https://fill.dev", login(appScreen(webPage(htmlForm(htmlInput(0, name = "username")), domain = "fill.dev")))!!.embeddedSite)
+        assertEquals("https://fill.dev", login(appScreen(webPage(htmlForm(htmlInput(0, name = "otp")), domain = "fill.dev")))!!.embeddedSite)
+        // A site without a scheme is not an https site: still fills, with no hint.
+        val schemeless = login(appScreen(FormNode(null, htmlTag = "html", webDomain = "fill.dev", webScheme = null,
+            className = "android.webkit.WebView", children = listOf(fields))))!!
+        assertNull(schemeless.embeddedSite); assertNull(schemeless.origin)
+        // A schemeless second domain beside the https one: no single site, no hint.
+        val mixed = login(appScreen(webPage(fields, domain = "fill.dev"), FormNode(null, webDomain = "other.dev", webScheme = null)))!!
+        assertNull(mixed.embeddedSite)
+        // A native screen has no hint and no origin.
+        val native = login(appScreen(appInput(0, idEntry = "username"), appInput(1, PASSWORD_INPUT)))!!
+        assertNull(native.embeddedSite); assertFalse(native.embeddedWebView)
+        // A trusted browser gets an origin, never a hint.
+        assertNull(login(webPage(fields), browser = true)!!.embeddedSite)
     }
 
     @Test fun embeddedWebViewWithTwoOriginsIsRefused() {
@@ -339,19 +362,90 @@ class LoginFormClassifierTest {
         assertEquals(listOf(0, 1), login(form, browser = true)!!.newPasswords)
     }
 
-    @Test fun browserRejectsFramesAndUntrustedOrigins() {
+    @Test fun browserRejectsUntrustedOriginsAndFramesWithoutAnOrigin() {
         val fields = htmlForm(htmlInput(0, name = "username"), htmlInput(1, type = "password"))
         assertNotNull(login(webPage(fields), browser = true))
-        assertNull(login(webPage(fields, FormNode(null, htmlTag = "iframe")), browser = true))
-        assertNull(login(webPage(fields, FormNode(null, htmlTag = "FRAME")), browser = true))
+        // A frame that reports no origin of its own never inherits the page's: its fields have none.
         assertNull(login(webPage(FormNode(null, htmlTag = "iframe", children = listOf(fields))), browser = true))
+        assertNull(login(webPage(FormNode(null, htmlTag = "FRAME", children = listOf(fields))), browser = true))
         assertNull(login(webPage(fields, scheme = "http"), browser = true))
         assertNull(login(webPage(fields, domain = "localhost"), browser = true))
         assertNull(login(webPage(fields, domain = "user@evil.example"), browser = true))
-        assertNull(login(webPage(fields, webSchemeless()), browser = true))
-        assertNull(login(webPage(fields, webPage(domain = "other.example.com")), browser = true))
-        // An https subdomain is a different origin, never a suffix match.
-        assertNull(login(webPage(fields, webPage(domain = "login.example.com")), browser = true))
+        assertNull(login(FormNode(null, webDomain = "example.com", webScheme = null, children = listOf(fields)), browser = true))
+    }
+
+    // ---- frames in trusted browsers ------------------------------------------------------------------------------
+
+    private fun frame(vararg children: FormNode, domain: String? = null, scheme: String? = "https", tag: String = "iframe") =
+        FormNode(null, htmlTag = tag, webDomain = domain, webScheme = domain?.let { scheme }, children = children.toList())
+
+    @Test fun frameAndNodesOfOtherOriginsWithoutFieldsAreIgnored() {
+        val fields = htmlForm(htmlInput(0, name = "username"), htmlInput(1, type = "password"))
+        listOf(
+            webPage(fields, frame(domain = "ads.example.net")),                         // ad frame from another origin
+            webPage(fields, frame()),                                                   // empty frame, no origin
+            webPage(fields, frame(tag = "FRAME")),
+            webPage(fields, frame(FormNode(null, htmlTag = "div"), domain = "tracker.example", scheme = "http")),
+            webPage(fields, webSchemeless()),
+            webPage(fields, webPage(domain = "other.example.com")),
+            webPage(fields, webPage(domain = "login.example.com")),
+        ).forEach { page ->
+            val form = login(page, browser = true)!!
+            assertEquals(0, form.username); assertEquals(1, form.password)
+            // An https subdomain is a different origin, never a suffix match: the page origin stays exact.
+            assertEquals("https://example.com", form.origin); assertNull(form.embeddedSite)
+        }
+    }
+
+    @Test fun loginInsideACrossOriginFrameUsesTheFrameOrigin() {
+        val page = webPage(htmlForm(htmlInput(9, type = "search", name = "q")),
+            frame(htmlForm(htmlInput(0, autocomplete = "username"), htmlInput(1, type = "password")), domain = "login.idp.example"))
+        val form = login(page, browser = true)!!
+        assertEquals(0, form.username); assertEquals(1, form.password)
+        assertEquals("https://login.idp.example", form.origin)
+        // A frame's own nested frames keep their own origin too.
+        val nested = webPage(frame(frame(htmlForm(htmlInput(0, type = "password")), domain = "b.example"), domain = "a.example"))
+        assertEquals("https://b.example", login(nested, browser = true)!!.origin)
+    }
+
+    @Test fun roleFieldsOfOneGroupInTwoOriginsAreRefused() {
+        // A frame inside the page's form: the account box is the page's, the password box is the frame's.
+        val page = webPage(htmlForm(htmlInput(0, autocomplete = "username"),
+            frame(htmlInput(1, type = "password"), domain = "other.example")))
+        assertNull(login(page, browser = true))
+        // Loose fields of one window share a group, whichever document holds them.
+        val loose = webPage(htmlInput(0, name = "username"), frame(htmlInput(1, type = "password"), domain = "other.example"))
+        assertNull(login(loose, browser = true))
+    }
+
+    @Test fun credentialGroupsInTwoOriginsNeedFocus() {
+        fun page(focus: Int?) = webPage(htmlForm(htmlInput(0, name = "username", focused = focus == 0),
+            htmlInput(1, type = "password", focused = focus == 1)),
+            frame(htmlForm(htmlInput(2, name = "email", focused = focus == 2), htmlInput(3, type = "password", focused = focus == 3)),
+                domain = "widget.example"))
+        assertNull(login(page(null), browser = true))
+        login(page(1), browser = true)!!.let { assertEquals(1, it.password); assertEquals("https://example.com", it.origin) }
+        login(page(2), browser = true)!!.let {
+            assertEquals(2, it.username); assertEquals(3, it.password); assertEquals("https://widget.example", it.origin)
+        }
+    }
+
+    @Test fun nonHttpsFrameWithCredentialFieldsIsRefused() {
+        val fields = htmlForm(htmlInput(0, name = "username"), htmlInput(1, type = "password"))
+        assertNull(login(webPage(frame(fields, domain = "login.example", scheme = "http")), browser = true))
+        assertNull(login(webPage(frame(fields, domain = "login.example", scheme = null)), browser = true))
+        // Credential fields elsewhere on the page do not rescue a credential field in an http frame.
+        assertNull(login(webPage(fields, frame(htmlForm(htmlInput(2, type = "password")), domain = "x.example", scheme = "http")),
+            browser = true))
+        // Nothing under an http document fills, even an https frame it embeds.
+        assertNull(login(webPage(frame(fields, domain = "login.example"), scheme = "http"), browser = true))
+    }
+
+    @Test fun framesInsideAnAppWebViewStayUnsafe() {
+        val fields = htmlForm(htmlInput(0, autocomplete = "username"), htmlInput(1, type = "password"))
+        assertNull(login(appScreen(webPage(fields, frame(domain = "ads.example.net")))))
+        assertNull(login(appScreen(webPage(frame(fields, domain = "example.com")))))
+        assertNull(login(appScreen(webPage(fields, frame()))))
     }
 
     private fun webSchemeless() = FormNode(null, webDomain = "example.com", webScheme = null)
@@ -493,12 +587,13 @@ class LoginFormClassifierTest {
             browser = true)!!.username)
     }
 
-    @Test fun twoOriginsAreRefusedEvenWhenTheFieldsAreSplitAcrossThem() {
+    @Test fun fieldsSplitAcrossTwoOriginsAreNeverCombined() {
         val page = FormNode(null, children = listOf(
             webPage(htmlInput(0, name = "uid_field"), domain = "other.example.com"),
             webPage(htmlInput(1, type = "password"))))
-        // Two origins in a browser: refused outright.
-        assertNull(login(page, browser = true))
+        // The password fills for its own origin; the other origin's box is never taken as its account.
+        val form = login(page, browser = true)!!
+        assertNull(form.username); assertEquals(1, form.password); assertEquals("https://example.com", form.origin)
     }
 
     @Test fun fallbackIsSkippedWhenThereIsMoreThanOnePassword() {

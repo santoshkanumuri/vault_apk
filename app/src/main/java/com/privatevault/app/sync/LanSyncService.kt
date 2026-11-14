@@ -229,7 +229,9 @@ class LanSyncService : Service() {
                     var needsRetry = false
                     peerBusy = false
                     val passStartedAt = android.os.SystemClock.elapsedRealtime()
-                    val current = store(this@LanSyncService).snapshot() ?: mirror
+                    // An unlocked app writes a pending appearance now, if the group allows it.
+                    AppearanceSync.requestFlush()
+                    val current =store(this@LanSyncService).snapshot() ?: mirror
                     require(current.vaultId == mirror.vaultId)
                     val activePeers = current.members.filter {
                         it.status == MemberStatus.ACTIVE.name && it.deviceId != current.localDeviceId

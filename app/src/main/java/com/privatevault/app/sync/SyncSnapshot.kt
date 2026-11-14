@@ -180,6 +180,9 @@ class SyncSnapshot(private val context: Context, private val database: VaultData
                 state.conflicts.forEach { sync.insertConflict(it) }
             }
             restore.committed = true
+            // Appearance changes arrive in the history above without being applied; take their value.
+            // Best effort: the vault is already joined, and the next appearance change corrects it.
+            runCatching { AppearanceSync.adoptFromSnapshot(context, prepared.state) }
         } finally {
             restore.committing = false
             if (!restore.committed) restore.close()

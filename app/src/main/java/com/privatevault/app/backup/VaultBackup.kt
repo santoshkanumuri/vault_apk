@@ -1,13 +1,6 @@
 package com.privatevault.app.backup
 
 import android.content.Context
-import com.google.crypto.tink.BinaryKeysetReader
-import com.google.crypto.tink.BinaryKeysetWriter
-import com.google.crypto.tink.CleartextKeysetHandle
-import com.google.crypto.tink.KeyTemplates
-import com.google.crypto.tink.KeysetHandle
-import com.google.crypto.tink.StreamingAead
-import com.google.crypto.tink.config.TinkConfig
 import com.privatevault.app.data.EntryGroupCrossRef
 import com.privatevault.app.data.EntryType
 import com.privatevault.app.data.CardKind
@@ -16,21 +9,15 @@ import com.privatevault.app.data.VaultEntry
 import com.privatevault.app.data.VaultGroup
 import com.privatevault.app.data.VaultPhoto
 import com.privatevault.app.security.EncryptedPhotoStore
-import com.privatevault.app.security.PasswordCrypto
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.InputStream
 import java.io.OutputStream
-import java.security.SecureRandom
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 import com.privatevault.app.security.Totp
 import java.util.UUID
 
@@ -39,44 +26,18 @@ class VaultBackupManager(
     private val dao: VaultDao,
     private val photoStore: EncryptedPhotoStore
 ) {
-    companion object {
-        private val MAGIC = "PVLT0001".toByteArray(Charsets.US_ASCII)
-        private val ASSOCIATED_DATA = "private-vault-backup-v1".toByteArray()
-        private const val MAX_WRAPPED_KEY = 128 * 1024
+    suspend fun export(output: OutputStream, password: CharArray, vaultKey: ByteArray) {
+        BackupCipher.create(password).use { key -> export(output, key, vaultKey) }
     }
 
-    init { TinkConfig.register() }
-
-    suspend fun export(output: OutputStream, password: CharArray, vaultKey: ByteArray) {
-        require(password.size >= PasswordCrypto.MIN_PASSWORD_LENGTH)
+    /**
+     * Writes a `.pvault` backup with an existing [key], so no password is needed. Google Drive
+     * backups use this; the file opens with the password that made [key].
+     */
+    internal suspend fun export(output: OutputStream, key: BackupCipher.Key, vaultKey: ByteArray) {
         val appearance = com.privatevault.app.appearance.AppearanceStore.read(context).appearance
         val snapshot = dao.backupSnapshot().copy(appearanceAccent = appearance.accent, appearanceSurface = appearance.surface)
-        val keyset = KeysetHandle.generateNew(KeyTemplates.get("AES128_GCM_HKDF_1MB"))
-        val serialized = ByteArrayOutputStream().also {
-            CleartextKeysetHandle.write(keyset, BinaryKeysetWriter.withOutputStream(it))
-        }.toByteArray()
-        val salt = ByteArray(16).also(SecureRandom()::nextBytes)
-        val wrappingKey = PasswordCrypto.derive(password, salt)
-        val nonce = ByteArray(12).also(SecureRandom()::nextBytes)
-        val wrapped = try {
-            Cipher.getInstance("AES/GCM/NoPadding").run {
-                init(Cipher.ENCRYPT_MODE, SecretKeySpec(wrappingKey, "AES"), GCMParameterSpec(128, nonce))
-                updateAAD(MAGIC)
-                doFinal(serialized)
-            }
-        } finally {
-            wrappingKey.fill(0)
-            serialized.fill(0)
-        }
-
-        val data = DataOutputStream(output)
-        data.write(MAGIC)
-        data.write(salt)
-        data.write(nonce)
-        data.writeInt(wrapped.size)
-        data.write(wrapped)
-        val encrypted = keyset.getPrimitive(StreamingAead::class.java)
-            .newEncryptingStream(data, ASSOCIATED_DATA)
+        val encrypted = BackupCipher.encrypt(output, key)
         ZipOutputStream(encrypted).use { zip ->
             zip.putNextEntry(ZipEntry("vault.json"))
             val metadata = serialize(snapshot)
@@ -105,32 +66,12 @@ class VaultBackupManager(
     }
 
     suspend fun prepareRestore(input: InputStream, password: CharArray, vaultKey: ByteArray): PreparedRestore {
-        val data = DataInputStream(input)
-        val magic = ByteArray(MAGIC.size).also(data::readFully)
-        require(magic.contentEquals(MAGIC)) { "Unsupported backup format" }
-        val salt = ByteArray(16).also(data::readFully)
-        val nonce = ByteArray(12).also(data::readFully)
-        val wrappedSize = data.readInt()
-        require(wrappedSize in 1..MAX_WRAPPED_KEY) { "Invalid backup header" }
-        val wrapped = ByteArray(wrappedSize).also(data::readFully)
-        val wrappingKey = PasswordCrypto.derive(password, salt)
-        val serialized = try {
-            Cipher.getInstance("AES/GCM/NoPadding").run {
-                init(Cipher.DECRYPT_MODE, SecretKeySpec(wrappingKey, "AES"), GCMParameterSpec(128, nonce))
-                updateAAD(MAGIC)
-                doFinal(wrapped)
-            }
-        } finally { wrappingKey.fill(0) }
-        val keyset = try {
-            CleartextKeysetHandle.read(BinaryKeysetReader.withBytes(serialized))
-        } finally { serialized.fill(0) }
+        val decrypted = BackupCipher.decrypt(input, password)
 
         val stagedNames = mutableListOf<String>()
         var json: ByteArray? = null
         try {
             val photoFiles = mutableMapOf<String, String>()
-            val decrypted = keyset.getPrimitive(StreamingAead::class.java)
-                .newDecryptingStream(data, ASSOCIATED_DATA)
             ZipInputStream(decrypted).use { zip ->
                 while (true) {
                     val entry = zip.nextEntry ?: break

@@ -112,6 +112,8 @@ def main():
         print("wrote", windows / "src/appearance/nuvori-appearance-v1.json")
         write(windows / "src/appearance/palette.css", windows_css(p))
         write(windows / "extension/appearance-palette.js", extension_js(p))
+        if (windows / "landing").is_dir():
+            write(windows / "landing/palette.js", extension_js(p))
 
 
 if __name__ == "__main__":

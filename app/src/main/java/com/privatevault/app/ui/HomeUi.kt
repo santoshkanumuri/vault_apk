@@ -627,7 +627,7 @@ internal fun ScanImportSheet(onDismiss: () -> Unit, scanCode: () -> Unit, import
         Triple(NuvoriIcons.Scan, "Scan a setup QR", "Add a two-step code with the camera") to scanCode,
         Triple(NuvoriIcons.Code, "Import authenticator codes", "From Google Authenticator or OneAuth") to importCodes,
         Triple(NuvoriIcons.Import, "Import passwords", "Browser or password manager export") to importPasswords,
-        Triple(NuvoriIcons.History, "Restore a backup", "Encrypted .pvault file") to restoreBackup,
+        Triple(NuvoriIcons.History, "Restore a backup", "Google Drive or .pvault file") to restoreBackup,
     )
     NuvoriSheet("Scan or import", onDismiss) {
         rows.forEachIndexed { index, (row, action) ->

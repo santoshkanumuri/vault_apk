@@ -124,6 +124,11 @@ internal data class PasswordImportMappingRequest(
     val suggested: PasswordColumnMapping
 )
 
+/** Wait after unlock before the first Google Drive backup check, so unlock-time work finishes first. */
+private const val DRIVE_BACKUP_FIRST_CHECK_MS = 20_000L
+/** How often an unlocked, visible vault checks whether a Google Drive backup is due. */
+private const val DRIVE_BACKUP_CHECK_MS = 5 * 60_000L
+
 class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val keyManager = VaultKeyManager(application)
     private val biometricGate = BiometricGate(application)
@@ -134,6 +139,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private var incomingSyncJob: kotlinx.coroutines.Job? = null
     private var cloudSyncJob: kotlinx.coroutines.Job? = null
     private var appearanceSyncJob: kotlinx.coroutines.Job? = null
+    private var driveBackupJob: kotlinx.coroutines.Job? = null
+    /** Google Drive backup: on or off, schedule, last backup and the last problem. */
+    val driveBackupStatus = com.privatevault.app.backup.DriveBackupRunner.status
+    private val _driveBackups = MutableStateFlow<List<com.privatevault.app.backup.DriveBackupFile>?>(null)
+    /** Backups found in Google Drive for a restore; null until the user looks. */
+    internal val driveBackups = _driveBackups.asStateFlow()
     /** Google Drive sync: connection, last pass and the last problem, for the Devices screen. */
     val cloudSyncStatus = com.privatevault.app.sync.CloudSyncRunner.status
     val devicePairingState = devicePairing.state
@@ -826,6 +837,25 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 if (database === db && _status.value is VaultStatus.Unlocked) publishAppearance()
             }
         }
+        // Google Drive backup: checked shortly after unlock, then every few minutes while the vault
+        // is unlocked and on screen. The vault data can be read only while it is unlocked.
+        driveBackupJob?.cancel()
+        driveBackupJob = viewModelScope.launch {
+            com.privatevault.app.backup.DriveBackupRunner.load(getApplication())
+            delay(DRIVE_BACKUP_FIRST_CHECK_MS)
+            while (database === db && _status.value is VaultStatus.Unlocked) {
+                if (!backgrounded) requestDriveBackup(force = false)
+                delay(DRIVE_BACKUP_CHECK_MS)
+            }
+        }
+    }
+
+    /** Hands a copy of the vault key to the backup runner, which clears it. Does nothing while locked. */
+    private fun requestDriveBackup(force: Boolean) {
+        val db = database ?: return
+        val key = sessionKey?.copyOf() ?: return
+        com.privatevault.app.backup.DriveBackupRunner.request(getApplication(),
+            VaultBackupManager(getApplication(), db.dao(), photoStore), key, force)
     }
 
     fun dailyBiometricEncryptionCipher(): Cipher? = runCatching { biometricGate.dailyEncryptionCipher() }
@@ -846,6 +876,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun lock(reason: LockReason) {
         incomingSyncJob?.cancel()
         cloudSyncJob?.cancel()
+        driveBackupJob?.cancel()
+        _driveBackups.value = null
         appearanceSyncJob?.cancel()
         com.privatevault.app.sync.RemoteEntryChanges.clear()
         // A remembered "just signed in" login must not outlive a lock.
@@ -1248,7 +1280,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             keyManager.changePassword(current, replacement)
             biometricGate.clearDailySession()
             _requestDailyBiometric.value = true
-            notify("Master password changed. Existing backups still use their original password.", StatusKind.SUCCESS)
+            val driveBackup = com.privatevault.app.backup.DriveBackupRunner.status.value.enabled
+            if (driveBackup) {
+                // Later Drive backups open with the new password; one runs now to replace an old one soon.
+                val key = requireNotNull(sessionKey).copyOf()
+                try { com.privatevault.app.backup.DriveBackupRunner.changePassword(getApplication(), replacement, key) }
+                finally { key.fill(0) }
+                requestDriveBackup(force = true)
+            }
+            notify(if (driveBackup) "Master password changed. New Google Drive backups use it. Backup files you saved yourself keep their original password."
+                else "Master password changed. Existing backups still use their original password.", StatusKind.SUCCESS)
         } finally {
             current.fill('\u0000'); replacement.fill('\u0000')
         }
@@ -1299,6 +1340,113 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("Backup restored as a separate vault. Use this vault's master password to unlock, then set up fingerprint and reconnect paired devices.", StatusKind.SUCCESS)
         lock(LockReason.BACKGROUND)
     }
+
+    /**
+     * Google sign-in for Drive backup and for a restore from Drive. Call it first with no [answer];
+     * when it returns a screen, the UI shows it and calls again with Google's [answer]. Returns null
+     * when finished. [onSignedIn] runs once the account is ready.
+     */
+    internal suspend fun signInForDriveBackup(answer: android.content.Intent? = null, fromGoogle: Boolean = false,
+        onSignedIn: suspend () -> Unit): android.app.PendingIntent? {
+        touch()
+        val app = getApplication<Application>()
+        val signIn = com.privatevault.app.sync.GoogleDriveSignIn
+        try {
+            val outcome = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                if (fromGoogle) signIn.fromIntent(app, answer) else signIn.authorize(app)
+            }
+            when (outcome) {
+                is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.NeedsUser -> {
+                    if (!fromGoogle) return outcome.intent
+                    notify("Google didn't allow access to Drive. Nothing changed.", StatusKind.WARNING)
+                }
+                com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Canceled ->
+                    notify("Google sign-in was canceled. Nothing changed.", StatusKind.INFO)
+                is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Failed -> notify(outcome.message, StatusKind.ERROR)
+                is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Token -> {
+                    com.privatevault.app.backup.DriveBackupRunner.connect(app, outcome.accessToken)
+                    onSignedIn()
+                }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (failure: com.privatevault.app.sync.CloudException) {
+            notify(com.privatevault.app.backup.DriveBackupRunner.message(failure.error), StatusKind.ERROR)
+        } catch (_: Exception) { notify("Couldn't connect Google Drive. Try again.", StatusKind.ERROR) }
+        return null
+    }
+
+    /** Turns on Google Drive backup after sign-in. [password] must be the current master password. */
+    fun turnOnDriveBackup(password: CharArray, interval: Long) = securedLaunch("Could not turn on Google Drive backup. Check your master password.") {
+        try {
+            // The backups open with this password, so it must be the master password the user knows.
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.unlock(password).fill(0) }
+            val key = requireNotNull(sessionKey).copyOf()
+            try { com.privatevault.app.backup.DriveBackupRunner.turnOn(getApplication(), password, key, interval) }
+            finally { key.fill(0) }
+            requestDriveBackup(force = true)
+            notify("Google Drive backup is on. The first backup is running.", StatusKind.SUCCESS)
+        } finally {
+            password.fill('\u0000')
+        }
+    }
+
+    fun turnOffDriveBackup() = securedLaunch("Could not turn off Google Drive backup.") {
+        com.privatevault.app.backup.DriveBackupRunner.turnOff(getApplication())
+        notify("Google Drive backup is off. Backups already in your Drive stay there.", StatusKind.SUCCESS)
+    }
+
+    fun setDriveBackupInterval(interval: Long) {
+        touch()
+        com.privatevault.app.backup.DriveBackupRunner.setInterval(getApplication(), interval)
+        // A shorter interval can make a backup due at once.
+        requestDriveBackup(force = false)
+    }
+
+    fun backUpToDriveNow() {
+        touch()
+        if (sessionKey == null) return
+        requestDriveBackup(force = true)
+        notify("Backing up to Google Drive…", StatusKind.PROGRESS)
+    }
+
+    /** Lists the backups in Google Drive into [driveBackups]. Call it from [signInForDriveBackup]. */
+    internal suspend fun findDriveBackups() {
+        try {
+            _driveBackups.value = com.privatevault.app.backup.DriveBackupRunner.list(getApplication())
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (failure: com.privatevault.app.sync.CloudException) {
+            notify(com.privatevault.app.backup.DriveBackupRunner.message(failure.error), StatusKind.ERROR)
+        } catch (_: Exception) { notify("Couldn't read your Google Drive. Try again.", StatusKind.ERROR) }
+    }
+
+    fun closeDriveBackups() { _driveBackups.value = null }
+
+    /**
+     * Downloads [backup] and validates it with [password], like a file restore. The usual review
+     * then asks before anything is replaced; the restored vault gets a new vault ID.
+     */
+    internal fun restoreFromDrive(backup: com.privatevault.app.backup.DriveBackupFile, password: CharArray) =
+        securedLaunch("Could not open that backup. Check its password and your connection.") {
+            val app = getApplication<Application>()
+            val temporary = java.io.File(app.cacheDir, "drive-restore-${UUID.randomUUID()}.tmp")
+            try {
+                cancelRestore()
+                val activeKey = requireNotNull(sessionKey)
+                notify("Downloading the backup…", StatusKind.PROGRESS)
+                com.privatevault.app.backup.DriveBackupRunner.download(app, backup, temporary)
+                val prepared = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    java.io.FileInputStream(temporary).use { VaultBackupManager(app, dao(), photoStore).prepareRestore(it, password, activeKey) }
+                }
+                if (sessionKey !== activeKey || _status.value !is VaultStatus.Unlocked) { prepared.close(); return@securedLaunch }
+                _driveBackups.value = null
+                preparedRestore = prepared
+                val data = prepared.data
+                _restoreSummary.value = "Validated ${data.entries.size} entries, ${data.groups.size} groups, ${data.photos.size} photos, ${data.passkeys.size} passkeys, and ${data.entries.count { it.type == com.privatevault.app.data.EntryType.AUTHENTICATOR }} authenticators. Replace this vault? The restored vault gets a new identity and does not join any sync group."
+            } finally {
+                temporary.delete()
+                password.fill('\u0000')
+            }
+        }
 
     fun clearNotice(shown: UserNotice) { _notice.compareAndSet(shown, null) }
 
@@ -1783,6 +1931,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         incomingSyncJob?.cancel()
         cloudSyncJob?.cancel()
+        driveBackupJob?.cancel()
         devicePairing.close()
         cancelPasswordImport()
         cancelPasswordDuplicateReview()

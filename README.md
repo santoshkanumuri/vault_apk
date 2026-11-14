@@ -29,15 +29,15 @@ The screenshots contain synthetic demonstration data only.
 
 ## Download
 
-**[Download Nuvori 2.2.4 phone preview APK](downloads/nuvori-v2.2.4-phone.apk?raw=true)**
+**[Download Nuvori 2.2.5 phone preview APK](downloads/nuvori-v2.2.5-phone.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.2.4.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.2.5.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 
 **Moving from v1.5.2 or earlier:** v1.6.0 uses the new package `com.application.private_vault` and installs as a separate app. Export an encrypted backup from the old app, restore it into the new app, and check your records before removing the old installation. Later updates using the same package and signing identity can install over this version.
 
-For Google Play, use the [2.2.4 phone AAB](downloads/nuvori-v2.2.4-phone.aab?raw=true) and [release build guide](docs/PUBLISHING.md). An AAB is for store upload; install the APK directly on a phone.
+For Google Play, use the [2.2.5 phone AAB](downloads/nuvori-v2.2.5-phone.aab?raw=true) and [release build guide](docs/PUBLISHING.md). An AAB is for store upload; install the APK directly on a phone.
 
 Wear OS companion version 2.1.2, code 360012: [watch APK](downloads/nuvori-v2.1.2-watch.apk?raw=true), [watch AAB](downloads/nuvori-v2.1.2-watch.aab?raw=true), and [setup guide](docs/WATCH-COMPANION.md). Install the watch APK on the watch. For local setup, the phone and watch apps must share the package name and signing certificate; these download builds match.
 
@@ -63,6 +63,7 @@ Wear OS companion version 2.1.2, code 360012: [watch APK](downloads/nuvori-v2.1.
 - **Clear feedback:** saving, updating, deleting, copying, and sync actions show a short colored confirmation. Messages never include passwords, codes, or card numbers.
 - **Appearance:** light mode or a pure black dark mode, with layouts for phones and larger screens.
 - **Colors:** 16 accents and 8 backgrounds, synced to paired devices on Nuvori 2.2.4 or newer. Pick them in Settings, Appearance.
+- **Google Drive backup:** optional encrypted backups to a hidden folder in your own Google Drive, every hour, day, week or month while Nuvori is unlocked. Each phone keeps its two newest backups. On a new phone, choose Restore a backup, then Find backups in Google Drive, and enter the master password. The restored vault does not join any sync group. Settings > Backup and import.
 - **Optional NFC:** off by default. Start a scan from the card form to fill readable details, then review before saving. Not every card exposes its details. NFC does not provide the printed CVV or make payments.
 
 The bottom tabs are **Home, Cards, Passwords, Codes, and More**. Groups, Security questions, Notes, and Settings are under More.

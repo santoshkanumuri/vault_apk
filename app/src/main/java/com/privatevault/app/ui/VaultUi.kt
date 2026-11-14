@@ -2445,12 +2445,14 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             if (page == "Backup and import") {
                 val restoreFirst = initialImportChoice == FirstRunChoice.RESTORE
                 if (restoreFirst) StatusBanner(kind = StatusKind.INFO,
-                    message = "Next: restore your encrypted backup. Enter the password used when you made it, then choose the .pvault file. Review its contents before replacing this new vault.")
+                    message = "Next: restore your backup. Find it in Google Drive, or choose a .pvault file. Enter the password used when it was made, and review its contents before replacing this new vault.")
                 if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT) {
                     StatusBanner(kind = StatusKind.INFO,
                         message = "Next: choose a password CSV or an unencrypted Bitwarden JSON export. Review the accounts before saving them to your vault. Passkeys are not included.")
                     browserImportContent()
                 }
+                if (restoreFirst) DriveRestoreSection(viewModel, primary = true)
+                else DriveBackupCard(viewModel)
                 SettingsSection("Encrypted backup",
                     description = "Save your vault to a .pvault file protected by a password, or restore one. A restore is checked and reviewed before it replaces anything.") {
                     (if (restoreFirst) listOf("restore", "export") else listOf("export", "restore")).forEach { kind ->
@@ -2462,6 +2464,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     }
                     Text("A cloud file provider may upload an encrypted backup outside this app.", style = MaterialTheme.typography.bodySmall)
                 }
+                if (restoreFirst) DriveBackupCard(viewModel)
+                else DriveRestoreSection(viewModel, primary = false)
                 if (initialImportChoice != FirstRunChoice.BROWSER_IMPORT) browserImportContent()
                 SettingsSection("Exact duplicate passwords",
                     description = "Find password entries whose saved fields, tags, folders, and app or website links match exactly. Entry IDs and activity dates are ignored. Entries with photos are never included.") {
@@ -2695,7 +2699,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
 }
 
 @Composable
-private fun SecretField(label: String, value: String, onValue: (String) -> Unit) {
+internal fun SecretField(label: String, value: String, onValue: (String) -> Unit) {
     var visible by remember { mutableStateOf(false) }
     val name = label.replaceFirstChar { it.lowercase() }
     OutlinedTextField(

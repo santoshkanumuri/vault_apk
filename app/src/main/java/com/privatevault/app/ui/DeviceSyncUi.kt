@@ -69,7 +69,7 @@ private fun DeviceSyncPhase.statusKind(waitingChanges: Boolean = false): StatusK
     DeviceSyncPhase.OFF, DeviceSyncPhase.WAITING -> StatusKind.NEUTRAL
 }
 
-private fun relativeTime(then: Long, now: Long): String {
+internal fun relativeTime(then: Long, now: Long): String {
     val seconds = ((now - then) / 1000).coerceAtLeast(0)
     return when {
         seconds < 60 -> "just now"

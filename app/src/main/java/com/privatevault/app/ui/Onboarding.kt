@@ -133,7 +133,7 @@ internal fun OnboardingScreen(
                             ChoiceRow(FirstRunChoice.NEW, choice, NuvoriIcons.Password, "New vault", "Start with an empty vault") { choice = it }
                             ChoiceRow(FirstRunChoice.JOIN, choice, NuvoriIcons.Devices,
                                 "Join an existing vault", "Scan the managing device's QR after setup") { choice = it }
-                            ChoiceRow(FirstRunChoice.RESTORE, choice, NuvoriIcons.History, "Restore a backup", "Use an encrypted .pvault file") { choice = it }
+                            ChoiceRow(FirstRunChoice.RESTORE, choice, NuvoriIcons.History, "Restore a backup", "From Google Drive or a .pvault file") { choice = it }
                             ChoiceRow(FirstRunChoice.BROWSER_IMPORT, choice, NuvoriIcons.Password, "Import browser passwords", "Choose a Chrome or Brave CSV") { choice = it }
                         }
                         TextButton(onClick = onPrivacy) { Text("Privacy policy") }

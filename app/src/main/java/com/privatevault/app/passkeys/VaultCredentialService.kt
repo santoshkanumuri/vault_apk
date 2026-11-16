@@ -23,22 +23,24 @@ internal data class CredentialDestination(val packageName: String, val identity:
 
 @RequiresApi(34)
 internal fun credentialDestination(context: Context, info: CallingAppInfo): CredentialDestination {
-    val identity = requireNotNull(appSigningIdentity(context, info.packageName))
+    val identity = requireNotNull(appSigningIdentity(context, info.packageName)) { "Nuvori can't read this app's signing certificate" }
     if (!info.isOriginPopulated()) {
         val signers = info.signingInfo.apkContentsSigners
-        require(signers.size == 1)
+        require(signers.size == 1) { "The app is signed with more than one certificate" }
         val hash = MessageDigest.getInstance("SHA-256").digest(signers[0].toByteArray())
-        require(hash.joinToString("") { "%02x".format(it.toInt() and 0xff) } == identity)
+        require(hash.joinToString("") { "%02x".format(it.toInt() and 0xff) } == identity) {
+            "The app's signature doesn't match the installed app"
+        }
         return CredentialDestination(info.packageName, identity, null)
     }
-    require(trustedBrowser(info.packageName, identity))
+    require(trustedBrowser(info.packageName, identity)) { "This browser isn't on Nuvori's list of verified browsers" }
     val fingerprint = identity.chunked(2).joinToString(":").uppercase(java.util.Locale.ROOT)
     val allowlist = JSONObject().put("apps", org.json.JSONArray().put(JSONObject().put("type", "android").put("info",
         JSONObject().put("package_name", info.packageName).put("signatures", org.json.JSONArray().put(
             JSONObject().put("build", "release").put("cert_fingerprint_sha256", fingerprint))))))
-    val origin = requireNotNull(info.getOrigin(allowlist.toString()))
-    val canonical = requireNotNull(com.privatevault.app.security.httpsOrigin(origin))
-    require(origin == canonical || origin == "$canonical/")
+    val origin = requireNotNull(info.getOrigin(allowlist.toString())) { "The browser didn't say which website asked" }
+    val canonical = requireNotNull(com.privatevault.app.security.httpsOrigin(origin)) { "The website isn't an HTTPS site" }
+    require(origin == canonical || origin == "$canonical/") { "The website address isn't a plain HTTPS origin" }
     return CredentialDestination(info.packageName, identity, canonical)
 }
 
@@ -64,24 +66,45 @@ class VaultCredentialService : CredentialProviderService() {
             .putExtra("credential_password_issued", SystemClock.elapsedRealtime())
         return PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
+    /** Records one request for Settings > Passkeys > Recent passkey requests. Never the challenge, user or account. */
+    private fun record(create: Boolean, passkey: Boolean, caller: CallingAppInfo?, requestJson: String?, error: Throwable?) {
+        runCatching {
+            val packageName = caller?.packageName.orEmpty()
+            val label = runCatching {
+                packageManager.getApplicationLabel(packageManager.getApplicationInfo(packageName, 0)).toString()
+            }.getOrDefault(packageName.ifEmpty { "Unknown app" })
+            val site = runCatching {
+                val json = JSONObject(requestJson ?: return@runCatching "")
+                (if (create) json.optJSONObject("rp")?.optString("id") else json.optString("rpId")).orEmpty().take(253)
+            }.getOrDefault("")
+            PasskeyRequestLog.add(PasskeyRequestRecord(System.currentTimeMillis(), create, passkey, label.take(80), packageName.take(255),
+                site, error == null, error?.let(PasskeyRequestLog::reasonOf).orEmpty()))
+        }
+    }
     override fun onBeginCreateCredentialRequest(request: BeginCreateCredentialRequest, cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginCreateCredentialResponse, CreateCredentialException>) {
         if (cancellationSignal.isCanceled) return
-        try {
-            when (request) {
-                is BeginCreatePublicKeyCredentialRequest -> {
-                    val rpId = JSONObject(request.requestJson).getJSONObject("rp").getString("id")
-                    val origin = passkeyOrigin(this, requireNotNull(request.callingAppInfo), rpId)
-                    PasskeyCrypto.request(request.requestJson, origin, true)
-                    callback.onResult(BeginCreateCredentialResponse(listOf(CreateEntry("Nuvori", action(true)))))
-                }
-                is BeginCreatePasswordCredentialRequest -> {
-                    credentialDestination(this, requireNotNull(request.callingAppInfo))
-                    callback.onResult(BeginCreateCredentialResponse(listOf(CreateEntry("Save in Nuvori", passwordAction(true)))))
-                }
-                else -> callback.onError(CreateCredentialUnknownException("This credential type is not supported."))
+        when (request) {
+            is BeginCreatePublicKeyCredentialRequest -> try {
+                val caller = requireNotNull(request.callingAppInfo) { "Android didn't say which app asked" }
+                val rpId = JSONObject(request.requestJson).optJSONObject("rp")?.optString("id").orEmpty()
+                val origin = passkeyOrigin(this, caller, rpId)
+                PasskeyCrypto.request(request.requestJson, origin, true)
+                record(true, true, caller, request.requestJson, null)
+                callback.onResult(BeginCreateCredentialResponse(listOf(CreateEntry("Nuvori", action(true)))))
+            } catch (error: Exception) {
+                record(true, true, request.callingAppInfo, request.requestJson, error)
+                callback.onError(CreateCredentialUnknownException("This passkey request is not supported."))
             }
-        } catch (_: Exception) { callback.onError(CreateCredentialUnknownException("This passkey request is not supported.")) }
+            is BeginCreatePasswordCredentialRequest -> try {
+                credentialDestination(this, requireNotNull(request.callingAppInfo) { "Android didn't say which app asked" })
+                callback.onResult(BeginCreateCredentialResponse(listOf(CreateEntry("Save in Nuvori", passwordAction(true)))))
+            } catch (error: Exception) {
+                record(true, false, request.callingAppInfo, null, error)
+                callback.onError(CreateCredentialUnknownException("This password request is not supported."))
+            }
+            else -> callback.onError(CreateCredentialUnknownException("This credential type is not supported."))
+        }
     }
     override fun onBeginGetCredentialRequest(request: BeginGetCredentialRequest, cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginGetCredentialResponse, GetCredentialException>) {
@@ -90,15 +113,18 @@ class VaultCredentialService : CredentialProviderService() {
             val builder = BeginGetCredentialResponse.Builder()
             request.beginGetCredentialOptions.filterIsInstance<BeginGetPublicKeyCredentialOption>().mapNotNull { option ->
                 runCatching {
-                    val rpId = JSONObject(option.requestJson).getString("rpId")
-                    val origin = passkeyOrigin(this, requireNotNull(request.callingAppInfo), rpId)
+                    val caller = requireNotNull(request.callingAppInfo) { "Android didn't say which app asked" }
+                    val rpId = JSONObject(option.requestJson).optString("rpId")
+                    val origin = passkeyOrigin(this, caller, rpId)
                     PasskeyCrypto.request(option.requestJson, origin, false)
                     // No account names or credential IDs leave the encrypted vault before authentication.
                     PublicKeyCredentialEntry(this, "Unlock Nuvori", action(false), option)
-                }.getOrNull()
+                }.also { record(false, true, request.callingAppInfo, option.requestJson, it.exceptionOrNull()) }.getOrNull()
             }.forEach(builder::addCredentialEntry)
             if (request.beginGetCredentialOptions.any { it is BeginGetPasswordOption }) {
-                credentialDestination(this, requireNotNull(request.callingAppInfo))
+                runCatching { credentialDestination(this, requireNotNull(request.callingAppInfo) { "Android didn't say which app asked" }) }
+                    .onFailure { record(false, false, request.callingAppInfo, null, it) }
+                    .getOrThrow()
                 builder.addAction(Action("Search Nuvori passwords", passwordAction(false), "Unlock to choose a saved login"))
             }
             callback.onResult(builder.build())

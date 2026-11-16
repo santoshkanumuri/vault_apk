@@ -2316,6 +2316,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                         })
                     Text("Supports ES256 passkeys for websites and native apps that use Android Credential Manager. Apps using legacy FIDO APIs, enterprise attestation, or unsupported extensions cannot offer Nuvori.", style = MaterialTheme.typography.bodySmall)
                 }
+                if (android.os.Build.VERSION.SDK_INT >= 34) PasskeyRequestsSection()
                 SettingsSection("Saved passkeys",
                     description = if (passkeys.isEmpty()) null else "${passkeys.size} in this vault.") {
                     if (passkeys.isEmpty()) Text("No passkeys saved yet.")

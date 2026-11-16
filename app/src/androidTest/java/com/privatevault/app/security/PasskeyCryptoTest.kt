@@ -56,6 +56,35 @@ class PasskeyCryptoTest {
         assertFalse(PasskeyCrypto.matches(key, JSONObject(GET).put("allowCredentials", org.json.JSONArray().put(JSONObject().put("type", "public-key").put("id", "different")))))
     }
 
+    @Test fun acceptsPaddedValuesAndEmptyNamesLikeOtherProviders() {
+        val origin = "android:apk-key-hash:" + "A".repeat(43)
+        // Some servers pad base64url and send an empty account name; Google's provider accepts both.
+        val padded = JSONObject(CREATE).put("challenge", "AAECAwQFBgcICQoLDA0ODw==")
+            .put("user", JSONObject().put("id", "AQIDBA==").put("name", "").put("displayName", "Dummy User")).toString()
+        val (key, created) = PasskeyCrypto.create(PasskeyCrypto.request(padded, origin, true), origin, null)
+        assertEquals("AQIDBA", key.userHandle)
+        assertEquals("Dummy User", key.username)
+        PasskeyCrypto.validateStored(key)
+        val clientData = JSONObject(String(PasskeyCrypto.decode(JSONObject(created).getJSONObject("response").getString("clientDataJSON"))))
+        assertEquals("AAECAwQFBgcICQoLDA0ODw", clientData.getString("challenge"))
+        // With no name at all, the site stands in.
+        val nameless = JSONObject(CREATE).put("user", JSONObject().put("id", "AQIDBA").put("name", "")).toString()
+        assertEquals("example.com", PasskeyCrypto.create(PasskeyCrypto.request(nameless, origin, true), origin, null).first.username)
+        // A padded credential ID in a sign-in request still finds the passkey.
+        val get = JSONObject(GET).put("challenge", "EBESExQVFhcYGRobHB0eHw==")
+            .put("allowCredentials", org.json.JSONArray().put(JSONObject().put("type", "public-key").put("id", key.id + "=")))
+        assertTrue(PasskeyCrypto.matches(key, PasskeyCrypto.request(get.toString(), origin, false)))
+        // Refusals carry a reason a person can read.
+        val error = runCatching { PasskeyCrypto.request(CREATE.replace("-7", "-257"), origin, true) }.exceptionOrNull()!!
+        assertEquals("The site doesn't accept ES256 keys, the only kind Nuvori makes",
+            com.privatevault.app.passkeys.PasskeyRequestLog.reasonOf(error))
+        val missing = runCatching { PasskeyCrypto.request("""{"challenge":"EBESExQVFhcYGRobHB0eHw"}""", origin, false) }.exceptionOrNull()!!
+        assertEquals("The request doesn't name a website (RP ID)", com.privatevault.app.passkeys.PasskeyRequestLog.reasonOf(missing))
+        assertEquals("The request isn't in a format Nuvori understands",
+            com.privatevault.app.passkeys.PasskeyRequestLog.reasonOf(IllegalArgumentException("Required value was null.")))
+        assertTrue(runCatching { PasskeyCrypto.request(JSONObject(CREATE).put("challenge", "AAEC===").toString(), origin, true) }.isFailure)
+    }
+
     @Test fun nativeAppPasskeyUsesSignedAndroidOrigin() {
         val origin = "android:apk-key-hash:" + "A".repeat(43)
         val input = PasskeyCrypto.request(CREATE, origin, true)

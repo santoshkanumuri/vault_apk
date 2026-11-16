@@ -1,6 +1,6 @@
-# Nuvori 2.2.7
+# Nuvori 2.2.8
 
-Android version 2.2.7, code 65. Wear OS companion version 2.1.2, code 360012 (unchanged). Pairs with Windows 2.2.7 and browser extension 0.7.6. Version 2.2.6 (code 64) was a preview build and was not published.
+Android version 2.2.8, code 66. Wear OS companion version 2.1.2, code 360012 (unchanged). Pairs with Windows 2.2.8 and browser extension 0.7.6. Versions 2.2.6 (code 64) and 2.2.7 (code 65) were preview builds and were not published.
 
 ## Autofill where Nuvori can't confirm the site
 
@@ -18,6 +18,11 @@ Android version 2.2.7, code 65. Wear OS companion version 2.1.2, code 360012 (un
 - Before, importing passkeys from Google Password Manager skipped every one with "use an unsupported key type or extension". Google exports a PRF secret (`hmacCredentials`) with its passkeys, and Nuvori refused any passkey with extension data.
 - Now these passkeys import and sign in as usual. Nuvori does not keep the extension data (a PRF secret, a large blob, the payment flag). A few sites use PRF to unlock encrypted data, and those sites may ask for another way to unlock. The passkeys stay in Google Password Manager too.
 - Only passkeys whose key is not ES256 (P-256) are still skipped.
+
+## Passkeys in more apps
+
+- Nuvori accepted only strictly formatted passkey requests. Now it also accepts padded base64url values (a trailing `=`), an empty account name (it shows the display name or the site instead), and padded credential IDs at sign-in, as Google's provider does.
+- **Settings > Passkeys > Recent passkey requests** lists the last 10 apps and websites that asked Nuvori, and why Nuvori was not offered ("This browser isn't on Nuvori's list of verified browsers", "The site doesn't accept ES256 keys", and so on). An app that shows only other managers and never appears here did not ask Nuvori: it uses Google's older FIDO2 sign-in, which offers only Google Password Manager. The list is kept in memory only.
 
 ## Suggestions show what they fill
 
@@ -66,23 +71,25 @@ Android version 2.2.7, code 65. Wear OS companion version 2.1.2, code 360012 (un
   - card forms: payment frames, http pages, an app's WebView, native apps, the focused form, drop-downs;
   - card values: expiry shapes, split number boxes, month and year drop-downs, the security code switch;
   - pending card requests, sync on open timing, and color math.
+- `PasskeyCryptoTest` (3 tests, one new: padded challenge and user ID, an empty account name, a padded credential ID at sign-in, readable refusal reasons) and `NativePasskeyOriginTest` passed on an API 34 emulator.
 - `CredentialTransferTest` (3 tests: a P-256 passkey, a passkey with a PRF secret as Google exports it, an RSA key still skipped, duplicate IDs refused) passed on an API 34 emulator.
 - `CardPickerUiTest` (6 tests: last four digits only, tap to fill, the security code switch, light and dark screenshots) passed on an API 34 emulator.
 - Release lint: 0 errors.
-- The signed phone APK reports 2.2.7, code 65, with the same signer certificate as 2.2.5 (SHA-256 `c88756b1…6db79d9`). It passed `zipalign -c -P 16`. All native libraries in the APK and AAB passed the 16 KB alignment check. The AAB signature verified with `jarsigner`.
+- The signed phone APK reports 2.2.8, code 66, with the same signer certificate as 2.2.5 (SHA-256 `c88756b1…6db79d9`). It passed `zipalign -c -P 16`. All native libraries in the APK and AAB passed the 16 KB alignment check. The AAB signature verified with `jarsigner`.
 - Not run on a real phone:
   - card autofill end to end;
   - the new contact-detail suggestion rows in a keyboard;
+  - passkeys in native apps such as Uber Eats, and the Recent passkey requests list;
   - the "unverified" fallback.
 
   Before publishing, test in Chrome, in one app with a native card form, in one app with a WebView, in a browser that is not on the verified list, and on an `http://` page.
 
 ## Download files
 
-- [Phone APK](../downloads/nuvori-v2.2.7-phone.apk)
-- [Phone AAB](../downloads/nuvori-v2.2.7-phone.aab) for Google Play upload
-- [Phone R8 mapping](../downloads/nuvori-v2.2.7-phone-mapping.zip)
+- [Phone APK](../downloads/nuvori-v2.2.8-phone.apk)
+- [Phone AAB](../downloads/nuvori-v2.2.8-phone.aab) for Google Play upload
+- [Phone R8 mapping](../downloads/nuvori-v2.2.8-phone-mapping.zip)
 - [Watch APK](../downloads/nuvori-v2.1.2-watch.apk)
 - [Watch AAB](../downloads/nuvori-v2.1.2-watch.aab) for Google Play upload
 - [Watch R8 mapping](../downloads/nuvori-v2.1.2-watch-mapping.zip)
-- [Android checksums](../downloads/SHA256SUMS-2.2.7.txt)
+- [Android checksums](../downloads/SHA256SUMS-2.2.8.txt)

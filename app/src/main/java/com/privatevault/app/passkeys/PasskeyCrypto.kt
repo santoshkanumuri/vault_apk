@@ -27,20 +27,38 @@ internal object PasskeyCrypto {
         require(value.length <= 8192 && value.matches(Regex("[A-Za-z0-9_-]+")))
         return Base64.getUrlDecoder().decode(value).also { require(encode(it) == value) }
     }
+    /**
+     * A base64url value from a website or app. WebAuthn JSON has no padding, but some servers add it, and Google's
+     * provider accepts it; so padding ("=" or "==") is allowed here. Stored values still use [decode].
+     */
+    fun decodeRequest(value: String): ByteArray = decode(value.removeSuffix("==").removeSuffix("="))
+    /** The same credential ID with or without padding. */
+    private fun sameId(requested: String, stored: String) = requested.trimEnd('=') == stored
     fun request(json: String, origin: String, create: Boolean): JSONObject {
-        require(json.length <= 65536 && (httpsOrigin(origin) == origin ||
-            origin.matches(Regex("android:apk-key-hash:[A-Za-z0-9_-]{43}"))))
+        require(json.length <= 65536) { "The request is too large" }
+        require(httpsOrigin(origin) == origin || origin.matches(Regex("android:apk-key-hash:[A-Za-z0-9_-]{43}"))) {
+            "The requesting app or website couldn't be identified"
+        }
         val input = JSONObject(json)
-        require(decode(input.getString("challenge")).size in 16..1024)
-        val rp = if (create) input.getJSONObject("rp").getString("id") else input.getString("rpId")
+        require(runCatching { decodeRequest(input.getString("challenge")).size in 16..1024 }.getOrDefault(false)) {
+            "The challenge is missing or not valid"
+        }
+        val rp = (if (create) input.optJSONObject("rp")?.optString("id") else input.optString("rpId")).orEmpty()
+        require(rp.isNotEmpty()) { "The request doesn't name a website (RP ID)" }
         // Credential Manager and the allowlisted browser validate the privileged origin. Rechecking it
         // against the RP ID here rejects valid parent-domain and related-origin WebAuthn requests.
-        require(httpsOrigin("https://$rp") == "https://$rp") { "Unsupported passkey website" }
+        require(httpsOrigin("https://$rp") == "https://$rp") { "The website ($rp) isn't a valid site name" }
         if (create) {
-            val algorithms = input.getJSONArray("pubKeyCredParams")
-            require((0 until algorithms.length()).any { algorithms.getJSONObject(it).let { p -> p.optString("type") == "public-key" && p.optInt("alg") == -7 } })
-            require(decode(input.getJSONObject("user").getString("id")).size in 1..64)
-            require(input.getJSONObject("user").getString("name").length in 1..1024)
+            val algorithms = input.optJSONArray("pubKeyCredParams") ?: org.json.JSONArray()
+            require((0 until algorithms.length()).any { algorithms.optJSONObject(it)?.let { p -> p.optString("type") == "public-key" && p.optInt("alg") == -7 } == true }) {
+                "The site doesn't accept ES256 keys, the only kind Nuvori makes"
+            }
+            val user = input.optJSONObject("user")
+            require(user != null && runCatching { decodeRequest(user.getString("id")).size in 1..64 }.getOrDefault(false)) {
+                "The user ID is missing or longer than 64 bytes"
+            }
+            // WebAuthn allows an empty account name; Nuvori shows the display name or the site instead.
+            require(user.optString("name").length <= 1024) { "The account name is too long" }
             require(input.optString("attestation", "none") in setOf("none", "indirect", "direct")) {
                 "Enterprise attestation is not supported"
             }
@@ -51,17 +69,18 @@ internal object PasskeyCrypto {
         if (key.rpId != input.getString("rpId")) return false
         val allowed = input.optJSONArray("allowCredentials") ?: return true
         return allowed.length() == 0 || (0 until allowed.length()).any {
-            allowed.getJSONObject(it).let { item -> item.optString("type") == "public-key" && item.optString("id") == key.id }
+            allowed.getJSONObject(it).let { item -> item.optString("type") == "public-key" && sameId(item.optString("id"), key.id) }
         }
     }
     fun excluded(key: VaultPasskey, input: JSONObject): Boolean {
         val excluded = input.optJSONArray("excludeCredentials") ?: return false
         return key.rpId == input.getJSONObject("rp").getString("id") && (0 until excluded.length()).any {
-            excluded.getJSONObject(it).optString("id") == key.id
+            sameId(excluded.getJSONObject(it).optString("id"), key.id)
         }
     }
+    /** clientDataJSON carries the challenge as unpadded base64url, as browsers send it. */
     private fun clientData(input: JSONObject, origin: String, create: Boolean) = JSONObject()
-        .put("type", if (create) "webauthn.create" else "webauthn.get").put("challenge", input.getString("challenge"))
+        .put("type", if (create) "webauthn.create" else "webauthn.get").put("challenge", encode(decodeRequest(input.getString("challenge"))))
         .put("origin", origin).put("crossOrigin", false).toString().toByteArray()
     fun create(input: JSONObject, origin: String, clientHash: ByteArray?): Pair<VaultPasskey, String> {
         request(input.toString(), origin, true)
@@ -69,8 +88,11 @@ internal object PasskeyCrypto {
         val pair = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
         val id = ByteArray(32).also(SecureRandom()::nextBytes)
         val user = input.getJSONObject("user")
-        val key = VaultPasskey(encode(id), input.getJSONObject("rp").getString("id"), user.getString("id"), user.getString("name"),
-            user.optString("displayName", user.getString("name")).take(1024), encode(pair.private.encoded), encode(pair.public.encoded))
+        val rpId = input.getJSONObject("rp").getString("id")
+        val name = user.optString("name").trim().ifEmpty { user.optString("displayName").trim().ifEmpty { rpId } }.take(1024)
+        // The user handle is stored unpadded, as passkeys from other providers are.
+        val key = VaultPasskey(encode(id), rpId, encode(decodeRequest(user.getString("id"))), name,
+            user.optString("displayName").trim().ifEmpty { name }.take(1024), encode(pair.private.encoded), encode(pair.public.encoded))
         val attested = AttestedCredentialData(AAGUID.ZERO, id, EC2COSEKey.create(pair.public as ECPublicKey,
             com.webauthn4j.data.attestation.statement.COSEAlgorithmIdentifier.ES256))
         // UP + UV + backup eligible + attested credential. No signature counter, safe across restored copies.

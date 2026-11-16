@@ -31,4 +31,17 @@ internal object AutofillPreferences {
     fun setOfferLockedProfiles(context: Context, enabled: Boolean) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean(OFFER_LOCKED_PROFILES, enabled).apply()
     }
+
+    private const val OFFER_CARDS = "autofill_offer_cards"
+
+    /**
+     * Payment forms offer "Unlock to fill a card". On by default: the suggestion holds no card data, and nothing fills
+     * before unlock and a tap on one card.
+     */
+    fun offerCards(context: Context): Boolean =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(OFFER_CARDS, true)
+
+    fun setOfferCards(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean(OFFER_CARDS, enabled).apply()
+    }
 }

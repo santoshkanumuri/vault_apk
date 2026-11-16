@@ -114,7 +114,9 @@ data class PasskeyTransferPreview(
     val exporter: String,
     val sourcePackage: String,
     val items: List<PasskeyTransferItem>,
-    val unsupported: Int
+    val unsupported: Int,
+    /** Imported for sign-in; their extension data (a PRF secret, say) is not kept. */
+    val extensionDataDropped: Int = 0,
 )
 
 /** How often an unlocked app in the foreground checks Google Drive. */
@@ -314,7 +316,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
         pendingTransferredPasskeys = transfer.passkeys
         _passkeyTransferPreview.value = PasskeyTransferPreview(
-            transfer.exporterDisplayName, sourcePackage.take(200), items, transfer.unsupportedPasskeys
+            transfer.exporterDisplayName, sourcePackage.take(200), items, transfer.unsupportedPasskeys,
+            transfer.extensionDataDropped
         )
     }
 
@@ -969,6 +972,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         backgroundJob?.cancel()
         backgroundDeadline = null
         backgrounded = false
+        // Opening Nuvori syncs on its own (Wi-Fi and Google Drive), locked or not, unless turned off.
+        com.privatevault.app.sync.LanSyncService.syncOnOpen(getApplication())
         if (_status.value is VaultStatus.Unlocked) {
             scheduleInactivity()
             com.privatevault.app.sync.CloudSyncRunner.request(getApplication())

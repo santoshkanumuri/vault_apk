@@ -630,4 +630,37 @@ class LoginFormClassifierTest {
         val noId = FormNode(null, inputType = PASSWORD_INPUT)
         assertNull(login(appScreen(noId)))
     }
+
+    // ---- "unverified" fallback: offered where the user is, never with an origin ------------------------------------
+
+    private fun lenient(vararg roots: FormNode) = classifyLoginForm(roots.toList(), browser = false, lenient = true)
+
+    @Test fun theFallbackFillsANonHttpsPageOrAFrameOnlyWhereTheUserIs() {
+        val focusedForm = { focus: Boolean -> htmlForm(htmlInput(0, name = "username", focused = focus), htmlInput(1, type = "password")) }
+        // A router's admin page (http): nothing verified, but the user is in the username field.
+        assertNull(login(webPage(focusedForm(true), scheme = "http"), browser = true))
+        val http = lenient(webPage(focusedForm(true), scheme = "http"))!!
+        assertEquals(0, http.username); assertEquals(1, http.password)
+        assertNull("never an origin", http.origin)
+        // A WebView with a sign-in frame: refused for an app, offered by the fallback.
+        val framed = appScreen(webPage(frame(focusedForm(true), domain = "login.example")))
+        assertNull(login(framed))
+        assertEquals(1, lenient(framed)!!.password)
+        assertNull(lenient(framed)!!.origin)
+        // Not in the form: nothing.
+        assertNull(lenient(webPage(focusedForm(false), scheme = "http")))
+        assertNull(lenient(appScreen(webPage(frame(focusedForm(false), domain = "login.example")))))
+    }
+
+    @Test fun theFallbackNeverRunsAsABrowserAndStillRefusesNewPasswordsAndMixedFactors() {
+        val page = webPage(htmlForm(htmlInput(0, name = "username", focused = true), htmlInput(1, type = "password")), scheme = "http")
+        assertNull(classifyLoginForm(listOf(page), browser = true, lenient = true))
+        assertNull(lenient(webPage(htmlForm(htmlInput(0, name = "username", focused = true), htmlInput(1, type = "password", autocomplete = "new-password")), scheme = "http")))
+        assertNull(lenient(webPage(htmlForm(htmlInput(0, type = "password", focused = true), htmlInput(1, autocomplete = "one-time-code")), scheme = "http")))
+    }
+
+    @Test fun anIdentifierStepFallbackNeedsTheFocusOnIt() {
+        assertEquals(0, lenient(webPage(htmlInput(0, autocomplete = "username", focused = true), scheme = "http"))!!.username)
+        assertNull(lenient(webPage(htmlInput(0, autocomplete = "username"), scheme = "http")))
+    }
 }

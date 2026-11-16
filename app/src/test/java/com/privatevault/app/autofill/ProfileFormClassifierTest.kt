@@ -264,4 +264,17 @@ class ProfileFormClassifierTest {
         assertEquals("Autofill details", profileFillSummary(emptyList()))
         assertEquals("Name · Email · Phone +5", profileFillSummary(ProfileField.entries))
     }
+
+    @Test fun previewShowsTheValuesThatFill() {
+        val profile = AutofillProfile(name = " Alice  Smith ", email = "alice@example.com", phone = "+1 555 0100",
+            address1 = "12 Main St", city = "Austin", postalCode = "78701")
+        // A name part shows the whole name once; the order is fixed; blanks are left out.
+        assertEquals("Alice Smith · alice@example.com · +1 555 0100 +3", profileFillPreview(profile,
+            listOf(ProfileField.POSTAL_CODE, ProfileField.CITY, ProfileField.FAMILY_NAME, ProfileField.GIVEN_NAME,
+                ProfileField.EMAIL, ProfileField.PHONE, ProfileField.ADDRESS1, ProfileField.COUNTRY)))
+        // The focused field's value is the main line, so the line below leaves it out.
+        assertEquals("Alice Smith · 78701", profileFillPreview(profile,
+            listOf(ProfileField.EMAIL, ProfileField.NAME, ProfileField.POSTAL_CODE), except = "alice@example.com"))
+        assertEquals("", profileFillPreview(profile, listOf(ProfileField.COUNTRY)))
+    }
 }

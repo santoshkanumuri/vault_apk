@@ -20,10 +20,16 @@ import java.util.UUID
  * [embeddedSite] is the https site an app's WebView claims to show. A picker hint only: it never authorizes a fill,
  * never feeds keyboard suggestions or same-site fills, and is never stored as a link. [origin] stays null for apps.
  */
+/**
+ * [unverified]: Nuvori could not confirm the site (a browser it does not recognize, a non-https page, or a WebView with
+ * frames or several sites). The picker still lists every login, and fills one only after the user confirms it for
+ * this app; it never links a login here.
+ */
 internal data class LoginFillRequest(val packageName: String, val identity: String,
     val username: AutofillId?, val password: AutofillId?, val otp: AutofillId?, val expiresAt: Long, val origin: String? = null,
     val newPasswords: List<AutofillId> = emptyList(), val embeddedWebView: Boolean = false,
-    val previousUsername: AutofillId? = null, val pinPassword: Boolean = false, val embeddedSite: String? = null)
+    val previousUsername: AutofillId? = null, val pinPassword: Boolean = false, val embeddedSite: String? = null,
+    val unverified: Boolean = false)
 
 private const val SAVE_USERNAME_ID = "save_username_id"
 private const val SAVE_ORIGIN = "save_origin"
@@ -139,9 +145,9 @@ internal data class NativeLoginFields(val username: AutofillId?, val password: A
     val usernameGuessed: Boolean = false, val embeddedSite: String? = null)
 
 /** Thin adapter: the rules live in [classifyLoginForm], which runs on plain nodes so it can be unit tested. */
-internal fun nativeLoginFields(structure: AssistStructure, browser: Boolean = false): NativeLoginFields? {
+internal fun nativeLoginFields(structure: AssistStructure, browser: Boolean = false, lenient: Boolean = false): NativeLoginFields? {
     val tree = formTree(structure) ?: return null
-    val form = classifyLoginForm(tree.roots, browser) ?: return null
+    val form = classifyLoginForm(tree.roots, browser, lenient) ?: return null
     return NativeLoginFields(form.username?.let { tree.ids[it] }, form.password?.let { tree.ids[it] },
         form.otp?.let { tree.ids[it] }, form.origin, form.newPasswords.map { tree.ids[it] }, form.embeddedWebView, form.pinPassword, form.usernameGuessed,
         form.embeddedSite)
@@ -175,24 +181,40 @@ class VaultAutofillService : AutofillService() {
             val identity = appSigningIdentity(this, destination) ?: return@runCatching null
             val browserIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://example.invalid"))
             val browser = trustedBrowser(destination, identity)
-            if (!browser && packageManager.queryIntentActivities(browserIntent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
-                    .any { it.activityInfo.packageName == destination }) return@runCatching null
-            val fields = nativeLoginFields(structure, browser)
+            // A browser Nuvori does not recognize can report any site, so nothing there is matched or saved by site.
+            // The user can still fill any login there, as in an app, after confirming it (the "unverified" fallback).
+            val unknownBrowser = !browser && packageManager.queryIntentActivities(browserIntent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+                    .any { it.activityInfo.packageName == destination }
+            val strict = if (unknownBrowser) null else nativeLoginFields(structure, browser)
+            // Nothing verified to offer, but the user is in a login field (a non-https page, frames in a WebView, say).
+            val fallback = if (strict == null) nativeLoginFields(structure, browser = false, lenient = true) else null
+            val unverified = fallback != null
+            val fields = strict ?: fallback
             val inlineRequest = if (Build.VERSION.SDK_INT >= 30) request.inlineSuggestionsRequest else null
             val loginForm = fields?.password != null || fields?.otp != null || !fields?.newPasswords.isNullOrEmpty()
             if (!loginForm) {
+                // A checkout can hold card and address fields: each kind gets its own dataset, and Android shows the
+                // one that covers the focused field.
+                val datasets = ArrayList<Dataset>()
+                val cleanups = ArrayList<() -> Unit>()
                 val store = UnlockedProfileStore(this)
                 val vault = VaultKeyManager(this).isInitialized
                 if (!vault) store.clear()
-                val profileIds = profileFields(structure, browser)
+                if (vault && AutofillPreferences.offerCards(this))
+                    lockedCardDataset(structure, browser && !unknownBrowser, destination, identity, inlineRequest, cleanups, unknownBrowser)?.let(datasets::add)
+                val profileIds = if (unknownBrowser) null else profileFields(structure, browser)
                 if (profileIds != null) {
                     val copy = store.read()
-                    profileSuggestions(this, profileIds, copy, inlineRequest)?.let { return@runCatching it }
+                    val fromCopy = profileDatasets(this, profileIds, copy, inlineRequest)
+                    datasets += fromCopy
                     // Fallback only: without a device copy, offer an unlock that leads to the profile picker.
-                    if (copy.isEmpty() && vault && AutofillPreferences.offerLockedProfiles(this) &&
+                    if (fromCopy.isEmpty() && copy.isEmpty() && vault && AutofillPreferences.offerLockedProfiles(this) &&
                         lockedProfileOfferWorthwhile(profileIds.values, loginForm))
-                        lockedProfileResponse(structure, browser, destination, identity, inlineRequest, cancellationSignal)
-                            ?.let { return@runCatching it }
+                        lockedProfileDataset(structure, browser, destination, identity, inlineRequest, cleanups)?.let(datasets::add)
+                }
+                if (datasets.isNotEmpty()) {
+                    cancellationSignal.setOnCancelListener { cleanups.forEach { it() } }
+                    return@runCatching FillResponse.Builder().apply { datasets.forEach { addDataset(it) } }.build()
                 }
             }
             if (fields == null) return@runCatching null
@@ -200,8 +222,8 @@ class VaultAutofillService : AutofillService() {
             RecentAutofillApps.record(destination, browser, packageName, SystemClock.elapsedRealtime())
             val previousUsername = if (browser) request.clientState?.previousUsernameFor(destination, identity, fields.origin) else null
             val fill = LoginFillRequest(destination, identity, fields.username, fields.password, fields.otp,
-                SystemClock.elapsedRealtime() + 120_000, fields.origin, fields.newPasswords, fields.embeddedWebView,
-                previousUsername, fields.pinPassword, fields.embeddedSite)
+                SystemClock.elapsedRealtime() + 120_000, fields.origin, fields.newPasswords, fields.embeddedWebView || unverified,
+                previousUsername, fields.pinPassword, fields.embeddedSite, unverified = unverified)
             if (fields.otp != null) rememberKeyboardSignIn(destination, identity)
             val keyboard = getSharedPreferences("vault_preferences", MODE_PRIVATE)
                 .getBoolean("autofill_keyboard_suggestions", true) && fields.otp == null && fields.newPasswords.isEmpty()
@@ -221,8 +243,11 @@ class VaultAutofillService : AutofillService() {
             val response = FillResponse.Builder()
             if (keyboard) response.requireUnlock(fieldIds, sender, presentation, inline)
             else response.addDataset(dataset.build())
-            (fill.saveInfo() ?: fill.delayedUsernameSave())?.let(response::setSaveInfo)
-            fill.saveClientState()?.let(response::setClientState)
+            // An unverified page never offers to save: the login would be tied to whatever the page claimed.
+            if (!unverified) {
+                (fill.saveInfo() ?: fill.delayedUsernameSave())?.let(response::setSaveInfo)
+                fill.saveClientState()?.let(response::setClientState)
+            }
             response.build()
         }.getOrNull()
         if (!cancellationSignal.isCanceled) callback.onSuccess(response)
@@ -233,13 +258,13 @@ class VaultAutofillService : AutofillService() {
      * the picker fills only after unlock and a tap on one profile, and re-checks the destination first.
      */
     @Suppress("DEPRECATION")
-    private fun lockedProfileResponse(structure: AssistStructure, browser: Boolean, destination: String, identity: String,
-        inlineRequest: android.view.inputmethod.InlineSuggestionsRequest?, cancellationSignal: CancellationSignal): FillResponse? {
+    private fun lockedProfileDataset(structure: AssistStructure, browser: Boolean, destination: String, identity: String,
+        inlineRequest: android.view.inputmethod.InlineSuggestionsRequest?, cleanups: MutableList<() -> Unit>): Dataset? {
         val form = lockedProfileForm(structure, browser) ?: return null
         val fill = ProfileFillRequest(destination, identity, form.destination.origin, form.fields,
             SystemClock.elapsedRealtime() + 120_000, form.destination.embeddedWebView)
         val token = PendingProfileFills.put(fill)
-        cancellationSignal.setOnCancelListener { PendingProfileFills.remove(token) }
+        cleanups += { PendingProfileFills.remove(token) }
         val intent = Intent(this, VaultCodesActivity::class.java).setAction("vault.profile.$token").putExtra(PROFILE_FILL_TOKEN, token)
         val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE)
         val description = "Unlock Nuvori to fill your details"
@@ -247,7 +272,35 @@ class VaultAutofillService : AutofillService() {
         val inline = unlockInlinePresentation(this, inlineRequest, pendingIntent, "Unlock to fill your details", description)
         val dataset = Dataset.Builder(menu).setAuthentication(pendingIntent.intentSender)
         form.fields.keys.forEach { dataset.presentField(it, null, menu, inline) }
-        return FillResponse.Builder().addDataset(dataset.build()).build()
+        return dataset.build()
+    }
+
+    /**
+     * "Unlock to fill a card": one authenticated dataset over the form's card fields. It carries no card data; the
+     * picker fills only after unlock and a tap on one card, re-checks the destination, and adds the security code
+     * only when the user leaves that switch on.
+     */
+    @Suppress("DEPRECATION")
+    private fun lockedCardDataset(structure: AssistStructure, browser: Boolean, destination: String, identity: String,
+        inlineRequest: android.view.inputmethod.InlineSuggestionsRequest?, cleanups: MutableList<() -> Unit>,
+        unknownBrowser: Boolean = false): Dataset? {
+        // Verified first; otherwise the "unverified" fallback (no origin; the picker says the app receives the card).
+        val strict = if (unknownBrowser) null else cardFormFields(structure, browser)
+        val (fields, form) = strict ?: cardFormFields(structure, browser = false, lenient = true) ?: return null
+        if (fields.isEmpty()) return null
+        val unverified = strict == null
+        val fill = CardFillRequest(destination, identity, form.origin, fields, SystemClock.elapsedRealtime() + 120_000,
+            form.embeddedWebView || unverified, unverified)
+        val token = PendingCardFills.put(fill)
+        cleanups += { PendingCardFills.remove(token) }
+        val intent = Intent(this, VaultCodesActivity::class.java).setAction("vault.card.$token").putExtra(CARD_FILL_TOKEN, token)
+        val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE)
+        val description = "Unlock Nuvori to fill a card"
+        val menu = unlockMenuPresentation(this, description, "Unlock to fill a card")
+        val inline = unlockInlinePresentation(this, inlineRequest, pendingIntent, "Unlock to fill a card", description)
+        val dataset = Dataset.Builder(menu).setAuthentication(pendingIntent.intentSender)
+        fields.keys.forEach { dataset.presentField(it, null, menu, inline) }
+        return dataset.build()
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {

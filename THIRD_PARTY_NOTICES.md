@@ -27,6 +27,7 @@ Versions are in [app/build.gradle.kts](app/build.gradle.kts). Original license t
 ## Artwork
 
 - Payment-network vectors are adapted from [svg-credit-card-payment-icons](https://github.com/aaronfagan/svg-credit-card-payment-icons). Its [Apache-2.0 license](docs/licenses/payment-icons-LICENSE.txt) is included.
+- The American Express "blue box" mark uses the `americanexpress` path from [Simple Icons](https://simpleicons.org/), released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). American Express remains a trademark of American Express.
 - The RuPay logo comes from [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:RuPay.svg), which credits NPCI and marks the artwork as a public-domain text logo. RuPay remains an NPCI trademark.
 - Colors were sampled from [Color Hunt's retro palettes](https://colorhunt.co/palettes/retro), with additional neutral colors. Source palette IDs are in the [1.4.0 notes](docs/RELEASE-1.4.0.md).
 - Launcher artwork is the project owner's supplied `logo.jpg`.

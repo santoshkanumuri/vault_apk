@@ -27,6 +27,10 @@ internal data class FormNode(
     val webScheme: String? = null,
     val className: String? = null,
     val children: List<FormNode> = emptyList(),
+    /** The field's length limit (HTML maxlength or the view's), -1 when there is none. */
+    val maxLength: Int = -1,
+    /** A drop-down's entries (a select element's options), in order. */
+    val options: List<String> = emptyList(),
 )
 
 internal data class LoginFormFields(val username: Int?, val password: Int?, val otp: Int?, val origin: String? = null,
@@ -66,8 +70,10 @@ private class FormScan(val items: List<FormItem>, val origins: Set<String>, val 
  * Walks every window once. Null when the structure is unsafe: too big or deep, a frame in an app's WebView or in a
  * profile form, or an untrusted origin. In a trusted browser a frame or a non-https document is not unsafe by itself:
  * its nodes carry their own origin (or none, or [FormItem.insecure]) and [classifyLoginForm] decides on them.
+ * [lenient]: the "unverified" fallback. Frames and non-https documents are accepted; the result never carries an origin,
+ * so it fills only for the app the user is in, after the user confirms a login in the picker.
  */
-private fun scanForm(roots: List<FormNode>, browser: Boolean, profile: Boolean): FormScan? {
+private fun scanForm(roots: List<FormNode>, browser: Boolean, profile: Boolean, lenient: Boolean = false): FormScan? {
     val items = ArrayList<FormItem>()
     val origins = LinkedHashSet<String>()
     var count = 0
@@ -84,7 +90,7 @@ private fun scanForm(roots: List<FormNode>, browser: Boolean, profile: Boolean):
         val tag = node.htmlTag?.lowercase(Locale.ROOT)
         val frame = tag == "iframe" || tag == "frame"
         // An app's WebView and every profile form stay strict: any frame is unsafe.
-        if (frame && (profile || !browser)) unsafe = true
+        if (frame && (profile || !browser) && !lenient) unsafe = true
         // A frame is its own document and never inherits its parent's origin. A frame that reports none leaves its
         // fields without an origin, and those are never filled.
         var origin = if (frame) null else parentOrigin
@@ -96,7 +102,7 @@ private fun scanForm(roots: List<FormNode>, browser: Boolean, profile: Boolean):
                 // A trusted browser: an http ad frame does not spoil the page, but nothing in or under a non-https
                 // document is filled. The network can change that document and anything it frames.
                 if (origin == null && browser) insecure = true
-                if (!browser && node.webScheme != null && node.webScheme != "https") unsafe = true
+                if (!browser && !lenient && node.webScheme != null && node.webScheme != "https") unsafe = true
             }
             if (origin != null) origins.add(origin) else unknown = true
         }
@@ -118,6 +124,7 @@ private fun roleOf(item: FormItem, browser: Boolean): FieldRole? {
     if (!item.live || item.type == "hidden") return null
     // Card details (a masked CVV, say) are never a login, whatever the input type.
     if (item.norm.any { it.startsWith("cc") || it.startsWith("creditcard") }) return null
+    if (cardKind(item, browser) != null) return null
     val html = browser || item.web
     val native = !browser && !item.web
     val hints = item.tokens
@@ -182,6 +189,13 @@ private fun splitPasswords(secrets: List<FormItem>): Pair<FormItem?, List<FormIt
     }
 }
 
+/** Card field this input is, by explicit purpose, name, or (for native views) id and hint text. */
+private fun cardKind(item: FormItem, browser: Boolean): CardField? {
+    val native = !browser && !item.web
+    // A web field's placeholder arrives as its hint text; "Card number" or "MM / YY" is a clear card signal there too.
+    return cardField(item.tokens, item.attrs, item.node.idEntry.takeIf { native }, item.node.hintText)
+}
+
 /** Contact detail this field is called by its hint, name or (for native views) exact id/hint text, if any. */
 private fun profileKind(item: FormItem, browser: Boolean): ProfileField? {
     val native = !browser && !item.web
@@ -209,9 +223,14 @@ private fun precedingAccount(items: List<FormItem>, password: FormItem, browser:
     return null
 }
 
-/** Finds the login, new-password or one-time-code fields of the form the user is working in. Null when unsure. */
-internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean): LoginFormFields? {
-    val scan = scanForm(roots, browser, profile = false) ?: return null
+/**
+ * Finds the login, new-password or one-time-code fields of the form the user is working in. Null when unsure.
+ * [lenient] (with browser = false): the "unverified" fallback for a browser Nuvori does not recognize, a non-https page,
+ * or a WebView with frames. It needs the user to be in one of the fields, and it never reports an origin.
+ */
+internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean, lenient: Boolean = false): LoginFormFields? {
+    if (lenient && browser) return null
+    val scan = scanForm(roots, browser, profile = false, lenient = lenient) ?: return null
     val items = scan.items
     for (item in items) {
         val role = roleOf(item, browser)
@@ -221,7 +240,7 @@ internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean): LoginFo
         if (role != null && browser && item.insecure) return null
     }
     // An embedded app can invent webDomain. Its certificate is the destination trust boundary.
-    if (scan.embeddedWebView && scan.origins.size > 1) return null
+    if (scan.embeddedWebView && scan.origins.size > 1 && !lenient) return null
     val embedded = scan.embeddedWebView
     /*
      * (origin, embeddedSite) for the chosen role fields. A trusted browser fills the origin of the credential fields
@@ -243,6 +262,7 @@ internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean): LoginFo
             // A username-only step (password on the next screen) needs a web page and exactly one candidate.
             if (!(browser || embedded)) return null
             val only = items.filter { it.role == FieldRole.USERNAME }.singleOrNull() ?: return null
+            if (lenient && !only.node.focused) return null
             val (origin, site) = destination(listOf(only)) ?: return null
             return LoginFormFields(only.node.id, null, null, origin, emptyList(), embedded, embeddedSite = site)
         }
@@ -251,6 +271,8 @@ internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean): LoginFo
         else -> items.filter { it.node.focused }.map { it.group }.distinct().singleOrNull { it in groups } ?: return null
     }
     val members = items.filter { it.group == group }
+    // The fallback offers a fill only where the user is: in one of this form's fields.
+    if (lenient && members.none { it.role != null && it.node.focused }) return null
     // Role fields of one group in two origins (fields around and inside a frame, say): never mix them.
     val (origin, site) = destination(members.filter { it.role != null }) ?: return null
     val secrets = members.filter { it.role == FieldRole.PASSWORD || it.role == FieldRole.NEW_PASSWORD }
@@ -302,6 +324,60 @@ internal fun classifyProfileForm(roots: List<FormNode>, browser: Boolean): Map<I
     return chosen.entries.mapNotNull { (item, field) -> item.node.id?.let { it to field } }.toMap()
 }
 
+internal data class CardFormFields(val fields: Map<Int, CardFieldSpec>, val origin: String?, val embeddedWebView: Boolean)
+
+private const val MAX_CARD_FIELDS = 12
+
+/**
+ * Payment-card fields of the form the user is in. A trusted browser fills one https origin: the number, expiry and
+ * security code must share it (hosted payment frames, such as one frame per field, all report the payment provider's
+ * origin); a name field on another origin is left out. Nothing in or under a non-https document is filled. An app
+ * fills for its signing identity; a frame in its WebView, or an insecure page, makes the request unsafe.
+ * Offered only for a card number, or for an explicitly marked security code (a "confirm your CVV" step).
+ */
+internal fun classifyCardForm(roots: List<FormNode>, browser: Boolean, lenient: Boolean = false): CardFormFields? {
+    if (lenient && browser) return null
+    val scan = scanForm(roots, browser, profile = false, lenient = lenient) ?: return null
+    val found = LinkedHashMap<FormItem, CardField>()
+    var explicitCode = false
+    for (item in scan.items) {
+        if (!item.live || item.type == "hidden") continue
+        val kind = cardKind(item, browser) ?: continue
+        if (!cardFieldFits(kind, item.node.autofillType)) continue
+        if (browser && (item.origin == null || item.insecure)) continue
+        found[item] = kind
+        if (kind == CardField.CSC && item.norm.any { it == "cccsc" || it == "creditcardsecuritycode" }) explicitCode = true
+    }
+    if (found.isEmpty()) return null
+    val groups = found.keys.map { it.group }.distinct()
+    val group = groups.singleOrNull()
+        ?: scan.items.filter { it.node.focused }.map { it.group }.distinct().singleOrNull { it in groups } ?: return null
+    var chosen = found.filterKeys { it.group == group }
+    // A card form is never a login form: a password next to the card fields means something else is going on.
+    if (scan.items.any { it.group == group && it.live && (it.type == "password" || isPasswordInputType(it.node.inputType)) &&
+            cardKind(it, browser) == null }) return null
+    val origin: String? = if (browser) {
+        val sensitive = chosen.filterValues { it != CardField.NAME && it != CardField.GIVEN_NAME && it != CardField.FAMILY_NAME }
+        val origins = (sensitive.ifEmpty { chosen }).keys.map { it.origin }.distinct()
+        val only = origins.singleOrNull() ?: return null
+        chosen = chosen.filterKeys { it.origin == only }
+        only
+    } else null
+    if (!browser && !lenient && scan.embeddedWebView && scan.origins.size > 1) return null
+    // The fallback offers a card only where the user is: in one of these card fields.
+    if (lenient && chosen.keys.none { it.node.focused }) return null
+    val kinds = chosen.values
+    if (CardField.NUMBER !in kinds && !(CardField.CSC in kinds && explicitCode)) return null
+    if (chosen.size > MAX_CARD_FIELDS) return null
+    val fields = chosen.entries.mapNotNull { (item, kind) ->
+        val node = item.node
+        val limit = item.attrs["maxlength"]?.trim()?.toIntOrNull()?.takeIf { it > 0 } ?: node.maxLength
+        val pattern = listOfNotNull(item.attrs["placeholder"], node.hintText, item.attrs["aria-label"]).firstOrNull { it.isNotBlank() }.orEmpty()
+        node.id?.let { it to CardFieldSpec(kind, limit, pattern, if (node.autofillType == View.AUTOFILL_TYPE_LIST) node.options else emptyList()) }
+    }.toMap()
+    return CardFormFields(fields, origin, !browser && scan.embeddedWebView)
+}
+
 /** Indexes of [ids] are the FormNode ids. */
 internal class FormTree(val roots: List<FormNode>, val ids: List<AutofillId>)
 
@@ -318,7 +394,8 @@ internal fun formTree(structure: AssistStructure): FormTree? {
         return FormNode(id, node.autofillHints?.toList().orEmpty(), html?.let { it.tag ?: "" },
             html?.attributes.orEmpty().associate { it.first.lowercase(Locale.ROOT) to it.second.orEmpty() }, node.inputType,
             node.autofillType, node.idEntry, node.hint, node.visibility == View.VISIBLE, node.isEnabled, node.isFocused,
-            node.webDomain, node.webScheme, node.className, children)
+            node.webDomain, node.webScheme, node.className, children, node.maxTextLength,
+            node.autofillOptions?.map { it.toString() }.orEmpty())
     }
     val roots = ArrayList<FormNode>()
     for (index in 0 until structure.windowNodeCount)

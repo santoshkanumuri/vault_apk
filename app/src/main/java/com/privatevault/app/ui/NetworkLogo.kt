@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
@@ -28,14 +29,15 @@ internal fun NetworkLogo(network: String, modifier: Modifier = Modifier) {
         "rupay" -> if (LocalContentColor.current.luminance() > .5f) R.drawable.network_rupay_light else R.drawable.network_rupay
         else -> null
     }
-    val isAmex = resource == R.drawable.network_amex
-    // Fit drew the old 74 x 34 dp box at about 56 dp wide; 66 dp adds roughly 5 dp on each side.
-    val logoModifier = modifier.width(if (isAmex) 66.dp else 64.dp).height(if (isAmex) 34.dp else 32.dp)
+    val logoModifier = modifier.width(64.dp).height(32.dp)
     if (resource != null) {
-        // Single-color wordmarks follow card ink for contrast on every card color.
-        val tint = if (resource == R.drawable.network_visa || resource == R.drawable.network_amex) ColorFilter.tint(LocalContentColor.current) else null
+        // The Visa wordmark follows card ink for contrast on every card color. The Amex blue box
+        // keeps its own blue and white, which read on every card color.
+        val tint = if (resource == R.drawable.network_visa) ColorFilter.tint(LocalContentColor.current) else null
         Image(painterResource(resource), network, logoModifier,
-            contentScale = if (isAmex) ContentScale.FillBounds else ContentScale.Fit, colorFilter = tint)
+            // The square Amex box sits at the right edge, where the wide marks end.
+            alignment = if (resource == R.drawable.network_amex) Alignment.CenterEnd else Alignment.Center,
+            contentScale = ContentScale.Fit, colorFilter = tint)
     } else if (network.isNotBlank()) {
         Text(network, logoModifier, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }

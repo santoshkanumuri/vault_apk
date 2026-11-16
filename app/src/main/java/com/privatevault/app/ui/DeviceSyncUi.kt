@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.privatevault.app.sync.LanSyncService
+import com.privatevault.app.sync.SyncOnOpen
 import com.privatevault.app.sync.DeviceSyncPhase
 import com.privatevault.app.sync.DeviceSyncStatus
 import com.privatevault.app.sync.MAX_ACTIVE_SYNC_DEVICES
@@ -730,6 +731,14 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         description = "Nuvori checks your paired devices while it can reach them on Wi-Fi.") {
         SettingsSwitchRow("Automatic sync", autoOn, setAutomatic,
             description = if (autoOn) "On. Checks every $intervalLabel." else "Paused. Sync now still checks once.")
+        var syncOnOpen by remember { mutableStateOf(SyncOnOpen.enabled(context)) }
+        SettingsSwitchRow("Sync when Nuvori opens", syncOnOpen, { on ->
+            syncOnOpen = on
+            SyncOnOpen.setEnabled(context, on)
+            viewModel.notify(if (on) "Nuvori syncs each time you open it" else "Opening Nuvori no longer starts a sync",
+                StatusKind.SUCCESS)
+        }, description = if (syncOnOpen) "On. Opening Nuvori checks nearby devices and Google Drive, also while automatic sync is paused."
+            else "Off. Opening Nuvori doesn't start a check.")
         Text("Check every", style = MaterialTheme.typography.labelLarge)
         LanSyncService.SYNC_INTERVALS.toList().chunked(2).forEach { options ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -15,11 +15,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.privatevault.app.autofill.ProfileField
 import com.privatevault.app.autofill.autofillProfile
+import com.privatevault.app.autofill.profileFillPreview
 import com.privatevault.app.autofill.profileFillSummary
 import com.privatevault.app.autofill.profileFillValues
 import com.privatevault.app.data.VaultEntry
 
-/** A saved contact-details entry and the labels of what it fills in this form. Never its values. */
+/** A saved contact-details entry and what it fills in this form: the values themselves, the way they are filled. */
 internal class ProfileChoice(val entry: VaultEntry, val summary: String)
 
 /** Entries that fill at least one requested field, in the order given. */
@@ -28,7 +29,7 @@ internal fun profileChoices(entries: List<VaultEntry>, kinds: Collection<Profile
     return entries.mapNotNull { entry ->
         val profile = entry.autofillProfile() ?: return@mapNotNull null
         val filled = profileFillValues(profile, requested).keys.map(requested::getValue)
-        if (filled.isEmpty()) null else ProfileChoice(entry, profileFillSummary(filled))
+        if (filled.isEmpty()) null else ProfileChoice(entry, profileFillPreview(profile, filled).ifBlank { profileFillSummary(filled) })
     }
 }
 

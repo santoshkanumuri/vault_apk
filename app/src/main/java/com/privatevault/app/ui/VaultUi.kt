@@ -1762,6 +1762,9 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
         colorsByUsage(counts)
     }
     var color by remember { mutableStateOf(existing?.color ?: colors.first().value) }
+    val usedCardColors = remember(existing?.id) {
+        CardColorMath.usedColors(viewModel.entries.value.filter { it.entry.type == EntryType.CARD && it.entry.id != existing?.id }.map { it.entry.color })
+    }
     val valid = title.isNotBlank() && when (type) { EntryType.CARD -> primary.isNotBlank(); EntryType.QUESTION -> primary.isNotBlank() && secondary.isNotBlank(); EntryType.PASSWORD -> secondary.isNotBlank(); EntryType.NOTE -> notes.isNotBlank(); EntryType.AUTHENTICATOR -> false; EntryType.AUTOFILL -> profile.hasValue }
 
     BackHandler(onBack = onDismiss)
@@ -1811,26 +1814,8 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                     item { OutlinedTextField(tertiary, { tertiary = it.take(7) }, label = { Text("Expiry date") }, placeholder = { Text("MM/YY") }, modifier = Modifier.fillMaxWidth()) }
                     item { OutlinedTextField(fourth, { fourth = it.filter(Char::isDigit).take(4) }, label = { Text("CVV") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()) }
                     item {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Card color", style = MaterialTheme.typography.labelLarge)
-                            LazyRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(colors, key = { it.value }) { option ->
-                                    val selected = color == option.value
-                                    Box(
-                                        Modifier.size(52.dp)
-                                            .selectable(selected = selected, role = Role.RadioButton, onClick = { color = option.value })
-                                            .semantics { contentDescription = option.name }
-                                            .padding(4.dp)
-                                            .border(if (selected) 2.dp else 1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = if (selected) 1f else .3f), CircleShape)
-                                            .padding(4.dp)
-                                            .background(Color(option.value), CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (selected) Icon(NuvoriIcons.Check, contentDescription = null, tint = cardInk(Color(option.value)), modifier = Modifier.size(20.dp))
-                                    }
-                                }
-                            }
-                        }
+                        CardColorPicker(color = color, onColor = { color = it }, used = usedCardColors,
+                            title = title, lastDigits = primary.takeLast(4))
                     }
                 }
                 EntryType.PASSWORD -> {
@@ -2608,7 +2593,14 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                         Text(preview.sourcePackage, style = MaterialTheme.typography.bodySmall)
                     }
                     if (preview.unsupported > 0) item {
-                        Text("${preview.unsupported} passkeys use an unsupported key type or extension and will not be imported.")
+                        Text(if (preview.unsupported == 1) "1 passkey uses a key type Nuvori can't use. It will not be imported."
+                            else "${preview.unsupported} passkeys use a key type Nuvori can't use. They will not be imported.")
+                    }
+                    if (preview.extensionDataDropped > 0) item {
+                        Text((if (preview.extensionDataDropped == 1) "1 passkey also has" else "${preview.extensionDataDropped} passkeys also have") +
+                            " extra data, such as a PRF secret that a few sites use for encryption. Nuvori imports them for signing in " +
+                            "but does not keep that data. Those sites may ask for another way to unlock.",
+                            style = MaterialTheme.typography.bodySmall)
                     }
                     items(preview.items, key = { it.id }) { item ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2768,12 +2760,7 @@ internal val cardColors = listOf(
 internal fun colorsByUsage(counts: Map<Long, Int>): List<CardColor> =
     cardColors.sortedBy { counts[it.value] ?: 0 }
 
-private fun cardInk(background: Color): Color {
-    val dark = Color.Black
-    val darkContrast = (background.luminance() + .05f) / (dark.luminance() + .05f)
-    val whiteContrast = 1.05f / (background.luminance() + .05f)
-    return if (darkContrast >= whiteContrast) dark else Color.White
-}
+private fun cardInk(background: Color): Color = inkFor(background)
 
 @Composable
 private fun NfcPreference(enabled: Boolean, supported: Boolean, change: (Boolean) -> Unit) {

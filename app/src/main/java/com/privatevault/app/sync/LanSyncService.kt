@@ -71,6 +71,8 @@ class LanSyncService : Service() {
     private var multicastLock: WifiManager.MulticastLock? = null
     private var manualStop: Job? = null
     @Volatile private var manualAttempt = false
+    /** The one-time pass came from opening Nuvori: finding no device is normal and says nothing. */
+    @Volatile private var quietAttempt = false
     @Volatile private var manualCompleted = false
     @Volatile private var manualProgressAt = 0L
     private val instanceName = "nuvori-" + UUID.randomUUID().toString()
@@ -139,7 +141,7 @@ class LanSyncService : Service() {
             notificationManager.cancel(PAUSED_NOTIFICATION_ID)
         }
         val paused = getSharedPreferences(PREFERENCES, MODE_PRIVATE).getBoolean("paused", false)
-        if (paused && intent?.action != SYNC_NOW) {
+        if (paused && intent?.action != SYNC_NOW && intent?.action != SYNC_ON_OPEN) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -163,7 +165,11 @@ class LanSyncService : Service() {
             manualAttempt = false
             manualStop?.cancel()
         }
-        if (intent?.action == SYNC_NOW && (paused || !getSystemService(NotificationManager::class.java).areNotificationsEnabled())) {
+        val opened = intent?.action == SYNC_ON_OPEN
+        if ((intent?.action == SYNC_NOW || opened) &&
+            (paused || !getSystemService(NotificationManager::class.java).areNotificationsEnabled())) {
+            // A Sync now during a quiet pass makes it a normal one, with its messages.
+            quietAttempt = opened && (!manualAttempt || quietAttempt)
             manualAttempt = true
             manualCompleted = false
             manualProgressAt = android.os.SystemClock.elapsedRealtime()
@@ -171,12 +177,14 @@ class LanSyncService : Service() {
             manualStop = scope.launch {
                 while (!manualCompleted) {
                     delay(1_000)
-                    if (exchange.isLocked ||
-                        android.os.SystemClock.elapsedRealtime() - manualProgressAt < 35_000) continue
-                    if (mutableStatus.value.phase in setOf(DeviceSyncPhase.WAITING,
-                            DeviceSyncPhase.SEARCHING, DeviceSyncPhase.FOUND, DeviceSyncPhase.CONNECTING))
-                        setStatus(DeviceSyncPhase.ATTENTION,
-                            "No paired device answered. Check Wi-Fi on both devices and try again.")
+                    if (exchange.isLocked || android.os.SystemClock.elapsedRealtime() - manualProgressAt <
+                        (if (quietAttempt) QUIET_ATTEMPT_MS else 35_000)) continue
+                    val searching = mutableStatus.value.phase in setOf(DeviceSyncPhase.WAITING,
+                        DeviceSyncPhase.SEARCHING, DeviceSyncPhase.FOUND, DeviceSyncPhase.CONNECTING)
+                    if (searching && quietAttempt) {
+                        if (isPaused(this@LanSyncService)) setStatus(DeviceSyncPhase.PAUSED, "Tap Resume to check paired devices again.")
+                    } else if (searching) setStatus(DeviceSyncPhase.ATTENTION,
+                        "No paired device answered. Check Wi-Fi on both devices and try again.")
                     stopSelf()
                     break
                 }
@@ -651,6 +659,9 @@ class LanSyncService : Service() {
         private const val PAUSE = "com.privatevault.app.PAUSE_SYNC"
         private const val RESUME = "com.privatevault.app.RESUME_SYNC"
         private const val SYNC_NOW = "com.privatevault.app.SYNC_NOW"
+        private const val SYNC_ON_OPEN = "com.privatevault.app.SYNC_ON_OPEN"
+        /** How long a quiet pass on opening looks for a device before it stops. */
+        private const val QUIET_ATTEMPT_MS = 20_000L
         private const val PREFERENCES = "sync-service"
         private const val NOTIFICATION_ID = 410
         private const val PAUSED_NOTIFICATION_ID = 411
@@ -768,6 +779,24 @@ class LanSyncService : Service() {
 
         fun refreshPausedNotification(context: Context) {
             if (isPaused(context)) postPausedNotification(context)
+        }
+
+        /**
+         * One quiet pass when Nuvori comes to the front ([SyncOnOpen]): Google Drive, and the paired
+         * devices on this Wi-Fi even while automatic sync is paused. Runs while locked too.
+         */
+        fun syncOnOpen(context: Context) {
+            val app = context.applicationContext
+            if (!SyncOnOpen.enabled(app) || !SyncOnOpen.claim(android.os.SystemClock.elapsedRealtime())) return
+            CloudSyncRunner.request(app)
+            Thread {
+                val mirror = runCatching { store(app).snapshot() }.getOrNull() ?: return@Thread
+                val active = mirror.members.filter { it.status == MemberStatus.ACTIVE.name }.map { it.deviceId }
+                if (mirror.localDeviceId !in active || active.size < 2) return@Thread
+                val running = activeInstance
+                if (running != null && !isPaused(app)) running.signals.trySend(Unit)
+                else runCatching { app.startForegroundService(Intent(app, LanSyncService::class.java).setAction(SYNC_ON_OPEN)) }
+            }.start()
         }
 
         fun syncNow(context: Context) {

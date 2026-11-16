@@ -82,6 +82,12 @@ import com.privatevault.app.autofill.AutofillPreferences
 import com.privatevault.app.autofill.LoginFillRequest
 import com.privatevault.app.autofill.PendingLoginFills
 import com.privatevault.app.autofill.PendingProfileFills
+import com.privatevault.app.autofill.CARD_FILL_TOKEN
+import com.privatevault.app.autofill.CardDetails
+import com.privatevault.app.autofill.CardFillRequest
+import com.privatevault.app.autofill.CardValue
+import com.privatevault.app.autofill.PendingCardFills
+import com.privatevault.app.autofill.cardFillValues
 import com.privatevault.app.autofill.PROFILE_FILL_TOKEN
 import com.privatevault.app.autofill.ProfileFillRequest
 import com.privatevault.app.autofill.autofillProfile
@@ -136,6 +142,12 @@ class VaultCodesActivity : FragmentActivity() {
     private var loginFill: LoginFillRequest? = null
     /** Profile mode: a contact form's field ids and destination. Only contact-details entries are loaded. */
     private var profileFill: ProfileFillRequest? = null
+    /** Card mode: a payment form's field ids and destination. Only card entries are loaded. */
+    private var cardFill: CardFillRequest? = null
+    /** Whether the picked card's security code is filled too (shown only when the form asks for one). */
+    private var includeSecurityCode by mutableStateOf(true)
+    /** When this picker was unlocked: a fresh unlock is the consent for the security code for one minute. */
+    private var unlockedAt = 0L
     private var loginSave: LoginSaveRequest? = null
     private var saveKey: ByteArray? = null
     private var saving: Job? = null
@@ -168,8 +180,11 @@ class VaultCodesActivity : FragmentActivity() {
         registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF))
         saveMode = intent.hasExtra("login_save_token") || intent.hasExtra("credential_password_create")
         autofillMode = intent.hasExtra("login_fill_token") || saveMode || intent.hasExtra("passkey_create") || intent.hasExtra("credential_password_get") ||
-            intent.hasExtra(PROFILE_FILL_TOKEN)
-        if (intent.hasExtra(PROFILE_FILL_TOKEN)) {
+            intent.hasExtra(PROFILE_FILL_TOKEN) || intent.hasExtra(CARD_FILL_TOKEN)
+        if (intent.hasExtra(CARD_FILL_TOKEN)) {
+            cardFill = PendingCardFills.take(intent.getStringExtra(CARD_FILL_TOKEN))
+            if (cardFill == null) { dismissPicker(); return }
+        } else if (intent.hasExtra(PROFILE_FILL_TOKEN)) {
             profileFill = PendingProfileFills.take(intent.getStringExtra(PROFILE_FILL_TOKEN))
             if (profileFill == null) { dismissPicker(); return }
         } else if (intent.hasExtra("passkey_create")) {
@@ -285,6 +300,8 @@ class VaultCodesActivity : FragmentActivity() {
                         if (passkeyOperation != null) { loadedPasskeys = database.dao().allPasskeys(); emptyList() }
                         // Profile mode never reads passwords or authenticator secrets.
                         else if (profileFill != null) database.dao().autofillProfileEntries()
+                        // Card mode never reads passwords or authenticator secrets.
+                        else if (cardFill != null) database.dao().cardEntries()
                         else database.dao().loginAndCodeEntries()
                     } finally { database.close() }
                 }
@@ -296,7 +313,8 @@ class VaultCodesActivity : FragmentActivity() {
                     catch (_: Exception) { /* Password authentication still permits this visit. */ }
                 }
                 if (pickerVisible) {
-                    if ((autofillMode && profileFill == null) || passkeyOperation != null) saveKey = requireNotNull(key).copyOf()
+                    if ((autofillMode && profileFill == null && cardFill == null) || passkeyOperation != null) saveKey = requireNotNull(key).copyOf()
+                    unlockedAt = android.os.SystemClock.elapsedRealtime()
                     passkeys = loadedPasskeys
                     entries = loaded; unlocked = true; onUserInteraction()
                     if (intent.getBooleanExtra("keyboard_suggestions", false)) returnKeyboardSuggestions()
@@ -433,6 +451,7 @@ class VaultCodesActivity : FragmentActivity() {
         suggestedApp = null
         loginFill = null
         profileFill = null
+        cardFill = null
         loginSave?.clear()
         loginSave = null
         saveKey?.fill(0)
@@ -478,6 +497,7 @@ class VaultCodesActivity : FragmentActivity() {
         loginSave?.let { return destinationFor(it.packageName, it.origin, saveSite) }
         loginFill?.let { return destinationFor(it.packageName, it.origin, claimedHost(it)) }
         profileFill?.let { return destinationFor(it.packageName, it.origin) }
+        cardFill?.let { return destinationFor(it.packageName, it.origin) }
         if (Build.VERSION.SDK_INT >= 34) passkeyOperation?.let { operation ->
             return destinationFor(operation.callerPackage, operation.origin.takeIf { it.startsWith("https://") })
         }
@@ -486,6 +506,8 @@ class VaultCodesActivity : FragmentActivity() {
 
     private fun linkAndFill(entry: VaultEntry) {
         val request = loginFill ?: return
+        // An unverified page is never linked: what it claimed to be cannot be trusted later.
+        if (request.unverified) return
         if (busy || !pickerVisible || !unlocked ||
             !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return
         if (request.expiresAt <= android.os.SystemClock.elapsedRealtime() ||
@@ -796,6 +818,84 @@ class VaultCodesActivity : FragmentActivity() {
         dismissPicker()
     }
 
+    /** An app's WebView asks for a card: the app, not the page it shows, receives it. */
+    private fun cardWarning(request: CardFillRequest): String? =
+        if (!request.embeddedWebView || request.origin != null) null
+        else "${appLabel(request.packageName) ?: request.packageName} (${request.packageName}) receives the card you fill and can read it. Choose a card only if you trust this app."
+
+    /**
+     * Card mode: fills the picked card into the requested fields only, after the same checks as [fillProfile]: an
+     * unexpired request, this window in front, the app's signing identity unchanged, and a website request still in a
+     * trusted browser at a canonical https origin. The security code is added only while its switch is on, and only
+     * within a minute of unlocking; later it needs a fresh fingerprint, as revealing it in Nuvori does.
+     */
+    private fun fillCard(entry: VaultEntry) {
+        val request = cardFill ?: return
+        if (busy || !pickerVisible || !unlocked || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) ||
+            !hasWindowFocus()) return
+        val browser = trustedBrowser(request.packageName, request.identity)
+        if (request.expiresAt <= android.os.SystemClock.elapsedRealtime() ||
+            appSigningIdentity(this, request.packageName) != request.identity ||
+            (request.origin == null && browser && !request.unverified) ||
+            (request.origin != null && (!browser || httpsOrigin(request.origin) != request.origin))) {
+            dismissPicker(); return
+        }
+        val card = entries.firstOrNull { it.id == entry.id && it.type == com.privatevault.app.data.EntryType.CARD } ?: return
+        val withCode = includeSecurityCode && request.asksForSecurityCode && card.fourthValue.isNotBlank()
+        val fresh = android.os.SystemClock.elapsedRealtime() - unlockedAt <= 60_000
+        if (withCode && !fresh) {
+            if (!biometricAvailable()) { message = "Unlock again to include the security code, or turn that switch off."; return }
+            busy = true
+            lifecycleScope.launch {
+                val confirmed = try { confirmPresence("Fill the security code"); true }
+                    catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { false }
+                busy = false
+                if (confirmed) finishCardFill(request, card, true)
+                else message = "The security code was not filled. Try again, or turn that switch off."
+            }
+            return
+        }
+        finishCardFill(request, card, withCode)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun finishCardFill(request: CardFillRequest, card: VaultEntry, withCode: Boolean) {
+        if (!pickerVisible || cardFill !== request) return
+        val details = CardDetails(card.primaryValue, card.secondaryValue, card.tertiaryValue, card.fourthValue)
+        val values = cardFillValues(details, request.fields, withCode)
+        if (values.isEmpty()) { message = "This card has nothing this form asks for."; return }
+        val dataset = runCatching {
+            Dataset.Builder(RemoteViews(packageName, R.layout.autofill_suggestion)).apply {
+                values.forEach { (id, value) ->
+                    setValue(id, when (value) {
+                        is CardValue.Text -> AutofillValue.forText(value.text)
+                        is CardValue.Choice -> AutofillValue.forList(value.index)
+                    })
+                }
+            }.build()
+        }.getOrElse { message = "Could not fill this card."; return }
+        setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
+            .putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT_EPHEMERAL_DATASET, true))
+        dismissPicker()
+    }
+
+    /** A fingerprint check with no key behind it: proof that the owner is here, for the security code. */
+    private suspend fun confirmPresence(title: String): Unit = suspendCancellableCoroutine { continuation ->
+        val prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    if (continuation.isActive) continuation.resume(Unit)
+                }
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    if (continuation.isActive) continuation.resumeWithException(IllegalStateException())
+                }
+            })
+        continuation.invokeOnCancellation { prompt.cancelAuthentication() }
+        prompt.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle(title)
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            .setNegativeButtonText("Cancel").build())
+    }
+
     /** An app's WebView asks for details: the app, not the page it shows, receives them. */
     private fun profileWarning(request: ProfileFillRequest): String? =
         if (!request.embeddedWebView || request.origin != null) null
@@ -837,10 +937,10 @@ class VaultCodesActivity : FragmentActivity() {
     @Composable
     private fun Picker() {
         var password by remember { mutableStateOf("") }
-        val title = if (passkeyOperation != null) "Passkeys" else if (profileFill != null) "Fill your details" else if (saveMode) "Save login" else if (passwordCredentialOperation != null) "Sign in" else if (autofillMode) "Nuvori passwords" else "Vault codes"
+        val title = if (passkeyOperation != null) "Passkeys" else if (cardFill != null) "Fill a card" else if (profileFill != null) "Fill your details" else if (saveMode) "Save login" else if (passwordCredentialOperation != null) "Sign in" else if (autofillMode) "Nuvori passwords" else "Vault codes"
         val destination = remember { pickerDestination() }
         // Short screens hug their content; lists use the full height.
-        val compact = !unlocked || saveMode || profileFill != null || (Build.VERSION.SDK_INT >= 34 && passkeyOperation?.create == true)
+        val compact = !unlocked || saveMode || profileFill != null || cardFill != null || (Build.VERSION.SDK_INT >= 34 && passkeyOperation?.create == true)
         val submit: () -> Unit = {
             if (!busy && password.isNotEmpty()) { val value = password.toCharArray(); password = ""; authenticate(value) }
         }
@@ -857,6 +957,8 @@ class VaultCodesActivity : FragmentActivity() {
                     val operation = passkeyOperation
                     if (unlocked && operation != null && Build.VERSION.SDK_INT >= 34) {
                         PasskeyContent(operation)
+                    } else if (unlocked && cardFill != null) {
+                        CardContent()
                     } else if (unlocked && profileFill != null) {
                         ProfileContent()
                     } else if (unlocked && saveMode) {
@@ -900,6 +1002,21 @@ class VaultCodesActivity : FragmentActivity() {
                     "This login is saved for $savedFor. Link it only if $destinationName belongs to the same service."
                 request?.origin == null -> "Link it only if this is the official app for this login."
                 else -> null
+            }
+            if (request?.unverified == true) {
+                AlertDialog(
+                    onDismissRequest = { if (!busy) pendingLoginLink = null },
+                    title = { Text("Fill this login here?") },
+                    text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        StatusBanner(StatusKind.WARNING, "Nuvori can't confirm which site this is." +
+                            (savedFor?.let { " This login is saved for $it." } ?: ""))
+                        Text("Fill $account in $destinationName (${request.packageName})? It receives the login and can read it. " +
+                            "Nothing in your vault changes.")
+                    } },
+                    confirmButton = { Button(enabled = !busy, onClick = { fillOnce(entry) }) { Text("Fill once") } },
+                    dismissButton = { TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text("Cancel") } },
+                )
+                return@let
             }
             AlertDialog(
                 onDismissRequest = { if (!busy) pendingLoginLink = null },
@@ -954,6 +1071,16 @@ class VaultCodesActivity : FragmentActivity() {
     }
 
     @Composable
+    private fun ColumnScope.CardContent() {
+        val request = cardFill ?: return
+        CardFillContent(entries, request.asksForSecurityCode && entries.any { it.fourthValue.isNotBlank() }, includeSecurityCode,
+            { includeSecurityCode = it }, busy, cardWarning(request), ::fillCard) {
+            dismissPicker()
+            startActivity(Intent(this@VaultCodesActivity, MainActivity::class.java))
+        }
+    }
+
+    @Composable
     private fun ColumnScope.ProfileContent() {
         val request = profileFill ?: return
         val choices = remember(entries) { profileChoices(entries, request.fields.values) }
@@ -961,6 +1088,14 @@ class VaultCodesActivity : FragmentActivity() {
             dismissPicker()
             startActivity(Intent(this@VaultCodesActivity, MainActivity::class.java))
         }
+    }
+
+    @Composable
+    private fun UnverifiedWarning(request: LoginFillRequest) {
+        StatusBanner(StatusKind.WARNING, title = "Nuvori can't confirm this page",
+            message = "${fillDestination(request)} (${request.packageName}) receives what you fill and can read it." +
+                (claimedHost(request)?.let { " It says it shows $it." } ?: "") +
+                " Search for the login you want, and fill it only if you trust this page.")
     }
 
     @Composable
@@ -989,12 +1124,14 @@ class VaultCodesActivity : FragmentActivity() {
                 StatusBanner(StatusKind.INFO, "Open Nuvori to create your vault first.")
             } else {
                 Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation."
+                    else if (cardFill != null) "Unlock to choose a card. Nothing is filled until you pick one."
                     else if (profileFill != null) "Unlock to choose your details. Nothing is filled until you select them."
                     else if (saveMode) "Unlock to review this login. Nothing is saved until you confirm."
                     else if (autofillMode) "Unlock to choose a login. Nothing is filled until you select an account."
                     else "Unlock to search and copy passwords or authenticator codes.", style = MaterialTheme.typography.bodyMedium)
                 loginFill?.takeIf { it.embeddedWebView }?.let { EmbeddedBrowserWarning(it) }
                 profileFill?.let(::profileWarning)?.let { StatusBanner(StatusKind.WARNING, it, title = "Embedded browser") }
+                cardFill?.let(::cardWarning)?.let { StatusBanner(StatusKind.WARNING, it, title = "Embedded browser") }
                 if (fingerprint) FilledTonalButton(onClick = onFingerprint, enabled = !busy,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Icon(NuvoriIcons.Passkey, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
@@ -1089,7 +1226,7 @@ class VaultCodesActivity : FragmentActivity() {
             LoginMatchTier.EXACT -> AutofillAccountRow(entry, action, codeLinked(entry)) { fillLogin(entry) }
             LoginMatchTier.SAME_SITE -> AutofillAccountRow(entry, "Fill", codeLinked(entry), moreAction = "Fill and link…",
                 onMore = { pendingLoginLink = entry }) { fillLogin(entry, grant = PickerFillGrant.SAME_SITE_ONCE) }
-            LoginMatchTier.OTHER -> AutofillAccountRow(entry, "Fill and link", codeLinked(entry)) { pendingLoginLink = entry }
+            LoginMatchTier.OTHER -> AutofillAccountRow(entry, if (request.unverified) "Fill…" else "Fill and link", codeLinked(entry)) { pendingLoginLink = entry }
         }
         if (searchable) OutlinedTextField(
             search,
@@ -1105,7 +1242,8 @@ class VaultCodesActivity : FragmentActivity() {
             modifier = Modifier.fillMaxWidth().focusRequester(searchFocus),
         )
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (request.embeddedWebView) item(key = "embedded-browser") { EmbeddedBrowserWarning(request) }
+            if (request.unverified) item(key = "unverified") { UnverifiedWarning(request) }
+            else if (request.embeddedWebView) item(key = "embedded-browser") { EmbeddedBrowserWarning(request) }
             if (otp) item(key = "code-search") {
                 OutlinedTextField(search, { search = it }, label = { Text("Search linked codes") },
                     singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),

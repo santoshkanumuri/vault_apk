@@ -34,6 +34,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
     var unlockedProfiles by remember { mutableStateOf(preferences.getBoolean("autofill_unlocked_profiles", false)) }
     var copyLinkedCode by remember { mutableStateOf(AutofillPreferences.copyLinkedCode(context)) }
     var offerLockedProfiles by remember { mutableStateOf(AutofillPreferences.offerLockedProfiles(context)) }
+    var offerCards by remember { mutableStateOf(AutofillPreferences.offerCards(context)) }
     val autofillEnabled = rememberAutofillServiceEnabled()
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         SettingsSection("Autofill service") {
@@ -82,6 +83,10 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
             }, description = "Off by default. After you pick a login, Nuvori fills its linked authenticator code on the next screen when the app or site has a code field Nuvori recognizes. Turn this on as a fallback to also put the code on the clipboard for 30 seconds. Your keyboard and the app in front can read the clipboard.")
         }
         SettingsSection("Everyday details") {
+            SettingsSwitchRow("Offer to fill cards", offerCards, { enabled ->
+                offerCards = enabled
+                AutofillPreferences.setOfferCards(context, enabled)
+            }, description = "On by default. Payment forms in apps and supported browsers show \"Unlock to fill a card\". After you unlock, you pick a card, and Nuvori fills its number, name and expiry. The security code fills only while its switch is on, and needs your fingerprint if Nuvori was unlocked over a minute ago.")
             SettingsSwitchRow("Offer to fill contact details", offerLockedProfiles, { enabled ->
                 offerLockedProfiles = enabled
                 AutofillPreferences.setOfferLockedProfiles(context, enabled)

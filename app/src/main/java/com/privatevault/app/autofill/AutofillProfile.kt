@@ -80,6 +80,22 @@ internal fun profileFillSummary(kinds: Collection<ProfileField>, shown: Int = 3)
     return labels.take(shown).joinToString(" · ") + if (labels.size > shown) " +${labels.size - shown}" else ""
 }
 
+/** What the user sees for [field]: the value it fills, except that a name part shows the whole name. */
+private fun AutofillProfile.shownValue(field: ProfileField): String = when (field) {
+    ProfileField.GIVEN_NAME, ProfileField.FAMILY_NAME -> value(ProfileField.NAME)
+    else -> value(field)
+}.trim()
+
+/**
+ * "Alice Smith · alice@example.com · 12 Main St +2": the values a profile fills for [kinds], in a fixed order, at most
+ * [shown] of them. A value equal to [except] (the one already shown as the suggestion's main line) is left out.
+ */
+internal fun profileFillPreview(profile: AutofillProfile, kinds: Collection<ProfileField>, shown: Int = 3, except: String = ""): String {
+    val values = kinds.distinct().sortedBy { it.ordinal }.map { profile.shownValue(it) }
+        .filter { it.isNotBlank() && it != except.trim() }.distinct()
+    return values.take(shown).joinToString(" · ") + if (values.size > shown) " +${values.size - shown}" else ""
+}
+
 /** What a picked profile fills: each requested field that the profile has a non-blank value for. Nothing else. */
 internal fun <K> profileFillValues(profile: AutofillProfile, fields: Map<K, ProfileField>): Map<K, String> =
     fields.mapValues { (_, field) -> profile.value(field) }.filterValues { it.isNotBlank() }

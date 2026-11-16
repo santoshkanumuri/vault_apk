@@ -186,6 +186,10 @@ interface VaultDao {
     @Query("SELECT * FROM entries WHERE type = 'AUTOFILL' ORDER BY favorite DESC, title COLLATE NOCASE")
     suspend fun autofillProfileEntries(): List<VaultEntry>
 
+    /** Cards only, for the card picker: no passwords or authenticator secrets are read. Favorites, then recent use. */
+    @Query("SELECT * FROM entries WHERE type = 'CARD' ORDER BY favorite DESC, lastOpenedAt DESC, title COLLATE NOCASE")
+    suspend fun cardEntries(): List<VaultEntry>
+
     @Query("UPDATE entries SET linkedAuthenticatorId = '' WHERE linkedAuthenticatorId = :id")
     suspend fun clearAuthenticatorLinks(id: String)
 

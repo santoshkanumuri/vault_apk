@@ -118,7 +118,7 @@ private fun CardChoiceRow(card: VaultEntry, enabled: Boolean, onClick: () -> Uni
 
 /** The card in its own color, with its last four digits: the same look as the wallet. */
 @Composable
-private fun MiniCard(card: VaultEntry) {
+internal fun MiniCard(card: VaultEntry) {
     val base = Color(card.color)
     val ink = inkFor(base)
     val shape = RoundedCornerShape(7.dp)

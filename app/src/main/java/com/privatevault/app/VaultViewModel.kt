@@ -885,6 +885,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         com.privatevault.app.sync.RemoteEntryChanges.clear()
         // A remembered "just signed in" login must not outlive a lock.
         com.privatevault.app.autofill.RecentLoginFills.clear()
+        // "Lock now" also ends Quick copy. Background and inactivity locks of this app leave it alone: Quick copy is a
+        // separate session, and it must not end while you paste on a payment page. It has its own 3-minute limit.
+        if (reason == LockReason.MANUAL) com.privatevault.app.QuickCopySession.end(getApplication())
         devicePairing.cancel()
         cancelPasswordImport()
         cancelPasswordDuplicateReview()

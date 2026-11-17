@@ -182,6 +182,10 @@ interface VaultDao {
     @Query("SELECT * FROM entries WHERE type IN ('PASSWORD', 'AUTHENTICATOR') ORDER BY title COLLATE NOCASE")
     suspend fun loginAndCodeEntries(): List<VaultEntry>
 
+    /** The Quick copy tile: logins, codes, cards and security questions. Never notes or contact details. */
+    @Query("SELECT * FROM entries WHERE type IN ('PASSWORD', 'AUTHENTICATOR', 'CARD', 'QUESTION') ORDER BY title COLLATE NOCASE")
+    suspend fun quickCopyEntries(): List<VaultEntry>
+
     /** Contact details only, for the profile picker: no passwords or authenticator secrets are read. */
     @Query("SELECT * FROM entries WHERE type = 'AUTOFILL' ORDER BY favorite DESC, title COLLATE NOCASE")
     suspend fun autofillProfileEntries(): List<VaultEntry>

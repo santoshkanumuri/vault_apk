@@ -14,7 +14,7 @@ import android.widget.Toast
 class VaultCodesTileService : TileService() {
     override fun onStartListening() {
         qsTile?.apply {
-            label = "Vault codes"
+            label = "Quick copy"
             state = Tile.STATE_INACTIVE
             updateTile()
         }
@@ -41,15 +41,15 @@ class VaultCodesTileService : TileService() {
 internal fun requestVaultCodesTile(context: Context) {
     if (Build.VERSION.SDK_INT >= 33) {
         context.getSystemService(StatusBarManager::class.java).requestAddTileService(
-            ComponentName(context, VaultCodesTileService::class.java), "Vault codes",
+            ComponentName(context, VaultCodesTileService::class.java), "Quick copy",
             Icon.createWithResource(context, R.drawable.ic_vault_codes), context.mainExecutor
         ) { result ->
             val text = when (result) {
-                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "Vault codes added to Quick Settings."
-                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "Vault codes is already in Quick Settings."
-                else -> "You can add Vault codes from the Quick Settings edit screen."
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "Quick copy added to Quick Settings."
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "Quick copy is already in Quick Settings."
+                else -> "You can add Quick copy from the Quick Settings edit screen."
             }
             Toast.makeText(context, text, Toast.LENGTH_LONG).show()
         }
-    } else Toast.makeText(context, "Open Quick Settings, tap Edit, then drag Vault codes into your tiles.", Toast.LENGTH_LONG).show()
+    } else Toast.makeText(context, "Open Quick Settings, tap Edit, then drag Quick copy into your tiles.", Toast.LENGTH_LONG).show()
 }

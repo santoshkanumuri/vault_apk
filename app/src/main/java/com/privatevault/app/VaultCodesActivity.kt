@@ -283,7 +283,7 @@ class VaultCodesActivity : FragmentActivity() {
             try {
                 if (password == null) {
                     val cipher = gate.dailyDecryptionCipher() ?: error("Expired")
-                    key = gate.finishDailyUnlock(confirm(cipher, if (autofillMode) "Unlock autofill" else "Unlock Vault codes"))
+                    key = gate.finishDailyUnlock(confirm(cipher, if (autofillMode) "Unlock autofill" else "Unlock Quick copy"))
                 } else {
                     // Keep ownership here so cancellation during derivation still wipes the key.
                     withContext(Dispatchers.IO) { key = keyManager.unlock(password) }
@@ -305,6 +305,8 @@ class VaultCodesActivity : FragmentActivity() {
                         else if (profileFill != null) database.dao().autofillProfileEntries()
                         // Card mode never reads passwords or authenticator secrets.
                         else if (cardFill != null) database.dao().cardEntries()
+                        // The Quick copy tile: the four categories it shows, nothing else.
+                        else if (!autofillMode) database.dao().quickCopyEntries()
                         else database.dao().loginAndCodeEntries().also { logins ->
                             // "passkey_mark": reads only RP IDs and usernames, never passkey keys.
                             if (loginFill != null) loadedPasskeyLogins = com.privatevault.app.security.loginsWithPasskeys(
@@ -384,45 +386,40 @@ class VaultCodesActivity : FragmentActivity() {
         Toast.makeText(applicationContext, text, if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
     }
 
-    /** Sensitive clip, cleared after 30 s unless something newer was copied in the meantime. */
-    private fun copySensitive(label: String, value: String) {
-        val clipboard = applicationContext.getSystemService(ClipboardManager::class.java)
-        val token = java.util.UUID.randomUUID().toString()
-        val clip = ClipData.newPlainText(label, value)
-        clip.description.extras = PersistableBundle().apply {
-            putBoolean("android.content.extra.IS_SENSITIVE", true)
-            putString("vault_clip_token", token)
-        }
-        clipboard.setPrimaryClip(clip)
-        // Android may deny background clipboard access. Never erase a newer clipboard item.
-        Handler(Looper.getMainLooper()).postDelayed({
-            runCatching {
-                if (clipboard.primaryClipDescription?.extras?.getString("vault_clip_token") == token) clipboard.clearPrimaryClip()
+    private fun copySensitive(label: String, value: String) = com.privatevault.app.copySensitive(applicationContext, label, value)
+
+    /**
+     * Quick copy: copies one field and closes the picker. When the item has more fields and notifications are on,
+     * they stay in a notification for 3 minutes. The CVV follows the card picker's rule: within a minute of
+     * unlocking it copies at once; later it needs a fresh fingerprint.
+     */
+    private fun copy(entry: VaultEntry, field: QuickField) {
+        if (busy || !pickerVisible || !unlocked || !hasWindowFocus()) return
+        if (entries.none { it.id == entry.id }) return
+        val fresh = android.os.SystemClock.elapsedRealtime() - unlockedAt <= 60_000
+        if (field == QuickField.CVV && !fresh) {
+            if (!biometricAvailable()) { message = "Unlock again to copy the CVV."; return }
+            busy = true
+            message = null
+            lifecycleScope.launch {
+                val confirmed = try { confirmPresence("Copy the CVV"); true }
+                    catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { false }
+                busy = false
+                if (confirmed) finishCopy(entry, field) else message = "The CVV was not copied. Try again."
             }
-        }, 30_000)
+            return
+        }
+        finishCopy(entry, field)
     }
 
-    private fun copy(entry: VaultEntry, username: Boolean = false) {
-        if (!pickerVisible || !unlocked || !hasWindowFocus()) return
-        val label: String
-        val value: String
-        val done: String
-        when (entry.type) {
-            EntryType.PASSWORD -> {
-                label = if (username) "Username" else "Password"
-                value = if (username) entry.primaryValue else entry.secondaryValue
-                done = if (username) "Username copied" else "Password copied"
-            }
-            EntryType.AUTHENTICATOR -> {
-                label = "Authenticator code"
-                value = runCatching { Totp.code(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod) }
-                    .getOrElse { message = "Could not generate this code. Check its settings in the vault."; return }
-                done = "Code copied"
-            }
-            else -> return
-        }
-        copySensitive(label, value)
-        toast(done)
+    private fun finishCopy(entry: VaultEntry, field: QuickField) {
+        if (!pickerVisible || !unlocked) return
+        val values = quickCopyValues(entry, entries)
+        val value = values[field]?.let { runCatching { it.resolve() }.getOrNull() }
+            ?: run { message = "Could not copy this field. Check it in Nuvori."; return }
+        copySensitive(field.clipLabel, value)
+        val more = QuickCopySession.start(applicationContext, entry.title, values, field)
+        toast(if (more) "${field.done}. The other fields are in your notifications." else field.done, long = more)
         dismissPicker()
     }
 
@@ -946,7 +943,7 @@ class VaultCodesActivity : FragmentActivity() {
     @Composable
     private fun Picker() {
         var password by remember { mutableStateOf("") }
-        val title = if (passkeyOperation != null) "Passkeys" else if (cardFill != null) "Fill a card" else if (profileFill != null) "Fill your details" else if (saveMode) "Save login" else if (passwordCredentialOperation != null) "Sign in" else if (autofillMode) "Nuvori passwords" else "Vault codes"
+        val title = if (passkeyOperation != null) "Passkeys" else if (cardFill != null) "Fill a card" else if (profileFill != null) "Fill your details" else if (saveMode) "Save login" else if (passwordCredentialOperation != null) "Sign in" else if (autofillMode) "Nuvori passwords" else "Quick copy"
         val destination = remember { pickerDestination() }
         // Short screens hug their content; lists use the full height.
         val compact = !unlocked || saveMode || profileFill != null || cardFill != null || (Build.VERSION.SDK_INT >= 34 && passkeyOperation?.create == true)
@@ -975,7 +972,8 @@ class VaultCodesActivity : FragmentActivity() {
                     } else if (unlocked && autofillMode) {
                         FillContent()
                     } else if (unlocked) {
-                        VaultQuickAccessContent(entries, suggestedApp, ::copy)
+                        val notificationsOn = remember { QuickCopySession.canNotify(applicationContext) }
+                        VaultQuickAccessContent(entries, suggestedApp, notificationsOn, ::copy)
                     } else {
                         UnlockContent(password, { password = it }, submit) { password = ""; authenticate(null) }
                     }
@@ -1137,7 +1135,7 @@ class VaultCodesActivity : FragmentActivity() {
                     else if (profileFill != null) "Unlock to choose your details. Nothing is filled until you select them."
                     else if (saveMode) "Unlock to review this login. Nothing is saved until you confirm."
                     else if (autofillMode) "Unlock to choose a login. Nothing is filled until you select an account."
-                    else "Unlock to search and copy passwords or authenticator codes.", style = MaterialTheme.typography.bodyMedium)
+                    else "Unlock to copy passwords, codes, card details or security answers.", style = MaterialTheme.typography.bodyMedium)
                 loginFill?.takeIf { it.embeddedWebView }?.let { EmbeddedBrowserWarning(it) }
                 profileFill?.let(::profileWarning)?.let { StatusBanner(StatusKind.WARNING, it, title = "Embedded browser") }
                 cardFill?.let(::cardWarning)?.let { StatusBanner(StatusKind.WARNING, it, title = "Embedded browser") }

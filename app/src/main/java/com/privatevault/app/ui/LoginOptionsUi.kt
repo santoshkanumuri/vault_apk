@@ -47,7 +47,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
                 SettingsPrimaryButton("Choose Nuvori autofill", icon = NuvoriIcons.Password, onClick = {
                     context.startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE, Uri.parse("package:${context.packageName}")))
                 })
-                Text("Linked native apps and exact HTTPS sites in verified Chrome and Brave releases can offer logins. Supported browser forms can offer Save after you unlock and confirm. The Vault codes tile still works with another provider.",
+                Text("Linked native apps and exact HTTPS sites in verified Chrome and Brave releases can offer logins. Supported browser forms can offer Save after you unlock and confirm. The Quick copy tile still works with another provider.",
                     style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -109,7 +109,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
                 runCatching { context.startActivity(Intent.createChooser(intent, "Browser autofill settings")) }
             })
             Text("Embedded app pages", style = MaterialTheme.typography.titleSmall)
-            Text("In-app WebViews require you to choose a login after unlocking. The containing app can read filled credentials; approve only apps you trust. A website link does not authorize an embedded app. If nothing appears, open the page in Chrome or Brave, or copy from the Vault codes tile.",
+            Text("In-app WebViews require you to choose a login after unlocking. The containing app can read filled credentials; approve only apps you trust. A website link does not authorize an embedded app. If nothing appears, open the page in Chrome or Brave, or copy from the Quick copy tile.",
                 style = MaterialTheme.typography.bodyMedium)
         }
     }

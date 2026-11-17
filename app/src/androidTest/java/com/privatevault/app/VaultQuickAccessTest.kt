@@ -17,7 +17,8 @@ import org.junit.Test
 class VaultQuickAccessTest {
     @get:Rule val compose = createComposeRule()
     private val login = VaultEntry(id = "login", type = EntryType.PASSWORD, title = "Mail login",
-        primaryValue = "user@example.com", secondaryValue = "never-render-this-secret", tertiaryValue = "https://example.com")
+        primaryValue = "user@example.com", secondaryValue = "never-render-this-secret", tertiaryValue = "https://example.com",
+        linkedAuthenticatorId = "code")
     private val linkedCode = VaultEntry(id = "code", type = EntryType.AUTHENTICATOR, title = "Linked TOTP",
         secondaryValue = "JBSWY3DPEHPK3PXP", linkedApps = "com.example.app")
     private val otherCode = linkedCode.copy(id = "other-code", title = "Other TOTP", linkedApps = "")
@@ -48,11 +49,11 @@ class VaultQuickAccessTest {
     }
 
     @Test fun passwordTabSearchesAccountsAndCopiesOnlySelectedField() {
-        var selection: Pair<VaultEntry, Boolean>? = null
+        var selection: Pair<VaultEntry, QuickField>? = null
         compose.setContent {
             MaterialTheme {
                 Column(Modifier.fillMaxSize().padding(16.dp)) {
-                    VaultQuickAccessContent(listOf(login, linkedCode), null) { entry, username -> selection = entry to username }
+                    VaultQuickAccessContent(listOf(login, linkedCode), null) { entry, field -> selection = entry to field }
                 }
             }
         }
@@ -62,9 +63,9 @@ class VaultQuickAccessTest {
         compose.onNodeWithText(login.secondaryValue).assertDoesNotExist()
         compose.onNodeWithText(linkedCode.title).assertDoesNotExist()
         compose.onNodeWithContentDescription("Copy username for Mail login").performScrollTo().performClick()
-        compose.runOnIdle { assertEquals(login to true, selection) }
+        compose.runOnIdle { assertEquals(login to QuickField.USERNAME, selection) }
         compose.onNodeWithContentDescription("Copy password for Mail login").performScrollTo().performClick()
-        compose.runOnIdle { assertEquals(login to false, selection) }
+        compose.runOnIdle { assertEquals(login to QuickField.PASSWORD, selection) }
         compose.onNodeWithText("Search passwords").performTextReplacement(login.secondaryValue)
         compose.onNodeWithText(login.title).assertDoesNotExist()
         compose.onNodeWithText("No matching accounts.").assertExists()
@@ -85,5 +86,36 @@ class VaultQuickAccessTest {
         compose.onNodeWithText(login.title).assertDoesNotExist()
         compose.onNodeWithText("Passwords").performClick()
         compose.onNodeWithText(login.title).assertExists()
+    }
+
+    @Test fun cardAndQuestionCategoriesCopyEachFieldWithoutRenderingSecrets() {
+        val card = VaultEntry(id = "card", type = EntryType.CARD, title = "Travel Visa", primaryValue = "4111111111111111",
+            secondaryValue = "A Person", tertiaryValue = "08/29", fourthValue = "987")
+        val question = VaultEntry(id = "q", type = EntryType.QUESTION, title = "Bank", primaryValue = "First pet?", secondaryValue = "never-render-answer")
+        val copied = mutableListOf<Pair<String, QuickField>>()
+        compose.setContent {
+            MaterialTheme {
+                Column(Modifier.fillMaxSize().padding(16.dp)) {
+                    VaultQuickAccessContent(listOf(login, linkedCode, card, question), null) { entry, field -> copied += entry.id to field }
+                }
+            }
+        }
+        compose.onNodeWithText("Cards").performClick()
+        compose.onNodeWithText("Travel Visa").assertExists()
+        compose.onNodeWithText("987", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("4111111111111111", substring = true).assertDoesNotExist()
+        listOf("card number", "expiry", "name on card", "CVV").forEach {
+            compose.onNodeWithContentDescription("Copy $it for Travel Visa").performScrollTo().performClick()
+        }
+        compose.onNodeWithText("Questions").performClick()
+        compose.onNodeWithText("First pet?").assertExists()
+        compose.onNodeWithText(question.secondaryValue).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Copy answer for Bank").performClick()
+        compose.onNodeWithText("Passwords").performClick()
+        compose.onNodeWithContentDescription("Copy authenticator code for Mail login").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf("card" to QuickField.CARD_NUMBER, "card" to QuickField.EXPIRY, "card" to QuickField.NAME,
+                "card" to QuickField.CVV, "q" to QuickField.ANSWER, "login" to QuickField.CODE), copied)
+        }
     }
 }

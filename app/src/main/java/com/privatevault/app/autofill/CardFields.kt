@@ -4,7 +4,7 @@ import android.view.View
 import java.util.Locale
 
 /** A payment-card field this form asks for. */
-internal enum class CardField { NUMBER, NAME, GIVEN_NAME, FAMILY_NAME, EXPIRY, EXP_MONTH, EXP_YEAR, CSC }
+internal enum class CardField { NUMBER, NAME, GIVEN_NAME, FAMILY_NAME, EXPIRY, EXP_MONTH, EXP_YEAR, CSC, TYPE }
 
 /**
  * One card field of a form: its kind plus what shapes its value. [maxLength] is -1 when unknown. [pattern] is the
@@ -19,8 +19,9 @@ internal sealed interface CardValue {
     data class Choice(val index: Int) : CardValue
 }
 
-/** What a stored card can fill. [expiry] is the card's "MM/YY" text as saved. */
-internal data class CardDetails(val number: String, val holder: String, val expiry: String, val securityCode: String)
+/** What a stored card can fill. [expiry] is the card's "MM/YY" text as saved; [network] its saved network ("Visa"), if any. */
+internal data class CardDetails(val number: String, val holder: String, val expiry: String, val securityCode: String,
+    val network: String = "")
 
 // Explicit purposes (Android hints and HTML autocomplete tokens), normalized: lowercase letters and digits only.
 private val EXPLICIT = mapOf(
@@ -30,6 +31,7 @@ private val EXPLICIT = mapOf(
     "ccexpmonth" to CardField.EXP_MONTH, "creditcardexpirationmonth" to CardField.EXP_MONTH,
     "ccexpyear" to CardField.EXP_YEAR, "creditcardexpirationyear" to CardField.EXP_YEAR,
     "cccsc" to CardField.CSC, "creditcardsecuritycode" to CardField.CSC,
+    "cctype" to CardField.TYPE,
 )
 
 /** Recognized purposes that are not card fields (HTML autocomplete names and Android hints, normalized). */
@@ -37,7 +39,7 @@ private val OTHER_PURPOSES = setOf("name", "givenname", "familyname", "additiona
     "phone", "phonenumber", "username", "newusername", "password", "currentpassword", "newpassword", "onetimecode", "smsotpcode",
     "streetaddress", "addressline1", "addressline2", "addressline3", "addresslevel1", "addresslevel2", "addresslevel3",
     "addresslevel4", "postalcode", "postaladdress", "country", "countryname", "organization", "organizationtitle", "bday",
-    "bdayday", "bdaymonth", "bdayyear", "url", "personname", "personnamegiven", "personnamefamily", "cctype",
+    "bdayday", "bdaymonth", "bdayyear", "url", "personname", "personnamegiven", "personnamefamily",
     "ccadditionalname", "transactionamount", "transactioncurrency")
 
 /** Cards of other kinds share the words "card number"; Nuvori stores payment cards only. */
@@ -65,6 +67,8 @@ internal fun cardFieldByName(name: String): CardField? {
             (cardContext || n == "yy" || n == "yyyy") -> CardField.EXP_YEAR
         has(n, "expiry", "expiration", "expdate", "ccexp", "cardexp", "validthru", "validuntil", "mmyy", "mmyyyy") || n == "exp" -> CardField.EXPIRY
         has(n, "cardholder", "nameoncard", "ccname", "holdername", "cardowner", "cardname") -> CardField.NAME
+        // The network ("card type", "card brand"): filled only from a drop-down entry or box that names the card's network.
+        has(n, "cardtype", "cctype", "cardbrand", "ccbrand", "cardnetwork") -> CardField.TYPE
         has(n, "cardnumber", "ccnumber", "ccnum", "cardno", "cardnum", "creditcard", "debitcard") || n == "pan" -> CardField.NUMBER
         else -> null
     }
@@ -169,6 +173,10 @@ internal fun <K> cardFillValues(card: CardDetails, fields: Map<K, CardFieldSpec>
                     else year.toString())
             }
             CardField.CSC -> card.securityCode.trim().takeIf { includeSecurityCode && it.isNotEmpty() }?.let { CardValue.Text(it) }
+            CardField.TYPE -> card.network.trim().ifEmpty { com.privatevault.app.nfc.cardNetwork(digits) }.takeIf { it.isNotEmpty() }?.let { network ->
+                if (spec.options.isNotEmpty()) networkOption(spec.options, network)?.let { CardValue.Choice(it) }
+                else CardValue.Text(network)
+            }
         }
         if (value != null) out[key] = value
     }
@@ -178,6 +186,30 @@ internal fun <K> cardFillValues(card: CardDetails, fields: Map<K, CardFieldSpec>
 /** Whether a field of this autofill type can take the kind's value: drop-downs only for month and year. */
 internal fun cardFieldFits(kind: CardField, autofillType: Int): Boolean = when (autofillType) {
     View.AUTOFILL_TYPE_TEXT -> true
-    View.AUTOFILL_TYPE_LIST -> kind == CardField.EXP_MONTH || kind == CardField.EXP_YEAR
+    View.AUTOFILL_TYPE_LIST -> kind == CardField.EXP_MONTH || kind == CardField.EXP_YEAR || kind == CardField.TYPE
     else -> false
+}
+
+/** Ways a form names each network, normalized: "Master Card" and "MC" are Mastercard. */
+private val NETWORK_NAMES = mapOf(
+    "visa" to setOf("visa", "vi"),
+    "mastercard" to setOf("mastercard", "mc", "master"),
+    "americanexpress" to setOf("americanexpress", "amex", "ax", "ae"),
+    "discover" to setOf("discover", "disc", "di"),
+    "jcb" to setOf("jcb"),
+    "dinersclub" to setOf("dinersclub", "diners", "dc"),
+    "unionpay" to setOf("unionpay", "cup", "up"),
+    "maestro" to setOf("maestro"),
+    "rupay" to setOf("rupay"),
+)
+
+/** The drop-down entry for [network] ("Visa", "Mastercard"), by name or common code. Null when none or several fit. */
+internal fun networkOption(options: List<String>, network: String): Int? {
+    val key = network.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+    val names = NETWORK_NAMES.entries.firstOrNull { (canonical, aliases) -> key == canonical || key in aliases }?.value ?: setOf(key)
+    if (key.isEmpty()) return null
+    val normalized = options.map { it.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit) }
+    normalized.indices.filter { normalized[it] in names }.singleOrNull()?.let { return it }
+    // A longer label ("Visa Debit", "MasterCard (credit)"): the full name inside it, never a two-letter code.
+    return normalized.indices.filter { index -> names.any { it.length >= 4 && normalized[index].contains(it) } }.singleOrNull()
 }

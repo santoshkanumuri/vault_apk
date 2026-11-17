@@ -157,6 +157,8 @@ class VaultCodesActivity : FragmentActivity() {
     private var passkeyOperation: com.privatevault.app.passkeys.PasskeyOperation? = null
     private var passwordCredentialOperation: com.privatevault.app.passkeys.PasswordCredentialOperation? = null
     private var passkeys by mutableStateOf<List<com.privatevault.app.data.VaultPasskey>>(emptyList())
+    /** "passkey_mark": logins with a passkey for the same account, for the keyboard suggestions. */
+    private var passkeyLogins: Set<String> = emptySet()
     private var selectedUpdate by mutableStateOf<VaultEntry?>(null)
     private var pendingLoginLink by mutableStateOf<VaultEntry?>(null)
     private var generating by mutableStateOf(false)
@@ -287,6 +289,7 @@ class VaultCodesActivity : FragmentActivity() {
                     withContext(Dispatchers.IO) { key = keyManager.unlock(password) }
                 }
                 var loadedPasskeys = emptyList<com.privatevault.app.data.VaultPasskey>()
+                var loadedPasskeyLogins = emptySet<String>()
                 var masterInterval = 86_400_000L
                 val website = loginFill?.origin
                 val loaded = withContext(Dispatchers.IO) {
@@ -302,7 +305,11 @@ class VaultCodesActivity : FragmentActivity() {
                         else if (profileFill != null) database.dao().autofillProfileEntries()
                         // Card mode never reads passwords or authenticator secrets.
                         else if (cardFill != null) database.dao().cardEntries()
-                        else database.dao().loginAndCodeEntries()
+                        else database.dao().loginAndCodeEntries().also { logins ->
+                            // "passkey_mark": reads only RP IDs and usernames, never passkey keys.
+                            if (loginFill != null) loadedPasskeyLogins = com.privatevault.app.security.loginsWithPasskeys(
+                                logins, database.dao().passkeySummaries())
+                        }
                     } finally { database.close() }
                 }
                 if (password != null && masterInterval > 0 && biometricAvailable()) {
@@ -316,6 +323,7 @@ class VaultCodesActivity : FragmentActivity() {
                     if ((autofillMode && profileFill == null && cardFill == null) || passkeyOperation != null) saveKey = requireNotNull(key).copyOf()
                     unlockedAt = android.os.SystemClock.elapsedRealtime()
                     passkeys = loadedPasskeys
+                    passkeyLogins = loadedPasskeyLogins
                     entries = loaded; unlocked = true; onUserInteraction()
                     if (intent.getBooleanExtra("keyboard_suggestions", false)) returnKeyboardSuggestions()
                 }
@@ -349,7 +357,7 @@ class VaultCodesActivity : FragmentActivity() {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra<android.view.inputmethod.InlineSuggestionsRequest>(AutofillManager.EXTRA_INLINE_SUGGESTIONS_REQUEST)
             } else null
-            passwordSuggestions(this, request, entries, inlineRequest)
+            passwordSuggestions(this, request, entries, inlineRequest, passkeyLogins)
         }.getOrElse { message = "Could not show keyboard suggestions. Choose a login here."; return }
         setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, response))
         dismissPicker()
@@ -806,11 +814,12 @@ class VaultCodesActivity : FragmentActivity() {
             dismissPicker(); return
         }
         val profile = entries.firstOrNull { it.id == entry.id }?.autofillProfile() ?: return
-        val values = profileFillValues(profile, request.fields)
+        // Text fields get the saved text; a state or country drop-down gets its matching entry, or is left alone.
+        val values = com.privatevault.app.autofill.profileAutofillValues(profile, request.fields, request.options)
         if (values.isEmpty()) { message = "These details have nothing this form asks for."; return }
         val dataset = runCatching {
             Dataset.Builder(RemoteViews(packageName, R.layout.autofill_suggestion)).apply {
-                values.forEach { (id, value) -> setValue(id, AutofillValue.forText(value)) }
+                values.forEach { (id, value) -> setValue(id, value) }
             }.build()
         }.getOrElse { message = "Could not fill these details."; return }
         setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
@@ -861,7 +870,7 @@ class VaultCodesActivity : FragmentActivity() {
     @Suppress("DEPRECATION")
     private fun finishCardFill(request: CardFillRequest, card: VaultEntry, withCode: Boolean) {
         if (!pickerVisible || cardFill !== request) return
-        val details = CardDetails(card.primaryValue, card.secondaryValue, card.tertiaryValue, card.fourthValue)
+        val details = CardDetails(card.primaryValue, card.secondaryValue, card.tertiaryValue, card.fourthValue, card.network)
         val values = cardFillValues(details, request.fields, withCode)
         if (values.isEmpty()) { message = "This card has nothing this form asks for."; return }
         val dataset = runCatching {

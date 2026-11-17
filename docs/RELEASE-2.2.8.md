@@ -76,10 +76,13 @@ Android version 2.2.8, code 66. Wear OS companion version 2.1.2, code 360012 (un
 - `CardPickerUiTest` (6 tests: last four digits only, tap to fill, the security code switch, light and dark screenshots) passed on an API 34 emulator.
 - Release lint: 0 errors.
 - The signed phone APK reports 2.2.8, code 66, with the same signer certificate as 2.2.5 (SHA-256 `c88756b1…6db79d9`). It passed `zipalign -c -P 16`. All native libraries in the APK and AAB passed the 16 KB alignment check. The AAB signature verified with `jarsigner`.
+- Confirmed on a real phone (2.2.8):
+  - importing passkeys from Google Password Manager;
+  - Uber Eats offers Nuvori, signs in with a Nuvori passkey, and creates new passkeys in Nuvori.
 - Not run on a real phone:
   - card autofill end to end;
   - the new contact-detail suggestion rows in a keyboard;
-  - passkeys in native apps such as Uber Eats, and the Recent passkey requests list;
+  - the Recent passkey requests list;
   - the "unverified" fallback.
 
   Before publishing, test in Chrome, in one app with a native card form, in one app with a WebView, in a browser that is not on the verified list, and on an `http://` page.

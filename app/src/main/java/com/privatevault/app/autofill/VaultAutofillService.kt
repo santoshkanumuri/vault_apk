@@ -122,7 +122,9 @@ internal object PendingLoginFills {
  * trusted browser). No profile values and no form contents.
  */
 internal data class ProfileFillRequest(val packageName: String, val identity: String, val origin: String?,
-    val fields: Map<AutofillId, ProfileField>, val expiresAt: Long, val embeddedWebView: Boolean = false)
+    val fields: Map<AutofillId, ProfileField>, val expiresAt: Long, val embeddedWebView: Boolean = false,
+    /** State or country drop-downs: their entries, to pick the one matching the saved address. */
+    val options: Map<AutofillId, List<String>> = emptyMap())
 
 /** One-use tokens: at most [capacity] waiting requests (oldest dropped first), each taken once and only before it expires. */
 internal open class PendingProfileRequests(private val capacity: Int = 8) {
@@ -151,6 +153,19 @@ internal fun nativeLoginFields(structure: AssistStructure, browser: Boolean = fa
     return NativeLoginFields(form.username?.let { tree.ids[it] }, form.password?.let { tree.ids[it] },
         form.otp?.let { tree.ids[it] }, form.origin, form.newPasswords.map { tree.ids[it] }, form.embeddedWebView, form.pinPassword, form.usernameGuessed,
         form.embeddedSite)
+}
+
+/** The field the user is in, as the structure reports it, or null when none is marked focused. */
+internal fun focusedAutofillId(structure: AssistStructure): AutofillId? {
+    var count = 0
+    fun find(node: AssistStructure.ViewNode, depth: Int): AutofillId? {
+        if (++count > 2000 || depth > 40) return null
+        if (node.isFocused && node.autofillId != null && node.autofillType != android.view.View.AUTOFILL_TYPE_NONE) return node.autofillId
+        for (index in 0 until node.childCount) find(node.getChildAt(index), depth + 1)?.let { return it }
+        return null
+    }
+    for (index in 0 until structure.windowNodeCount) find(structure.getWindowNodeAt(index).rootViewNode, 0)?.let { return it }
+    return null
 }
 
 /** Intent extra of a save review: the site an app's WebView claimed. A default name only, never a link or website. */
@@ -191,7 +206,12 @@ class VaultAutofillService : AutofillService() {
             val unverified = fallback != null
             val fields = strict ?: fallback
             val inlineRequest = if (Build.VERSION.SDK_INT >= 30) request.inlineSuggestionsRequest else null
-            val loginForm = fields?.password != null || fields?.otp != null || !fields?.newPasswords.isNullOrEmpty()
+            // One form can hold a login, a card and an address (roboform.com's test form, many sign-up pages). Offer the
+            // login only in its own fields; in a card or address field, offer the card or the address.
+            val focused = focusedAutofillId(structure)
+            val loginIds = listOfNotNull(fields?.username, fields?.password, fields?.otp) + fields?.newPasswords.orEmpty()
+            val elsewhere = focused != null && fields != null && focused !in loginIds
+            val loginForm = !elsewhere && (fields?.password != null || fields?.otp != null || !fields?.newPasswords.isNullOrEmpty())
             if (!loginForm) {
                 // A checkout can hold card and address fields: each kind gets its own dataset, and Android shows the
                 // one that covers the focused field.
@@ -202,10 +222,11 @@ class VaultAutofillService : AutofillService() {
                 if (!vault) store.clear()
                 if (vault && AutofillPreferences.offerCards(this))
                     lockedCardDataset(structure, browser && !unknownBrowser, destination, identity, inlineRequest, cleanups, unknownBrowser)?.let(datasets::add)
-                val profileIds = if (unknownBrowser) null else profileFields(structure, browser)
+                val profileForm = if (unknownBrowser) null else profileForm(structure, browser)
+                val profileIds = profileForm?.fields
                 if (profileIds != null) {
                     val copy = store.read()
-                    val fromCopy = profileDatasets(this, profileIds, copy, inlineRequest)
+                    val fromCopy = profileDatasets(this, profileIds, copy, inlineRequest, profileForm.options)
                     datasets += fromCopy
                     // Fallback only: without a device copy, offer an unlock that leads to the profile picker.
                     if (fromCopy.isEmpty() && copy.isEmpty() && vault && AutofillPreferences.offerLockedProfiles(this) &&
@@ -217,7 +238,7 @@ class VaultAutofillService : AutofillService() {
                     return@runCatching FillResponse.Builder().apply { datasets.forEach { addDataset(it) } }.build()
                 }
             }
-            if (fields == null) return@runCatching null
+            if (fields == null || elsewhere) return@runCatching null
             // The Vault codes tile can suggest this app's codes without Usage access. Package and time only, in memory.
             RecentAutofillApps.record(destination, browser, packageName, SystemClock.elapsedRealtime())
             val previousUsername = if (browser) request.clientState?.previousUsernameFor(destination, identity, fields.origin) else null
@@ -225,8 +246,7 @@ class VaultAutofillService : AutofillService() {
                 SystemClock.elapsedRealtime() + 120_000, fields.origin, fields.newPasswords, fields.embeddedWebView || unverified,
                 previousUsername, fields.pinPassword, fields.embeddedSite, unverified = unverified)
             if (fields.otp != null) rememberKeyboardSignIn(destination, identity)
-            val keyboard = getSharedPreferences("vault_preferences", MODE_PRIVATE)
-                .getBoolean("autofill_keyboard_suggestions", true) && fields.otp == null && fields.newPasswords.isEmpty()
+            val keyboard = AutofillPreferences.keyboardSuggestions(this) && fields.otp == null && fields.newPasswords.isEmpty()
             val token = PendingLoginFills.put(fill)
             cancellationSignal.setOnCancelListener { PendingLoginFills.remove(token) }
             val intent = Intent(this, VaultCodesActivity::class.java).setAction("vault.autofill.$token")
@@ -262,7 +282,7 @@ class VaultAutofillService : AutofillService() {
         inlineRequest: android.view.inputmethod.InlineSuggestionsRequest?, cleanups: MutableList<() -> Unit>): Dataset? {
         val form = lockedProfileForm(structure, browser) ?: return null
         val fill = ProfileFillRequest(destination, identity, form.destination.origin, form.fields,
-            SystemClock.elapsedRealtime() + 120_000, form.destination.embeddedWebView)
+            SystemClock.elapsedRealtime() + 120_000, form.destination.embeddedWebView, form.options)
         val token = PendingProfileFills.put(fill)
         cleanups += { PendingProfileFills.remove(token) }
         val intent = Intent(this, VaultCodesActivity::class.java).setAction("vault.profile.$token").putExtra(PROFILE_FILL_TOKEN, token)

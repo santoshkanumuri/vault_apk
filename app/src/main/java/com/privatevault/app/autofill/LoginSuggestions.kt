@@ -17,9 +17,10 @@ import com.privatevault.app.data.VaultEntry
 import com.privatevault.app.security.authorizedPasswordSuggestions
 import com.privatevault.app.security.loginSuggestionLabel
 
+/** [passkeyLogins]: ids of the logins with a passkey for the same account ("passkey_mark"). Their chip and row say so. */
 @Suppress("DEPRECATION")
 internal fun passwordSuggestions(context: Context, request: LoginFillRequest, entries: List<VaultEntry>,
-    inlineRequest: InlineSuggestionsRequest?): FillResponse {
+    inlineRequest: InlineSuggestionsRequest?, passkeyLogins: Set<String> = emptySet()): FillResponse {
     val matches = authorizedPasswordSuggestions(entries, request.packageName, request.identity, request.origin)
     // Reserve a place for the picker and keep the Binder response bounded.
     val slots = if (Build.VERSION.SDK_INT >= 30 && inlineRequest != null)
@@ -31,17 +32,19 @@ internal fun passwordSuggestions(context: Context, request: LoginFillRequest, en
         setTextViewText(R.id.autofill_suggestion_subtitle, subtitle)
         setContentDescription(R.id.autofill_suggestion_root, description)
     }
-    fun inline(position: Int, title: String, subtitle: String, description: String): InlinePresentation? {
+    fun inline(position: Int, title: String, subtitle: String, description: String, passkey: Boolean = false): InlinePresentation? {
         if (Build.VERSION.SDK_INT < 30 || inlineRequest == null) return null
         return runCatching {
             val specs = inlineRequest.inlinePresentationSpecs
             val spec = specs.getOrNull(position) ?: specs.lastOrNull() ?: return null
             if (!androidx.autofill.inline.UiVersions.getVersions(spec.style)
                     .contains(androidx.autofill.inline.UiVersions.INLINE_UI_VERSION_1)) return null
-            val content: androidx.autofill.inline.UiVersions.Content = androidx.autofill.inline.v1.InlineSuggestionUi.newContentBuilder(attribution)
+            val builder = androidx.autofill.inline.v1.InlineSuggestionUi.newContentBuilder(attribution)
                 .setTitle(title).setSubtitle(subtitle)
                 .setStartIcon(android.graphics.drawable.Icon.createWithResource(context, R.mipmap.ic_launcher))
-                .setContentDescription(description).build()
+                .setContentDescription(description)
+            if (passkey) builder.setEndIcon(android.graphics.drawable.Icon.createWithResource(context, R.drawable.ic_passkey))
+            val content: androidx.autofill.inline.UiVersions.Content = builder.build()
             InlinePresentation(content.slice, spec, false)
         }.getOrNull()
     }
@@ -49,8 +52,10 @@ internal fun passwordSuggestions(context: Context, request: LoginFillRequest, en
     val visible = matches.take(slots - 1)
     visible.forEachIndexed { index, entry ->
         val label = loginSuggestionLabel(entry)
-        val menu = menu(label.title, label.subtitle, label.contentDescription)
-        val inline = inline(index, label.title, entry.title, label.contentDescription)
+        val passkey = entry.id in passkeyLogins
+        val description = if (passkey) "${label.contentDescription}. Passkey saved" else label.contentDescription
+        val menu = menu(label.title, if (passkey) "${label.subtitle} · Passkey" else label.subtitle, description)
+        val inline = inline(index, label.title, entry.title, description, passkey)
         val dataset = Dataset.Builder(menu).setId(entry.id)
         request.username?.let { dataset.presentField(it, AutofillValue.forText(entry.primaryValue), menu, inline) }
         request.password?.let { dataset.presentField(it, AutofillValue.forText(entry.secondaryValue), menu, inline) }

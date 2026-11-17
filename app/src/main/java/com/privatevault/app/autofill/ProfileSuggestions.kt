@@ -20,14 +20,17 @@ import com.privatevault.app.R
  */
 @Suppress("DEPRECATION")
 internal fun profileDatasets(context: Context, fields: Map<AutofillId, ProfileField>,
-    profiles: List<Pair<String, AutofillProfile>>, inlineRequest: InlineSuggestionsRequest?): List<Dataset> {
+    profiles: List<Pair<String, AutofillProfile>>, inlineRequest: InlineSuggestionsRequest?,
+    options: Map<AutofillId, List<String>> = emptyMap()): List<Dataset> {
     val datasets = ArrayList<Dataset>()
     val slots = if (Build.VERSION.SDK_INT >= 30 && inlineRequest != null)
         inlineRequest.maxSuggestionCount.coerceIn(1, 8) else 8
     val attribution = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java)
         .setAction("vault.autofill.profiles"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     profiles.take(slots).forEachIndexed { index, (title, profile) ->
-        val filled = profileFillValues(profile, fields)
+        // A drop-down without an entry for this address is left as it is.
+        val values = profileAutofillValues(profile, fields, options)
+        val filled = profileFillValues(profile, fields).filterKeys(values::containsKey)
         if (filled.isEmpty()) return@forEachIndexed
         val kinds = filled.keys.map(fields::getValue)
         val name = title.ifBlank { "Contact details" }
@@ -43,9 +46,9 @@ internal fun profileDatasets(context: Context, fields: Map<AutofillId, ProfileFi
             menu to profileInlinePresentation(context, inlineRequest, index, attribution, main, sub, description)
         }
         val dataset = Dataset.Builder(rows.values.first().first).setId("profile-$index")
-        filled.forEach { (id, value) ->
+        filled.keys.forEach { id ->
             val (menu, inline) = rows.getValue(id)
-            dataset.presentField(id, AutofillValue.forText(value), menu, inline)
+            dataset.presentField(id, values.getValue(id), menu, inline)
         }
         datasets.add(dataset.build())
     }

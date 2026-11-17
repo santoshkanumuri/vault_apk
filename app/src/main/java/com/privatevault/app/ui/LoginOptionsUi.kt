@@ -30,7 +30,7 @@ import com.privatevault.app.security.*
 internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("vault_preferences", android.content.Context.MODE_PRIVATE) }
-    var keyboardSuggestions by remember { mutableStateOf(preferences.getBoolean("autofill_keyboard_suggestions", true)) }
+    var keyboardSuggestions by remember { mutableStateOf(AutofillPreferences.keyboardSuggestions(context)) }
     var unlockedProfiles by remember { mutableStateOf(preferences.getBoolean("autofill_unlocked_profiles", false)) }
     var copyLinkedCode by remember { mutableStateOf(AutofillPreferences.copyLinkedCode(context)) }
     var offerLockedProfiles by remember { mutableStateOf(AutofillPreferences.offerLockedProfiles(context)) }
@@ -61,7 +61,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
         }
         SettingsSection("How logins appear", description = "Choose what you see after unlocking a login suggestion.") {
             Column(Modifier.selectableGroup()) {
-                listOf(true to "Keyboard suggestions", false to "Account picker").forEach { (keyboard, label) ->
+                listOf(false to "Account picker", true to "Keyboard suggestions").forEach { (keyboard, label) ->
                     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(
                         selected = keyboardSuggestions == keyboard, role = Role.RadioButton,
                         onClick = {
@@ -73,8 +73,8 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
                     }
                 }
             }
-            Text(if (keyboardSuggestions) "Choose linked accounts in your keyboard. Choose another login opens the account picker and requires unlock again. Keyboards without inline support show an Android suggestion menu. Codes and password generation use the picker."
-                else "After unlocking, Nuvori opens the full account picker for search, selection and linking.",
+            Text(if (keyboardSuggestions) "After unlocking, your logins appear in the keyboard. Tap the field again if the keyboard closed. Choose another login opens the account picker and requires unlock again. Keyboards without inline support show an Android suggestion menu. Codes and password generation use the picker."
+                else "After unlocking, Nuvori shows the logins for this app or site right away. Tap one to fill it, or search all your logins.",
                 style = MaterialTheme.typography.bodySmall)
             HorizontalDivider()
             SettingsSwitchRow("Copy linked code after filling", copyLinkedCode, { enabled ->

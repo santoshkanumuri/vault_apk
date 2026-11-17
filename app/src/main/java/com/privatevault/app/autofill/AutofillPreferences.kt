@@ -38,6 +38,17 @@ internal object AutofillPreferences {
      * Payment forms offer "Unlock to fill a card". On by default: the suggestion holds no card data, and nothing fills
      * before unlock and a tap on one card.
      */
+    /**
+     * "How logins appear": keyboard suggestions (true) or the account picker (false, the default). After an unlock,
+     * Chrome and Firefox do not bring the keyboard back, so keyboard suggestions stay hidden until the field is tapped
+     * again; the picker shows the matching logins at once.
+     */
+    const val KEYBOARD_SUGGESTIONS = "autofill_keyboard_suggestions"
+    const val KEYBOARD_SUGGESTIONS_DEFAULT = false
+
+    fun keyboardSuggestions(context: Context): Boolean =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(KEYBOARD_SUGGESTIONS, KEYBOARD_SUGGESTIONS_DEFAULT)
+
     fun offerCards(context: Context): Boolean =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(OFFER_CARDS, true)
 

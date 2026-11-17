@@ -265,6 +265,44 @@ class ProfileFormClassifierTest {
         assertEquals("Name · Email · Phone +5", profileFillSummary(ProfileField.entries))
     }
 
+    // ---- state and country drop-downs ----------------------------------------------------------------------------------
+
+    private fun select(id: Int, name: String, options: List<String>) = FormNode(id, htmlTag = "select",
+        htmlAttributes = mapOf("name" to name), autofillType = android.view.View.AUTOFILL_TYPE_LIST, options = options)
+
+    @Test fun stateAndCountryDropDownsJoinTheForm() {
+        // rsolomakhin.github.io/autofill: <select name="state"> beside text fields.
+        val form = profile(webPage(htmlForm(htmlInput(0, name = "name"), htmlInput(1, name = "city"),
+            select(2, "state", listOf("AL", "CA", "TX")), select(3, "country", listOf("Canada", "United States")))), browser = true)!!
+        assertEquals(ProfileField.STATE, form[2]); assertEquals(ProfileField.COUNTRY, form[3])
+        // Any other drop-down (a title, a month) is never filled from an address, and an empty one is not either.
+        val other = profile(webPage(htmlForm(htmlInput(0, name = "name"), htmlInput(1, name = "city"),
+            select(2, "title", listOf("Mr", "Ms")), select(3, "state", emptyList()))), browser = true)!!
+        assertNull(other[2]); assertNull(other[3])
+    }
+
+    @Test fun dropDownEntriesMatchAnySpelling() {
+        val codes = listOf("Select", "AL", "CA", "TX")
+        val names = listOf("Choose a state", "Alabama", "California", "Texas")
+        assertEquals(3, profileOption(ProfileField.STATE, "TX", codes))
+        assertEquals(3, profileOption(ProfileField.STATE, "Texas", codes))
+        assertEquals(3, profileOption(ProfileField.STATE, "tx", names))
+        assertEquals(1, profileOption(ProfileField.STATE, "Alabama", listOf("--", "Alabama (AL)", "Alaska (AK)")))
+        assertEquals(2, profileOption(ProfileField.STATE, "Ontario", listOf("Alberta", "Quebec", "Ontario")))
+        // Countries by name, ISO code or a common alias.
+        val countries = listOf("Canada", "United States", "United Kingdom", "India")
+        assertEquals(1, profileOption(ProfileField.COUNTRY, "USA", countries))
+        assertEquals(1, profileOption(ProfileField.COUNTRY, "United States of America", countries))
+        assertEquals(2, profileOption(ProfileField.COUNTRY, "UK", countries))
+        assertEquals(3, profileOption(ProfileField.COUNTRY, "IN", countries))
+        assertEquals(0, profileOption(ProfileField.COUNTRY, "United States", listOf("US", "GB")))
+        assertEquals(1, profileOption(ProfileField.COUNTRY, "Germany", listOf("FR - France", "DE - Germany")))
+        // Nothing fits, or two entries fit: leave the drop-down alone.
+        assertNull(profileOption(ProfileField.STATE, "Texas", listOf("Ohio", "Utah")))
+        assertNull(profileOption(ProfileField.STATE, "TX", listOf("TX", "Texas")))
+        assertNull(profileOption(ProfileField.COUNTRY, "", countries))
+    }
+
     @Test fun previewShowsTheValuesThatFill() {
         val profile = AutofillProfile(name = " Alice  Smith ", email = "alice@example.com", phone = "+1 555 0100",
             address1 = "12 Main St", city = "Austin", postalCode = "78701")

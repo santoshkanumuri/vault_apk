@@ -182,9 +182,23 @@ class LoginFormClassifierTest {
         listOf("etotp", "footprint", "root_path").forEach { assertNull(it, login(appScreen(appInput(0, TEXT_INPUT, idEntry = it)))) }
     }
 
-    @Test fun otpMixedWithPasswordOrUsernameInTheSameFormIsRefused() {
-        assertNull(login(appScreen(appInput(0, hints = listOf("2faAppOTPCode")), appInput(1, PASSWORD_INPUT))))
+    @Test fun aFormWithACodeAndALoginFillsOneFactorAtATime() {
+        // Outside the code field: the login, never the code.
+        val login = login(appScreen(appInput(0, hints = listOf("2faAppOTPCode")), appInput(1, PASSWORD_INPUT)))!!
+        assertEquals(1, login.password); assertNull(login.otp)
+        // An app's account box and a code, with no password: not a sign-in Nuvori fills outside the code field.
         assertNull(login(appScreen(appInput(0, hints = listOf("2faAppOTPCode")), appInput(1, idEntry = "username"))))
+        // In the code field: the code alone.
+        val code = login(appScreen(appInput(0, hints = listOf("2faAppOTPCode"), focused = true), appInput(1, PASSWORD_INPUT)))!!
+        assertEquals(0, code.otp); assertNull(code.password); assertNull(code.username)
+        // autofill.me "login-totp": username, current password and one-time code in one web form.
+        val page = { focus: Int -> webPage(htmlForm(htmlInput(0, autocomplete = "username", focused = focus == 0),
+            htmlInput(1, type = "password", autocomplete = "current-password", focused = focus == 1),
+            htmlInput(2, autocomplete = "one-time-code", focused = focus == 2))) }
+        val web = login(page(0), browser = true)!!
+        assertEquals(0, web.username); assertEquals(1, web.password); assertNull(web.otp)
+        assertEquals(2, login(page(2), browser = true)!!.otp)
+        // Two code fields in one form stay refused.
         assertNull(login(appScreen(appInput(0, hints = listOf("2faAppOTPCode")), appInput(1, hints = listOf("2faAppOTPCode")))))
     }
 
@@ -522,10 +536,14 @@ class LoginFormClassifierTest {
             browser = true)!!.password)
     }
 
-    @Test fun browserOtpWithPasswordOrUsernameInTheSameFormIsRefused() {
-        assertNull(login(webPage(htmlForm(htmlInput(0, name = "otp"), htmlInput(1, type = "password"))), browser = true))
+    @Test fun browserOtpBesideAPasswordFillsThePasswordOutsideTheCodeField() {
+        val password = login(webPage(htmlForm(htmlInput(0, name = "otp"), htmlInput(1, type = "password"))), browser = true)!!
+        assertEquals(1, password.password); assertNull(password.otp)
+        // An account box and a code with no password: nothing outside the code field.
         assertNull(login(webPage(htmlForm(htmlInput(0, name = "username"), htmlInput(1, name = "otp"))), browser = true))
-        assertNull(login(webPage(htmlForm(htmlInput(0, name = "otp"), htmlInput(1, type = "password", autocomplete = "new-password"))), browser = true))
+        // A reset form (code from an e-mail, then a new password): the new password, never the code.
+        val reset = login(webPage(htmlForm(htmlInput(0, name = "otp"), htmlInput(1, type = "password", autocomplete = "new-password"))), browser = true)!!
+        assertEquals(listOf(1), reset.newPasswords); assertNull(reset.otp)
         // A different, unfocused-irrelevant form with an e-mail field does not block a code screen.
         val form = login(webPage(htmlForm(htmlInput(0, type = "email", name = "newsletter")), htmlForm(htmlInput(1, name = "otp"))), browser = true)!!
         assertEquals(1, form.otp)
@@ -609,6 +627,19 @@ class LoginFormClassifierTest {
         assertNull(login(webPage(htmlForm(htmlInput(0, name = "q", type = "search"))), browser = true))
         // A text box with no name is not guessed in the absence of a password.
         assertNull(login(webPage(htmlForm(htmlInput(0, name = "uid_field"))), browser = true))
+    }
+
+    @Test fun browserUsernameStepIgnoresHiddenCopiesAndFollowsFocus() {
+        // autofill.me "login-duplicate-username": the visible email box and a hidden j_username copy for the next step.
+        val hidden = FormNode(1, htmlTag = "input", htmlAttributes = mapOf("type" to "text", "name" to "j_username",
+            "autocomplete" to "username", "hidden" to ""))
+        val step = login(webPage(htmlForm(htmlInput(0, type = "email", name = "email", autocomplete = "username")), htmlForm(hidden)),
+            browser = true)!!
+        assertEquals(0, step.username); assertNull(step.password)
+        // Two visible account boxes: the one the user is in, never a guess.
+        assertEquals(1, login(webPage(htmlForm(htmlInput(0, name = "username"), htmlInput(1, name = "email", focused = true))),
+            browser = true)!!.username)
+        assertNull(login(webPage(htmlForm(htmlInput(0, name = "username"), htmlInput(1, name = "email"))), browser = true))
     }
 
     @Test fun browserFieldsWithoutExactIdentificationAreIgnored() {

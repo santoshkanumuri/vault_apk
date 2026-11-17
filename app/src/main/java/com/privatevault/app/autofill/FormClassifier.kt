@@ -56,7 +56,8 @@ private class FormItem(val node: FormNode, val index: Int, val window: Int, val 
     val tokens: Set<String> = purposeTokens(node.hints, attrs["autocomplete"])
     val norm: Set<String> = tokens.map(::normalizeToken).filter { it.isNotEmpty() }.toSet()
     val type: String = attrs["type"].orEmpty().trim().lowercase(Locale.ROOT)
-    val live: Boolean get() = shown && node.enabled && node.id != null
+    /** An HTML `hidden` attribute hides the field even when a browser still reports it as visible. */
+    val live: Boolean get() = shown && node.enabled && node.id != null && "hidden" !in attrs
     /** Fields outside any <form> share one group per window. */
     val group: Int get() = if (form >= 0) form else -1 - window
     var role: FieldRole? = null
@@ -259,9 +260,11 @@ internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean, lenient:
     val groups = items.filter { it.role == FieldRole.PASSWORD || it.role == FieldRole.NEW_PASSWORD || it.role == FieldRole.OTP }.map { it.group }.distinct()
     val group = when (groups.size) {
         0 -> {
-            // A username-only step (password on the next screen) needs a web page and exactly one candidate.
+            // A username-only step (password on the next screen) needs a web page and one candidate: the only one, or
+            // the one the user is in (a page can keep a second, script-copied account box).
             if (!(browser || embedded)) return null
-            val only = items.filter { it.role == FieldRole.USERNAME }.singleOrNull() ?: return null
+            val candidates = items.filter { it.role == FieldRole.USERNAME }
+            val only = candidates.singleOrNull() ?: candidates.singleOrNull { it.node.focused } ?: return null
             if (lenient && !only.node.focused) return null
             val (origin, site) = destination(listOf(only)) ?: return null
             return LoginFormFields(only.node.id, null, null, origin, emptyList(), embedded, embeddedSite = site)
@@ -279,9 +282,15 @@ internal fun classifyLoginForm(roots: List<FormNode>, browser: Boolean, lenient:
     val codes = members.filter { it.role == FieldRole.OTP }
     val usernames = members.filter { it.role == FieldRole.USERNAME }
     if (codes.size > 1) return null
-    // Separate OTP screens only: do not fill multiple factors in a mixed form.
-    if (codes.isNotEmpty()) return if (secrets.isEmpty() && usernames.isEmpty())
-        LoginFormFields(null, null, codes[0].node.id, origin, emptyList(), embedded, embeddedSite = site) else null
+    if (codes.isNotEmpty()) {
+        if (secrets.isEmpty() && usernames.isEmpty())
+            return LoginFormFields(null, null, codes[0].node.id, origin, emptyList(), embedded, embeddedSite = site)
+        // One form asks for the account, the password and a code (autofill.me "login-totp"). Each fill is one factor:
+        // in the code field the code alone, anywhere else the login, and the code field is left alone. The unverified
+        // fallback still refuses such a form.
+        if (lenient) return null
+        if (codes[0].node.focused) return LoginFormFields(null, null, codes[0].node.id, origin, emptyList(), embedded, embeddedSite = site)
+    }
     // Without autocomplete hints only a trusted browser may tell a new password from the current one; an app's lone field is current.
     val split: Pair<FormItem?, List<FormItem>> = if (browser) {
         splitPasswords(secrets) ?: return null
@@ -308,10 +317,14 @@ internal fun classifyProfileForm(roots: List<FormNode>, browser: Boolean): Map<I
     val found = LinkedHashMap<FormItem, ProfileField>()
     for (item in scan.items) {
         val node = item.node
-        if (!item.live || node.autofillType != View.AUTOFILL_TYPE_TEXT) continue
-        val role = roleOf(item, browser)
+        if (!item.live) continue
+        // A drop-down counts only as a state or country list with entries to choose from.
+        val list = node.autofillType == View.AUTOFILL_TYPE_LIST
+        if (!list && node.autofillType != View.AUTOFILL_TYPE_TEXT) continue
+        val role = if (list) null else roleOf(item, browser)
         if (role == FieldRole.PASSWORD || role == FieldRole.NEW_PASSWORD || role == FieldRole.OTP) continue
-        profileKind(item, browser)?.let { found[item] = it }
+        profileKind(item, browser)?.takeIf { !list || (node.options.isNotEmpty() && (it == ProfileField.STATE || it == ProfileField.COUNTRY)) }
+            ?.let { found[item] = it }
     }
     var chosen: Map<FormItem, ProfileField> = found
     if (scan.forms > 1) {
@@ -353,8 +366,11 @@ internal fun classifyCardForm(roots: List<FormNode>, browser: Boolean, lenient: 
     val group = groups.singleOrNull()
         ?: scan.items.filter { it.node.focused }.map { it.group }.distinct().singleOrNull { it in groups } ?: return null
     var chosen = found.filterKeys { it.group == group }
-    // A card form is never a login form: a password next to the card fields means something else is going on.
-    if (scan.items.any { it.group == group && it.live && (it.type == "password" || isPasswordInputType(it.node.inputType)) &&
+    // A card number beside a password is a bank sign-in ("card number and passcode"), not a payment: refused. A form
+    // that also asks for the expiry or the security code is a payment, even when it creates an account at the same
+    // time (a sign-up-and-pay checkout, roboform.com's test form); the login there is offered in its own fields.
+    val payment = chosen.values.any { it == CardField.EXPIRY || it == CardField.EXP_MONTH || it == CardField.EXP_YEAR || it == CardField.CSC }
+    if (!payment && scan.items.any { it.group == group && it.live && (it.type == "password" || isPasswordInputType(it.node.inputType)) &&
             cardKind(it, browser) == null }) return null
     val origin: String? = if (browser) {
         val sensitive = chosen.filterValues { it != CardField.NAME && it != CardField.GIVEN_NAME && it != CardField.FAMILY_NAME }
@@ -379,7 +395,20 @@ internal fun classifyCardForm(roots: List<FormNode>, browser: Boolean, lenient: 
 }
 
 /** Indexes of [ids] are the FormNode ids. */
-internal class FormTree(val roots: List<FormNode>, val ids: List<AutofillId>)
+internal class FormTree(val roots: List<FormNode>, val ids: List<AutofillId>) {
+    /** The entries of each drop-down among [fields], by autofill id. */
+    fun listOptions(fields: Collection<AutofillId>): Map<AutofillId, List<String>> {
+        val wanted = fields.toSet()
+        val found = HashMap<AutofillId, List<String>>()
+        fun visit(node: FormNode) {
+            val id = node.id?.let(ids::getOrNull)
+            if (id != null && id in wanted && node.autofillType == View.AUTOFILL_TYPE_LIST && node.options.isNotEmpty()) found[id] = node.options
+            node.children.forEach(::visit)
+        }
+        roots.forEach(::visit)
+        return found
+    }
+}
 
 /** Copies an AssistStructure into FormNodes. Null when it exceeds the node or depth bound, which callers treat as unsafe. */
 internal fun formTree(structure: AssistStructure): FormTree? {

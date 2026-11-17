@@ -290,9 +290,11 @@ fun PrivateVaultApp(
                             biometricAvailable && state.canUseBiometric,
                             onBiometricUnlock
                         )
-                        VaultStatus.Unlocked -> VaultHome(viewModel, onCopySecret, onBiometricAction,
-                            firstRunChoice, { firstRunChoice = FirstRunChoice.NEW },
-                            openSyncSettings, onSyncSettingsOpened)
+                        VaultStatus.Unlocked -> PasskeyLoginsProvider(viewModel) {
+                            VaultHome(viewModel, onCopySecret, onBiometricAction,
+                                firstRunChoice, { firstRunChoice = FirstRunChoice.NEW },
+                                openSyncSettings, onSyncSettingsOpened)
+                        }
                 }
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
                     .padding(bottom = if (status is VaultStatus.Unlocked) 64.dp else 0.dp)) { data ->

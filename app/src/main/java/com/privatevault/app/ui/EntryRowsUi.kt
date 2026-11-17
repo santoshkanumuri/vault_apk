@@ -121,6 +121,13 @@ internal fun FavoriteMark(modifier: Modifier = Modifier, size: Dp = 14.dp) {
         modifier = modifier.size(size))
 }
 
+/** "passkey_mark": a passkey for this login's account is saved too. The row's description says so. */
+@Composable
+internal fun PasskeyMark(modifier: Modifier = Modifier, size: Dp = 14.dp) {
+    Icon(NuvoriIcons.Passkey, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+        modifier = modifier.size(size))
+}
+
 /**
  * The standard item row: avatar, title with favorite star, one-line subtitle and a chevron, drawn as one
  * segment of a grouped 12dp card. Never shows secrets.
@@ -142,7 +149,9 @@ internal fun EntryListRow(
 ) {
     val scheme = MaterialTheme.colorScheme
     val container = if (selected) scheme.primaryContainer.copy(alpha = .55f) else scheme.raised
-    val description = contentDescription ?: "Open ${item.entry.type.legacyLabel()}: ${item.entry.title}"
+    val passkey = item.entry.type == EntryType.PASSWORD && item.entry.id in LocalPasskeyLogins.current
+    val description = (contentDescription ?: "Open ${item.entry.type.legacyLabel()}: ${item.entry.title}") +
+        if (passkey) ". Passkey saved" else ""
     Row(
         modifier.fillMaxWidth()
             .groupedSegment(index, count, container, scheme.hairline)
@@ -162,6 +171,7 @@ internal fun EntryListRow(
                     style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (item.entry.favorite) FavoriteMark()
+                if (passkey) PasskeyMark()
             }
             if (subtitle.isNotBlank()) Text(subtitle, style = MaterialTheme.typography.bodySmall,
                 color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)

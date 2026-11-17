@@ -29,12 +29,14 @@ internal fun profileDestination(roots: List<FormNode>, browser: Boolean): Profil
     return ProfileDestination(origins.singleOrNull() ?: return null, false)
 }
 
-internal class LockedProfileForm(val fields: Map<AutofillId, ProfileField>, val destination: ProfileDestination)
+internal class LockedProfileForm(val fields: Map<AutofillId, ProfileField>, val destination: ProfileDestination,
+    val options: Map<AutofillId, List<String>> = emptyMap())
 
-/** Thin adapter for the locked path: the same fields as [profileFields], plus the destination. */
+/** Thin adapter for the locked path: the same fields as [profileFields], plus the destination and drop-down entries. */
 internal fun lockedProfileForm(structure: AssistStructure, browser: Boolean): LockedProfileForm? {
     val tree = formTree(structure) ?: return null
     val fields = classifyProfileForm(tree.roots, browser)?.takeIf { it.isNotEmpty() } ?: return null
     val destination = profileDestination(tree.roots, browser) ?: return null
-    return LockedProfileForm(fields.entries.associate { (index, field) -> tree.ids[index] to field }, destination)
+    val ids = fields.entries.associate { (index, field) -> tree.ids[index] to field }
+    return LockedProfileForm(ids, destination, tree.listOptions(ids.keys))
 }

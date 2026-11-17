@@ -31,7 +31,8 @@ class CardAutofillTest {
         assertEquals(CardField.EXP_YEAR, field("creditCardExpirationYear"))
         assertEquals(CardField.CSC, field("cc-csc"))
         assertEquals(CardField.CSC, field("creditCardSecurityCode"))
-        assertNull("card type is not filled", field("cc-type"))
+        // The card type takes the network ("Visa"), matched to the form's own entries.
+        assertEquals(CardField.TYPE, field("cc-type"))
     }
 
     @Test fun namesAndPlaceholdersAreReadMostSpecificFirst() {
@@ -144,7 +145,17 @@ class CardAutofillTest {
     }
 
     @Test fun aPasswordBesideCardFieldsMeansSomethingElse() {
+        // A bank sign-in with a card number and a passcode: not a payment.
         assertNull(cardForm(webPage(htmlForm(htmlInput(0, name = "cardnumber"), htmlInput(1, type = "password", name = "password")))))
+    }
+
+    @Test fun aSignUpAndPayFormStillFillsTheCard() {
+        // roboform.com/filling-test-all-fields: a user ID and password in the same form as a full card.
+        val form = cardForm(webPage(htmlForm(htmlInput(0, name = "30_user_id"), htmlInput(1, type = "password", name = "31password"),
+            htmlInput(2, name = "41ccnumber", focused = true), htmlInput(3, name = "43cvc"), htmlInput(4, name = "42ccexp_mm"))))!!
+        assertEquals(CardField.NUMBER, form.fields[2]?.kind)
+        assertEquals(CardField.CSC, form.fields[3]?.kind)
+        assertNull("the password is never a card field", form.fields[1])
     }
 
     @Test fun withTwoCardFormsOnlyTheFocusedOneCounts() {
@@ -234,6 +245,26 @@ class CardAutofillTest {
             "y" to CardFieldSpec(CardField.EXP_YEAR, options = years)), false)
         assertEquals(CardValue.Choice(8), values["m"])
         assertEquals(CardValue.Choice(3), values["y"])
+    }
+
+    @Test fun theCardTypeDropDownTakesTheNetwork() {
+        // autofill.me "credit-card-simple": <select autocomplete="cc-type"> with Visa, Master Card, American Express, Discover.
+        val types = listOf("Choose...", "Visa", "Master Card", "American Express", "Discover")
+        assertEquals(1, networkOption(types, "Visa"))
+        assertEquals(2, networkOption(types, "Mastercard"))
+        assertEquals(3, networkOption(types, "American Express"))
+        assertEquals(1, networkOption(listOf("VI", "MC", "AX"), "Mastercard"))
+        assertEquals(1, networkOption(listOf("Visa Electron", "Visa"), "Visa"))
+        assertNull("credit or debit is not a network", networkOption(listOf("Credit", "Debit"), "Visa"))
+        assertNull(networkOption(types, "RuPay"))
+        assertEquals(CardField.TYPE, cardField(listOf("cc-type"), emptyMap(), null, null))
+        assertEquals(CardField.TYPE, cardFieldByName("cardType"))
+        // The saved network first; without one, the network the number belongs to.
+        val spec = mapOf("t" to CardFieldSpec(CardField.TYPE, options = types))
+        assertEquals(CardValue.Choice(1), cardFillValues(card, spec, false)["t"])
+        assertEquals(CardValue.Choice(2), cardFillValues(CardDetails("5500000000000004", "", "", "", "Mastercard"), spec, false)["t"])
+        assertEquals(CardValue.Text("Visa"), cardFillValues(card, mapOf("t" to CardFieldSpec(CardField.TYPE)), false)["t"])
+        assertTrue(cardFieldFits(CardField.TYPE, android.view.View.AUTOFILL_TYPE_LIST))
     }
 
     @Test fun anUnreadableExpiryOrEmptyNameFillsNothingForThoseFields() {

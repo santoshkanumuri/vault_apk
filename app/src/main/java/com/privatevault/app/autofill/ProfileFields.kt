@@ -91,7 +91,21 @@ internal fun lockedProfileOfferWorthwhile(kinds: Collection<ProfileField>, login
     return distinct.size >= 2 || distinct.singleOrNull()?.let { it != ProfileField.EMAIL && it != ProfileField.PHONE } == true
 }
 
-internal fun profileFields(structure: AssistStructure, browser: Boolean): Map<AutofillId, ProfileField>? {
+internal fun profileFields(structure: AssistStructure, browser: Boolean): Map<AutofillId, ProfileField>? =
+    profileForm(structure, browser)?.fields
+
+/** A contact form's fields and, for its state or country drop-downs, their entries. */
+internal class ProfileForm(val fields: Map<AutofillId, ProfileField>, val options: Map<AutofillId, List<String>>)
+
+internal fun profileForm(structure: AssistStructure, browser: Boolean): ProfileForm? {
     val tree = formTree(structure) ?: return null
-    return classifyProfileForm(tree.roots, browser)?.entries?.associate { (index, field) -> tree.ids[index] to field }
+    val fields = classifyProfileForm(tree.roots, browser)?.entries?.associate { (index, field) -> tree.ids[index] to field } ?: return null
+    return ProfileForm(fields, tree.listOptions(fields.keys))
 }
+
+/** What a picked profile puts in each field: text, or the matching drop-down entry. Fields with no fitting entry are left out. */
+internal fun profileAutofillValues(profile: AutofillProfile, fields: Map<AutofillId, ProfileField>,
+    options: Map<AutofillId, List<String>>): Map<AutofillId, android.view.autofill.AutofillValue> =
+    profileFillValues(profile, fields).mapNotNull { (id, value) ->
+        profileAutofillValue(fields.getValue(id), value, options[id])?.let { id to it }
+    }.toMap()

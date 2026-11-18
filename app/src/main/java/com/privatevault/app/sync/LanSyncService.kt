@@ -46,6 +46,22 @@ enum class DeviceSyncPhase(val title: String) {
 }
 
 data class DeviceSyncStatus(val phase: DeviceSyncPhase, val detail: String)
+
+/**
+ * How a start request runs. Only continuous Auto sync is a foreground service with a notification (Android
+ * requires one). A one-time pass (Sync now, or opening Nuvori) while Auto sync is paused runs as a plain
+ * service while Nuvori is on screen, so it shows no notification and leaves none behind.
+ */
+internal enum class SyncRun { STOP, ONE_PASS, AUTO }
+
+internal fun syncRun(action: String?, paused: Boolean, notificationsOn: Boolean): SyncRun {
+    val oneTime = action == LanSyncService.SYNC_NOW || action == LanSyncService.SYNC_ON_OPEN
+    return when {
+        oneTime && (paused || !notificationsOn) -> SyncRun.ONE_PASS
+        paused -> SyncRun.STOP
+        else -> SyncRun.AUTO
+    }
+}
 data class DevicePeerStatus(val phase: DeviceSyncPhase, val detail: String)
 
 /** Owns only transport keys and ciphertext. Opening the vault is the UI's responsibility. */
@@ -59,9 +75,8 @@ class LanSyncService : Service() {
     private val discovered = ConcurrentHashMap<String, NsdServiceInfo>()
     private val lastAuthenticated = ConcurrentHashMap<String, Long>()
     private val exchange = Mutex()
-    private lateinit var notificationManager: NotificationManager
-    @Volatile private var pairedCount = 0
-    private var lastNotificationText = ""
+    /** True after [startForeground]: only continuous Auto sync gets there. */
+    private var foreground = false
     private lateinit var connectivity: ConnectivityManager
     private lateinit var nsd: NsdManager
     @Volatile private var discoveryNeedsRestart = true
@@ -92,10 +107,6 @@ class LanSyncService : Service() {
         activeInstance = this
         mutablePeerStatus.value = emptyMap()
         mutableNearbyCount.value = 0
-        notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager.createNotificationChannel(NotificationChannel(CHANNEL, "Device sync", NotificationManager.IMPORTANCE_LOW))
-        notificationManager.cancel(PAUSED_NOTIFICATION_ID)
-        startForeground(NOTIFICATION_ID, syncNotification())
         setStatus(DeviceSyncPhase.WAITING, "Connect both devices to the same Wi-Fi network.")
         connectivity = getSystemService(ConnectivityManager::class.java)
         nsd = getSystemService(NsdManager::class.java)
@@ -105,40 +116,50 @@ class LanSyncService : Service() {
         scope.launch { while (isActive) { listen(); delay(5_000) } }
     }
 
-    private fun syncNotification(): Notification {
-        val connected = mutablePeerStatus.value.values.count { it.phase == DeviceSyncPhase.TRANSFERRING }
-        val nearby = mutableNearbyCount.value
-        val paused = isPaused(this)
-        val action = if (paused) resumePendingIntent(this) else
-            PendingIntent.getService(this, 1, Intent(this, LanSyncService::class.java).setAction(PAUSE),
-                PendingIntent.FLAG_IMMUTABLE)
+    /**
+     * The one notification Auto sync needs. Its text never changes, so Nuvori never posts it again: a swipe on
+     * Android 14+ or a blocked channel keeps it hidden, and the Auto sync tile still shows On or Paused.
+     */
+    private fun autoSyncNotification(): Notification {
+        val pause = PendingIntent.getService(this, 1, Intent(this, LanSyncService::class.java).setAction(PAUSE),
+            PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(com.privatevault.app.R.drawable.ic_auto_sync)
-            .setContentTitle("$connected connected · $nearby nearby")
-            .setContentText("$pairedCount paired · ${mutableStatus.value.phase.title}")
-            .setContentIntent(settingsPendingIntent(this)).setOngoing(true)
+            .setContentTitle("Auto sync is on")
+            .setContentText("Checks your paired devices on Wi-Fi.")
+            .setContentIntent(settingsPendingIntent(this))
+            .setOngoing(true)
+            .setShowWhen(false)
+            .setLocalOnly(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
             .setVisibility(Notification.VISIBILITY_SECRET)
-            .addAction(Notification.Action.Builder(null, if (paused) "Resume" else "Pause", action).build())
+            .apply { if (android.os.Build.VERSION.SDK_INT >= 31)
+                setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_DEFERRED) }
+            .addAction(Notification.Action.Builder(null, "Pause", pause).build())
             .build()
     }
 
-    @Synchronized private fun updateNotification() {
-        if (activeInstance !== this || !::notificationManager.isInitialized) return
-        val connected = mutablePeerStatus.value.values.count { it.phase == DeviceSyncPhase.TRANSFERRING }
-        val text = "$connected|${mutableNearbyCount.value}|$pairedCount|${mutableStatus.value.phase}"
-        if (text == lastNotificationText) return
-        lastNotificationText = text
-        notificationManager.notify(NOTIFICATION_ID, syncNotification())
+    /** Makes this a foreground service. False when Android refuses (for example, a start from the background). */
+    private fun promote(): Boolean {
+        if (foreground) return true
+        foreground = runCatching {
+            createChannel(this)
+            startForeground(NOTIFICATION_ID, autoSyncNotification())
+        }.isSuccess
+        return foreground
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A startForegroundService() call must reach startForeground(), even when this start then stops.
+        // RESUME comes from a 2.2.10 paused notification that can still be in the shade after the update.
+        if (intent?.getBooleanExtra(EXTRA_FOREGROUND, false) == true || intent?.action == RESUME ||
+            (intent == null && !isPaused(this))) promote()
         if (intent?.action == PAUSE) {
             pause(this)
             return START_NOT_STICKY
         }
         if (intent?.action == RESUME) {
             allowFutureSync(this)
-            notificationManager.cancel(PAUSED_NOTIFICATION_ID)
         }
         val paused = getSharedPreferences(PREFERENCES, MODE_PRIVATE).getBoolean("paused", false)
         if (paused && intent?.action != SYNC_NOW && intent?.action != SYNC_ON_OPEN) {
@@ -150,9 +171,7 @@ class LanSyncService : Service() {
             ?.mapTo(hashSetOf()) { it.deviceId }.orEmpty()
         val activeMembers = activeIds.size
         val localIsActive = mirror?.localDeviceId in activeIds
-        pairedCount = if (localIsActive) (activeMembers - 1).coerceAtLeast(0) else 0
         mutablePeerStatus.update { states -> states.filterKeys { it in activeIds } }
-        updateNotification()
         val membershipWork = runCatching { store(this).hasMembershipWork() }.getOrDefault(false)
         if ((!localIsActive || activeMembers < 2) && !membershipWork) {
             setStatus(DeviceSyncPhase.OFF, if (mirror != null && !localIsActive)
@@ -166,8 +185,12 @@ class LanSyncService : Service() {
             manualStop?.cancel()
         }
         val opened = intent?.action == SYNC_ON_OPEN
-        if ((intent?.action == SYNC_NOW || opened) &&
-            (paused || !getSystemService(NotificationManager::class.java).areNotificationsEnabled())) {
+        val run = syncRun(intent?.action, paused, notificationsOn(this))
+        if (run == SyncRun.AUTO && !promote()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (run == SyncRun.ONE_PASS) {
             // A Sync now during a quiet pass makes it a normal one, with its messages.
             quietAttempt = opened && (!manualAttempt || quietAttempt)
             manualAttempt = true
@@ -199,11 +222,13 @@ class LanSyncService : Service() {
             val mirror = requireNotNull(store(this).snapshot())
             val listener = openSyncListener(syncPort(mirror.vaultId))
             server = listener
-            multicastLock = getSystemService(WifiManager::class.java)
-                .createMulticastLock("nuvori-sync-discovery").apply {
+            // A device without Wi-Fi has no WifiManager; discovery over Ethernet needs no multicast lock.
+            multicastLock = runCatching {
+                getSystemService(WifiManager::class.java)?.createMulticastLock("nuvori-sync-discovery")?.apply {
                     setReferenceCounted(false)
                     acquire()
                 }
+            }.getOrNull()
             setStatus(DeviceSyncPhase.SEARCHING, "Checking nearby Nuvori devices on Wi-Fi.")
             discoveryNeedsRestart = true
             coroutineScope {
@@ -503,7 +528,7 @@ class LanSyncService : Service() {
                     .apply { setReferenceCounted(false); acquire(TRANSFER_LOCK_MS) }
             }.getOrNull()
             wifi = runCatching {
-                getSystemService(WifiManager::class.java)
+                getSystemService(WifiManager::class.java)!!
                     .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "nuvori:sync-transfer")
                     .apply { setReferenceCounted(false); acquire() }
             }.getOrNull()
@@ -600,7 +625,6 @@ class LanSyncService : Service() {
         server?.close()
         connections.forEach { runCatching { it.close() } }
         if (activeInstance === this) activeInstance = null
-        if (isPaused(this)) postPausedNotification(this)
         super.onDestroy()
     }
 
@@ -617,20 +641,17 @@ class LanSyncService : Service() {
         if (activeInstance !== this) return
         if (phase != DeviceSyncPhase.PAUSED && isPaused(this) && !manualAttempt) return
         mutableStatus.value = DeviceSyncStatus(phase, detail)
-        updateNotification()
     }
 
     private fun setPeerStatus(deviceId: String, phase: DeviceSyncPhase, detail: String) {
         if (activeInstance !== this) return
         if (isPaused(this) && !manualAttempt) return
         mutablePeerStatus.update { it + (deviceId to DevicePeerStatus(phase, detail)) }
-        updateNotification()
     }
 
     private fun setNearbyCount(count: Int) {
         if (activeInstance !== this) return
         mutableNearbyCount.value = count
-        updateNotification()
     }
 
     private fun clearConnectedPeers(detail: String) {
@@ -639,7 +660,6 @@ class LanSyncService : Service() {
             if (state.phase != DeviceSyncPhase.ATTENTION)
                 DevicePeerStatus(DeviceSyncPhase.WAITING, detail) else state
         } }
-        updateNotification()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -658,13 +678,15 @@ class LanSyncService : Service() {
         private const val TYPE = "_nuvori-sync._tcp."
         private const val PAUSE = "com.privatevault.app.PAUSE_SYNC"
         private const val RESUME = "com.privatevault.app.RESUME_SYNC"
-        private const val SYNC_NOW = "com.privatevault.app.SYNC_NOW"
-        private const val SYNC_ON_OPEN = "com.privatevault.app.SYNC_ON_OPEN"
+        internal const val SYNC_NOW = "com.privatevault.app.SYNC_NOW"
+        internal const val SYNC_ON_OPEN = "com.privatevault.app.SYNC_ON_OPEN"
+        private const val EXTRA_FOREGROUND = "com.privatevault.app.SYNC_FOREGROUND"
         /** How long a quiet pass on opening looks for a device before it stops. */
         private const val QUIET_ATTEMPT_MS = 20_000L
         private const val PREFERENCES = "sync-service"
         private const val NOTIFICATION_ID = 410
-        private const val PAUSED_NOTIFICATION_ID = 411
+        /** The "Device sync paused" notification of 2.2.10 and older. Nuvori no longer posts it. */
+        private const val LEGACY_PAUSED_NOTIFICATION_ID = 411
 
         private fun settingsPendingIntent(context: Context): PendingIntent = PendingIntent.getActivity(
             context, 0, Intent(context, MainActivity::class.java)
@@ -672,27 +694,31 @@ class LanSyncService : Service() {
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        private fun resumePendingIntent(context: Context): PendingIntent = PendingIntent.getForegroundService(
-            context, 2, Intent(context, LanSyncService::class.java).setAction(RESUME),
-            PendingIntent.FLAG_IMMUTABLE)
+        internal const val CHANNEL_ID = CHANNEL
 
-        private fun postPausedNotification(context: Context) {
-            val manager = context.getSystemService(NotificationManager::class.java)
-            val mirror = runCatching { store(context).snapshot() }.getOrNull()
-            val active = mirror?.members?.filter { it.status == MemberStatus.ACTIVE.name }.orEmpty()
-            if (active.size < 2 || active.none { it.deviceId == mirror?.localDeviceId }) {
-                manager.cancel(PAUSED_NOTIFICATION_ID)
-                return
-            }
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Device sync", NotificationManager.IMPORTANCE_LOW))
-            manager.notify(PAUSED_NOTIFICATION_ID, Notification.Builder(context, CHANNEL)
-                .setSmallIcon(com.privatevault.app.R.drawable.ic_auto_sync)
-                .setContentTitle("Device sync paused")
-                .setContentText("Automatic checks are off")
-                .setContentIntent(settingsPendingIntent(context))
-                .setVisibility(Notification.VISIBILITY_SECRET)
-                .addAction(Notification.Action.Builder(null, "Resume", resumePendingIntent(context)).build())
-                .build())
+        /** Low importance: no sound, no pop-up. Android raises a minimum-importance foreground channel to low. */
+        internal fun createChannel(context: Context) {
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL, "Auto sync", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "Shows while Auto sync runs. Android needs it to keep sync running in the background."
+                    setShowBadge(false)
+                    lockscreenVisibility = Notification.VISIBILITY_SECRET
+                })
+        }
+
+        /** Removes the "Device sync paused" notification that older versions left in the shade. */
+        fun clearLegacyNotifications(context: Context) {
+            runCatching { context.getSystemService(NotificationManager::class.java).cancel(LEGACY_PAUSED_NOTIFICATION_ID) }
+        }
+
+        private fun notificationsOn(context: Context): Boolean =
+            context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
+
+        /** Starts the service the way [syncRun] says it runs: a one-time pass never becomes a foreground service. */
+        private fun launch(context: Context, action: String? = null) {
+            val intent = Intent(context, LanSyncService::class.java).setAction(action)
+            if (syncRun(action, isPaused(context), notificationsOn(context)) == SyncRun.ONE_PASS) context.startService(intent)
+            else context.startForegroundService(intent.putExtra(EXTRA_FOREGROUND, true))
         }
 
         val SYNC_INTERVALS = listOf(30_000L, 60_000L, 300_000L, 900_000L)
@@ -701,8 +727,7 @@ class LanSyncService : Service() {
         fun setSyncInterval(context: Context, interval: Long) {
             require(interval in SYNC_INTERVALS)
             context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putLong("interval_ms", interval).apply()
-            if (!context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).getBoolean("paused", false))
-                context.startForegroundService(Intent(context, LanSyncService::class.java))
+            if (!context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).getBoolean("paused", false)) launch(context)
         }
         private val mutableStatus = MutableStateFlow(DeviceSyncStatus(DeviceSyncPhase.OFF,
             "Open Nuvori and resume automatic sync to check paired devices."))
@@ -749,12 +774,8 @@ class LanSyncService : Service() {
         }
         fun start(context: Context, resume: Boolean = false) {
             val preferences = context.getSharedPreferences(PREFERENCES, MODE_PRIVATE)
-            if (resume) {
-                preferences.edit().putBoolean("paused", false).apply()
-                context.getSystemService(NotificationManager::class.java).cancel(PAUSED_NOTIFICATION_ID)
-            }
-            if (!preferences.getBoolean("paused", false))
-                context.startForegroundService(Intent(context, LanSyncService::class.java))
+            if (resume) preferences.edit().putBoolean("paused", false).apply()
+            if (!preferences.getBoolean("paused", false)) launch(context)
         }
 
         fun pause(context: Context) {
@@ -766,7 +787,6 @@ class LanSyncService : Service() {
                 it.stopForeground(Service.STOP_FOREGROUND_REMOVE)
             }
             context.stopService(Intent(context, LanSyncService::class.java))
-            postPausedNotification(context)
         }
 
         fun isPaused(context: Context): Boolean =
@@ -774,11 +794,6 @@ class LanSyncService : Service() {
 
         fun allowFutureSync(context: Context) {
             context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putBoolean("paused", false).apply()
-            context.getSystemService(NotificationManager::class.java).cancel(PAUSED_NOTIFICATION_ID)
-        }
-
-        fun refreshPausedNotification(context: Context) {
-            if (isPaused(context)) postPausedNotification(context)
         }
 
         /**
@@ -795,13 +810,13 @@ class LanSyncService : Service() {
                 if (mirror.localDeviceId !in active || active.size < 2) return@Thread
                 val running = activeInstance
                 if (running != null && !isPaused(app)) running.signals.trySend(Unit)
-                else runCatching { app.startForegroundService(Intent(app, LanSyncService::class.java).setAction(SYNC_ON_OPEN)) }
+                else runCatching { launch(app, SYNC_ON_OPEN) }
             }.start()
         }
 
         fun syncNow(context: Context) {
             CloudSyncRunner.request(context)
-            context.startForegroundService(Intent(context, LanSyncService::class.java).setAction(SYNC_NOW))
+            launch(context, SYNC_NOW)
         }
     }
 }

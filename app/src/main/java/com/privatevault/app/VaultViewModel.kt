@@ -1854,7 +1854,6 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             }
         } finally {
             if (!wasPaused) com.privatevault.app.sync.LanSyncService.allowFutureSync(getApplication())
-            else com.privatevault.app.sync.LanSyncService.refreshPausedNotification(getApplication())
         }
         if (deviceId == null && !wasPaused) runCatching { com.privatevault.app.sync.LanSyncService.start(getApplication()) }
         _securitySettings.value = requireNotNull(dao().settings())

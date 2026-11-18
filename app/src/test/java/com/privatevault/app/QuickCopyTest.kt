@@ -70,6 +70,23 @@ class QuickCopyTest {
         assertNull(store.current)
     }
 
+    @Test fun sessionIsDoneWhenEveryNotificationFieldIsCopied() {
+        val store = QuickCopyStore { 0L }
+        val session = store.start("Visa", quickCopyValues(card, emptyList()), QuickCopySession.DURATION_MS)
+        assertFalse(store.markCopied(session, QuickField.CARD_NUMBER))
+        assertFalse(store.markCopied(session, QuickField.EXPIRY))
+        assertFalse(store.markCopied(session, QuickField.EXPIRY))
+        // The name is not in the notification, so it never holds a session open.
+        assertTrue(store.markCopied(session, QuickField.CVV))
+        val loginSession = store.start("Mail", quickCopyValues(login, listOf(login)), QuickCopySession.DURATION_MS)
+        assertFalse(store.markCopied(loginSession, QuickField.PASSWORD))
+        assertTrue(store.markCopied(loginSession, QuickField.USERNAME))
+    }
+
+    @Test fun notificationLastsTwoMinutes() {
+        assertEquals(120_000L, QuickCopySession.DURATION_MS)
+    }
+
     @Test fun searchNeverMatchesSecrets() {
         val all = listOf(login, code, card, question)
         assertEquals(listOf(login), quickCopyMatches(all, QuickCategory.PASSWORDS, "example"))

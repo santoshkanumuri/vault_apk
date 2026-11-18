@@ -95,7 +95,9 @@ internal fun notificationFields(fields: Collection<QuickField>): List<QuickField
  * for tests. One session at a time; a new one replaces the old one.
  */
 internal class QuickCopyStore(private val clock: () -> Long) {
-    class Session(val token: String, val title: String, val values: Map<QuickField, QuickValue>, val expiresAt: Long)
+    class Session(val token: String, val title: String, val values: Map<QuickField, QuickValue>, val expiresAt: Long) {
+        internal val copied = mutableSetOf<QuickField>()
+    }
 
     var current: Session? = null
         private set
@@ -108,6 +110,15 @@ internal class QuickCopyStore(private val clock: () -> Long) {
         val session = current ?: return null
         if (clock() >= session.expiresAt) { current = null; return null }
         return session.takeIf { token != null && it.token == token }
+    }
+
+    /**
+     * Records a copy. True when every field the notification offers is now copied, so the session is done.
+     * A field the notification can't show (a card name, see [notificationFields]) doesn't count.
+     */
+    fun markCopied(session: Session, field: QuickField): Boolean {
+        session.copied += field
+        return session.copied.containsAll(notificationFields(session.values.keys))
     }
 
     fun remainingMs(session: Session): Long = (session.expiresAt - clock()).coerceAtLeast(0)
@@ -141,10 +152,11 @@ internal fun copySensitive(context: Context, label: String, value: String) {
  * [DURATION_MS], so a payment or sign-in page needs no second unlock. Values live in process memory only; the
  * notification carries a random token and a field name, never a value. The notification is hidden on the lock
  * screen, its actions need an unlocked device (Android 12+), and it never goes to a watch. The session ends after
- * [DURATION_MS], when the screen turns off, when the notification is swiped away, or on a manual lock.
+ * [DURATION_MS], after every field in it is copied, when the screen turns off, when the notification is swiped
+ * away, or on a manual lock.
  */
 internal object QuickCopySession {
-    const val DURATION_MS = 180_000L
+    const val DURATION_MS = 120_000L
     private const val CHANNEL = "quick_copy"
     private const val NOTIFICATION_ID = 7301
     internal const val ACTION_COPY = "com.privatevault.app.quickcopy.COPY"
@@ -171,6 +183,7 @@ internal object QuickCopySession {
         if (values.size < 2 || !canNotify(app)) return false
         end(app)
         val session = store.start(title, values, DURATION_MS)
+        store.markCopied(session, copied)
         if (!post(app, session, copied)) { end(app); return false }
         handler.postDelayed({ end(app, session.token) }, DURATION_MS)
         val receiver = object : BroadcastReceiver() {
@@ -180,6 +193,9 @@ internal object QuickCopySession {
         screenOff = receiver
         return true
     }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun currentTokenForTest(): String? = store.current?.token
 
     /** A notification action: copies one field of the current session. */
     @MainThread
@@ -199,6 +215,12 @@ internal object QuickCopySession {
             return
         }
         copySensitive(app, field.clipLabel, value)
+        if (store.markCopied(session, field)) {
+            // Every field is copied: nothing is left to offer, so the notification goes away now.
+            end(app, session.token)
+            Toast.makeText(app, "${field.done}. All fields copied.", Toast.LENGTH_SHORT).show()
+            return
+        }
         Toast.makeText(app, field.done, Toast.LENGTH_SHORT).show()
         post(app, session, field)
     }
@@ -223,7 +245,7 @@ internal object QuickCopySession {
         // Default importance, but no sound or vibration: a low-importance notification lands in Android's collapsed
         // "Silent" group, where the copy buttons need an extra tap. Default never pops up over the page (only high does).
         notifications.createNotificationChannel(NotificationChannel(CHANNEL, "Quick copy", NotificationManager.IMPORTANCE_DEFAULT).apply {
-            description = "Copy the other fields of the item you picked in Quick copy, for 3 minutes."
+            description = "Copy the other fields of the item you picked in Quick copy, for 2 minutes."
             lockscreenVisibility = NotificationCompat.VISIBILITY_SECRET
             setSound(null, null)
             enableVibration(false)

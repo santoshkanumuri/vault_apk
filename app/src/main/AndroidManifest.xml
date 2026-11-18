@@ -24,6 +24,8 @@
     </queries>
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
+    <!-- CHANGE_WIFI_MULTICAST_STATE implies Wi-Fi is required. Sync also works over Ethernet, and the vault works without sync. -->
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
     <application
         android:name=".VaultApplication"

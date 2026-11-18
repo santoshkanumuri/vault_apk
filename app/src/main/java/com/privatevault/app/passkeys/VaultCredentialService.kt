@@ -13,6 +13,9 @@ import androidx.credentials.provider.*
 import com.privatevault.app.VaultCodesActivity
 import com.privatevault.app.security.appSigningIdentity
 import com.privatevault.app.security.trustedBrowser
+import com.privatevault.app.security.appSigningHistory
+import com.privatevault.app.security.trustedPasskeyCaller
+import com.privatevault.app.security.trustedPasskeyRelay
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.Base64
@@ -22,7 +25,7 @@ import java.util.UUID
 internal data class CredentialDestination(val packageName: String, val identity: String, val origin: String?)
 
 @RequiresApi(34)
-internal fun credentialDestination(context: Context, info: CallingAppInfo): CredentialDestination {
+internal fun credentialDestination(context: Context, info: CallingAppInfo, passkey: Boolean = false): CredentialDestination {
     val identity = requireNotNull(appSigningIdentity(context, info.packageName)) { "Nuvori can't read this app's signing certificate" }
     if (!info.isOriginPopulated()) {
         val signers = info.signingInfo.apkContentsSigners
@@ -33,11 +36,20 @@ internal fun credentialDestination(context: Context, info: CallingAppInfo): Cred
         }
         return CredentialDestination(info.packageName, identity, null)
     }
-    require(trustedBrowser(info.packageName, identity)) { "This browser isn't on Nuvori's list of verified browsers" }
-    val fingerprint = identity.chunked(2).joinToString(":").uppercase(java.util.Locale.ROOT)
+    // Passkeys also accept Google Play services, which relays a sign-in from another device (QR code).
+    val history = if (passkey) appSigningHistory(context, info.packageName).orEmpty() else emptyList()
+    require(if (passkey) trustedPasskeyCaller(info.packageName, identity, history) else trustedBrowser(info.packageName, identity)) {
+        "This browser isn't on Nuvori's list of verified browsers"
+    }
+    // A relay can be listed under an earlier key in its signing history; name that key too.
+    val fingerprints = (listOf(identity) + history.filter { trustedPasskeyRelay(info.packageName, listOf(it)) }).distinct()
+    val signatures = org.json.JSONArray()
+    fingerprints.forEach {
+        signatures.put(JSONObject().put("build", "release")
+            .put("cert_fingerprint_sha256", it.chunked(2).joinToString(":").uppercase(java.util.Locale.ROOT)))
+    }
     val allowlist = JSONObject().put("apps", org.json.JSONArray().put(JSONObject().put("type", "android").put("info",
-        JSONObject().put("package_name", info.packageName).put("signatures", org.json.JSONArray().put(
-            JSONObject().put("build", "release").put("cert_fingerprint_sha256", fingerprint))))))
+        JSONObject().put("package_name", info.packageName).put("signatures", signatures))))
     val origin = requireNotNull(info.getOrigin(allowlist.toString())) { "The browser didn't say which website asked" }
     val canonical = requireNotNull(com.privatevault.app.security.httpsOrigin(origin)) { "The website isn't an HTTPS site" }
     require(origin == canonical || origin == "$canonical/") { "The website address isn't a plain HTTPS origin" }
@@ -46,7 +58,7 @@ internal fun credentialDestination(context: Context, info: CallingAppInfo): Cred
 
 @RequiresApi(34)
 internal fun passkeyOrigin(context: Context, info: CallingAppInfo, rpId: String): String =
-    credentialDestination(context, info).origin ?: run {
+    credentialDestination(context, info, passkey = true).origin ?: run {
         val identity = requireNotNull(appSigningIdentity(context, info.packageName))
         val hash = identity.substringBefore(',').chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         "android:apk-key-hash:${Base64.getUrlEncoder().withoutPadding().encodeToString(hash)}"

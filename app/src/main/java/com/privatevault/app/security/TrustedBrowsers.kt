@@ -58,3 +58,31 @@ internal val trustedBrowserCertificates: Map<String, Set<String>> = mapOf(
  */
 internal fun trustedBrowser(packageName: String, identity: String): Boolean =
     trustedBrowserCertificates[packageName]?.contains(identity) == true
+
+/**
+ * Google Play services signs in on another device with a passkey from this phone: the computer shows a QR code,
+ * the camera opens it, and Play services asks the passkey providers for the computer's website.
+ * Its release fingerprints come from the same Google list. Trusted for passkey requests only, never for password
+ * or form autofill.
+ */
+internal val trustedPasskeyRelayCertificates: Map<String, Set<String>> = mapOf(
+    "com.google.android.gms" to setOf(
+        "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053",
+        "d22cc500299fb22873a01a010de1c82fbe4d061119b94814dd301dab50cb7678",
+        "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83",
+        "1975b2f17177bc89a5dff31f9e64a6cae281a53dc1d1d59b1d147fe1c82afa00",
+    ),
+)
+
+/**
+ * True for a listed browser, or for Google Play services relaying a passkey request from another device.
+ * A browser must match by its current certificate. Play services rotated its key in 2020 and 2024, and Google's list
+ * names the earlier keys, so it matches when any certificate in its signing [history] is listed. Android's own
+ * allowlist check (CallingAppInfo.getOrigin) matches the history the same way.
+ */
+internal fun trustedPasskeyCaller(packageName: String, identity: String, history: List<String> = listOf(identity)): Boolean =
+    trustedBrowser(packageName, identity) || (identity in history && trustedPasskeyRelay(packageName, history))
+
+/** True when any certificate in [history] is a listed release key of the relay [packageName]. */
+internal fun trustedPasskeyRelay(packageName: String, history: List<String>): Boolean =
+    trustedPasskeyRelayCertificates[packageName]?.let { listed -> history.any { it in listed } } == true

@@ -2388,7 +2388,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             if (page == "Autofill and codes") {
                 AutofillPreference(viewModel::refreshAutofillCopy)
                 SettingsSection("Quick copy tile",
-                    description = "Copy passwords, TOTP codes, card details and security answers from Quick Settings after unlocking. After one copy, the other fields of that item stay in your notifications for 3 minutes. The tile works with any Autofill provider.") {
+                    description = "Copy passwords, TOTP codes, card details and security answers from Quick Settings after unlocking. After one copy, the other fields of that item stay in your notifications for 2 minutes. The tile works with any Autofill provider.") {
                     SettingsSecondaryButton("Add Quick copy tile", icon = Icons.Outlined.AppShortcut,
                         onClick = { requestVaultCodesTile(context) })
                 }

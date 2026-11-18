@@ -390,7 +390,7 @@ class VaultCodesActivity : FragmentActivity() {
 
     /**
      * Quick copy: copies one field and closes the picker. When the item has more fields and notifications are on,
-     * they stay in a notification for 3 minutes. The CVV follows the card picker's rule: within a minute of
+     * they stay in a notification for 2 minutes. The CVV follows the card picker's rule: within a minute of
      * unlocking it copies at once; later it needs a fresh fingerprint.
      */
     private fun copy(entry: VaultEntry, field: QuickField) {

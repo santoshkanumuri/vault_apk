@@ -89,7 +89,7 @@ internal fun ColumnScope.VaultQuickAccessContent(
         modifier = Modifier.fillMaxWidth())
     LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (category == QuickCategory.PASSWORDS || category == QuickCategory.CARDS) item(key = "hint") {
-            PickerHint(if (notificationsOn) "Tap a field to copy it. The other fields stay in your notifications for 3 minutes, so you don't need to open this again."
+            PickerHint(if (notificationsOn) "Tap a field to copy it. The other fields stay in your notifications for 2 minutes, so you don't need to open this again."
                 else "Tap a field to copy it. Turn on Nuvori notifications to copy the other fields from your notifications without opening this again.")
         }
         if (suggested.isNotEmpty() && search.isBlank()) item(key = "suggested") {

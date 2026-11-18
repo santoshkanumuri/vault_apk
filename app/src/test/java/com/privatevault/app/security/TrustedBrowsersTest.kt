@@ -97,6 +97,73 @@ class TrustedBrowsersTest {
         }
     }
 
+    @Test fun playServicesIsTrustedForPasskeysOnly() {
+        val gms = "com.google.android.gms"
+        val fingerprints = trustedPasskeyRelayCertificates.getValue(gms)
+        assertEquals(4, fingerprints.size)
+        fingerprints.forEach {
+            assertTrue(trustedPasskeyCaller(gms, it))
+            // Password and form autofill keep the browser list: Play services is not a browser.
+            assertFalse(trustedBrowser(gms, it))
+        }
+        trustedBrowserCertificates.forEach { (pkg, browserFingerprints) ->
+            browserFingerprints.forEach { assertTrue("$pkg $it", trustedPasskeyCaller(pkg, it)) }
+        }
+    }
+
+    @Test fun playServicesRejectsWrongFingerprintsAndOtherPackages() {
+        val gms = "com.google.android.gms"
+        val good = trustedPasskeyRelayCertificates.getValue(gms).first()
+        assertFalse(trustedPasskeyCaller(gms, ""))
+        assertFalse(trustedPasskeyCaller(gms, braveHash))
+        assertFalse(trustedPasskeyCaller(gms, good.uppercase()))
+        assertFalse(trustedPasskeyCaller(gms, "$good,${"1".repeat(64)}"))
+        assertFalse(trustedPasskeyCaller(gms, good.dropLast(1) + if (good.last() == '0') '1' else '0'))
+        listOf("com.google.android.gms.beta", "com.google.android.gsf", "com.example.gms", "")
+            .forEach { assertFalse(it, trustedPasskeyCaller(it, good)) }
+    }
+
+    // Play services 25.26 signing history (apksigner lineage): original key, 2020 rotation, 2024 rotation (current).
+    private val gmsOriginal = "1975b2f17177bc89a5dff31f9e64a6cae281a53dc1d1d59b1d147fe1c82afa00"
+    private val gmsRotation2020 = "d22cc500299fb22873a01a010de1c82fbe4d061119b94814dd301dab50cb7678"
+    private val gmsRotation2024 = "8fd4a0e7b8eb7c726d2dac79445b2c7931f62b7eb692f5044bdcfdfaad070a36"
+
+    @Test fun playServicesMatchesThroughItsRotatedKeyHistory() {
+        val gms = "com.google.android.gms"
+        // The current key is not in Google's list; an earlier key in its proven history is.
+        assertFalse(gmsRotation2024 in trustedPasskeyRelayCertificates.getValue(gms))
+        assertFalse(trustedPasskeyCaller(gms, gmsRotation2024))
+        assertTrue(trustedPasskeyCaller(gms, gmsRotation2024, listOf(gmsOriginal, gmsRotation2020, gmsRotation2024)))
+        assertTrue(trustedPasskeyCaller(gms, gmsRotation2024, listOf(gmsRotation2020, gmsRotation2024)))
+        // Password and form autofill still never trust Play services.
+        assertFalse(trustedBrowser(gms, gmsRotation2024))
+    }
+
+    @Test fun historyMatchingIsOnlyForTheRelayAndNeedsTheCurrentKeyInTheHistory() {
+        val gms = "com.google.android.gms"
+        // A history without a listed key, or one that doesn't contain the current key, is rejected.
+        assertFalse(trustedPasskeyCaller(gms, gmsRotation2024, listOf(gmsRotation2024)))
+        assertFalse(trustedPasskeyCaller(gms, gmsRotation2024, listOf(gmsOriginal, gmsRotation2020)))
+        assertFalse(trustedPasskeyCaller(gms, gmsRotation2024, emptyList()))
+        // Another package with Play services' history is not a relay.
+        assertFalse(trustedPasskeyCaller("com.example.fake", gmsRotation2024, listOf(gmsOriginal, gmsRotation2024)))
+        // A browser must match by its current key: a listed key earlier in its history doesn't count.
+        val other = "1".repeat(64)
+        assertFalse(trustedPasskeyCaller("com.android.chrome", other, listOf(chromeHash, other)))
+        assertTrue(trustedPasskeyCaller("com.android.chrome", chromeHash, listOf(chromeHash)))
+    }
+
+    @Test fun everyRelayEntryIsAReleaseEntryInTheSourceFile() {
+        val file = listOf(File("../docs/trusted-browsers-source.json"), File("docs/trusted-browsers-source.json"))
+            .first { it.isFile }
+        val source = parseSource(file.readText())
+        trustedPasskeyRelayCertificates.forEach { (pkg, fingerprints) ->
+            val expected = source.getValue(pkg).filter { it.first == "release" }
+                .map { it.second.replace(":", "").lowercase() }.toSet()
+            assertEquals(pkg, expected, fingerprints)
+        }
+    }
+
     /** Minimal parse of the known shape: a package_name followed by build and fingerprint pairs. */
     private fun parseSource(text: String): Map<String, List<Pair<String, String>>> {
         val result = linkedMapOf<String, MutableList<Pair<String, String>>>()

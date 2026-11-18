@@ -16,6 +16,18 @@ internal fun appSigningIdentity(context: Context, packageName: String): String? 
     certificates.map { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }.sorted().joinToString(",")
 }.getOrNull()
 
+/**
+ * SHA-256 of each certificate in the app's signing history: the current certificate and the earlier ones it rotated
+ * from. Android checks the rotation proof between them. Null for an app with more than one signer.
+ */
+internal fun appSigningHistory(context: Context, packageName: String): List<String>? = runCatching {
+    @Suppress("DEPRECATION")
+    val info = context.packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES).signingInfo
+        ?: return null
+    if (info.hasMultipleSigners()) return null
+    info.signingCertificateHistory.map { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }
+}.getOrNull()
+
 internal fun loginAuthorized(entry: VaultEntry, packageName: String, identity: String): Boolean =
     entry.type == EntryType.PASSWORD && identity.isNotBlank() &&
         entry.autofillSignatures.lineSequence().any { it == "$packageName=$identity" }

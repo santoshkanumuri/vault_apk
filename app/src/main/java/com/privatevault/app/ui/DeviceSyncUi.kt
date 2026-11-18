@@ -20,6 +20,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AppShortcut
 import androidx.compose.material.icons.outlined.LinkOff
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.QrCode
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -762,6 +763,19 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         }
         SettingsSecondaryButton("Add Auto sync tile", onClick = { requestAutoSyncTile(context) },
             icon = Icons.Outlined.AppShortcut)
+        // Android needs a notification while Auto sync runs. On Android 13+ the user can hide it: the service keeps
+        // running, Android lists Nuvori under Active apps in Quick Settings, and the tile shows On or Paused.
+        if (autoOn && !notificationDenied && android.os.Build.VERSION.SDK_INT >= 33) {
+            Text("Android shows a notification while Auto sync is on. To hide it, turn off the Auto sync notification. " +
+                "Sync keeps running, and the Auto sync tile still shows On or Paused.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SettingsSecondaryButton("Hide Auto sync notification", onClick = {
+                LanSyncService.createChannel(context)
+                runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                    .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, LanSyncService.CHANNEL_ID)) }
+            }, icon = Icons.Outlined.NotificationsOff)
+        }
         if (notificationDenied) StatusBanner(kind = StatusKind.WARNING,
             message = "Allow notifications to keep automatic sync active when Nuvori is closed.",
             actionLabel = "Allow notifications",

@@ -1161,7 +1161,7 @@ private fun CardFace(
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(entry.title, modifier = Modifier.weight(1f).padding(end = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text(entry.cardKind.label().uppercase(), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                Text(entry.cardKind.label().uppercase(), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
             }
             Column {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1175,11 +1175,11 @@ private fun CardFace(
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(Modifier.weight(1f)) {
-                        Text("CARDHOLDER", fontSize = 9.sp, color = ink, letterSpacing = .8.sp)
+                        Text("CARDHOLDER", style = MaterialTheme.typography.labelSmall, color = ink, letterSpacing = .8.sp)
                         Text(entry.secondaryValue.ifBlank { "Name on card" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("EXPIRES", fontSize = 9.sp, color = ink, letterSpacing = .8.sp)
+                        Text("EXPIRES", style = MaterialTheme.typography.labelSmall, color = ink, letterSpacing = .8.sp)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(entry.tertiaryValue.ifBlank { null }?.let(::displayExpiry) ?: "MM/YY", maxLines = 1, softWrap = false)
                             if (copy != null && entry.tertiaryValue.isNotBlank()) CardCopyAction("Copy expiry date") { copy("Expiry", entry.tertiaryValue) }
@@ -1187,7 +1187,7 @@ private fun CardFace(
                     }
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("CVV", fontSize = 9.sp, color = ink, letterSpacing = .8.sp)
+                    Text("CVV", style = MaterialTheme.typography.labelSmall, color = ink, letterSpacing = .8.sp)
                     Spacer(Modifier.width(8.dp))
                     AnimatedContent(cvvVisible, label = "cvv") { visible ->
                         Text(if (visible) entry.fourthValue.ifBlank { "—" } else "•••", fontWeight = FontWeight.SemiBold)
@@ -1215,7 +1215,8 @@ private fun CardFace(
 
 @Composable
 private fun CardCopyAction(description: String, action: () -> Unit) {
-    IconButton(onClick = action, modifier = Modifier.size(40.dp)) {
+    // No fixed size: IconButton keeps its 48dp touch target, with the icon still 16dp.
+    IconButton(onClick = action) {
         Icon(NuvoriIcons.Copy, contentDescription = description, modifier = Modifier.size(16.dp), tint = LocalContentColor.current)
     }
 }

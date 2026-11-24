@@ -101,8 +101,12 @@ internal val NuvoriMaterialShapes = Shapes(
 
 internal val ColorScheme.isLight: Boolean get() = background.luminance() > .5f
 
-/** Divider and card border color ("hairline" on Windows). */
-internal val ColorScheme.hairline: Color get() = outlineVariant
+/**
+ * Divider and card border color ("hairline" on Windows). In light mode it is 10% darker than the palette's
+ * outline variant, which measured only 1.3 to 1.6:1 against the page and left lists looking flat.
+ */
+internal val ColorScheme.hairline: Color get() =
+    if (isLight) androidx.compose.ui.graphics.lerp(outlineVariant, Color.Black, .1f) else outlineVariant
 
 /** Raised flat surface for cards and grouped lists ("surface" on Windows). */
 internal val ColorScheme.raised: Color get() = surfaceContainer

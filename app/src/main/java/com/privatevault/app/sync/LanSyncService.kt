@@ -75,6 +75,7 @@ class LanSyncService : Service() {
     private val discovered = ConcurrentHashMap<String, NsdServiceInfo>()
     private val lastAuthenticated = ConcurrentHashMap<String, Long>()
     private val exchange = Mutex()
+    private val preAuth = PreAuthLimiter()
     /** True after [startForeground]: only continuous Auto sync gets there. */
     private var foreground = false
     private lateinit var connectivity: ConnectivityManager
@@ -237,17 +238,19 @@ class LanSyncService : Service() {
                     while (isActive) {
                         val socket = try { listener.accept() } catch (_: java.net.SocketTimeoutException) { continue }
                         if (!isPrivateAddress(socket.inetAddress)) { socket.close(); continue }
-                        if (!exchange.tryLock()) {
+                        // L-06: the exchange lock is held only by proved devices (or this device's own
+                        // attempts), so a busy reply before the challenge, which every version
+                        // understands, can't be caused by a stranger.
+                        if (exchange.isLocked) {
                             socket.use {
                                 runCatching { SyncFrames(socket.getInputStream(), socket.getOutputStream())
                                     .send(MembershipWire.BUSY.toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME) }
                             }
                             continue
                         }
-                        launch {
-                            setStatus(DeviceSyncPhase.CONNECTING, "A device answered. Checking that it belongs to your vault.")
-                            try { transfer(socket, true) } finally { exchange.unlock() }
-                        }
+                        val source = socket.inetAddress.hostAddress.orEmpty()
+                        if (!preAuth.tryStart(source, android.os.SystemClock.elapsedRealtime())) { socket.close(); continue }
+                        launch { serveIncoming(socket, source) }
                     }
                 }
                 while (isActive) {
@@ -399,16 +402,58 @@ class LanSyncService : Service() {
         }
     }
 
-    private fun transfer(socket: Socket, server: Boolean): Boolean {
+    /**
+     * Security review L-06: an incoming connection proves group membership before it waits for the
+     * exchange lock, and within [PRE_AUTH_DEADLINE_MS] however slowly it sends, so a device on the
+     * Wi-Fi that isn't in the group can't hold up sync. [source] holds a slot in [preAuth].
+     */
+    private suspend fun serveIncoming(socket: Socket, source: String) {
+        connections.add(socket)
+        val checked = try {
+            socket.soTimeout = PRE_AUTH_TIMEOUT_MS
+            val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
+            val deadline = closeUnlessProved(socket)
+            try { frames to LanSyncExchange.checkClient(frames, store(this)) } finally { deadline.cancel() }
+        } catch (failure: Exception) {
+            preAuth.finish(source, false, android.os.SystemClock.elapsedRealtime())
+            connections.remove(socket); runCatching { socket.close() }
+            if (failure is CancellationException) throw failure
+            return
+        }
+        preAuth.finish(source, true, android.os.SystemClock.elapsedRealtime())
+        val (frames, first) = checked
+        // A proved device waits briefly for another exchange to finish, then gets a busy reply.
+        if (withTimeoutOrNull(LOCK_WAIT_MS) { exchange.lock() } == null) {
+            runCatching { frames.send(MembershipWire.BUSY.toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME) }
+            connections.remove(socket); runCatching { socket.close() }
+            return
+        }
+        try {
+            setStatus(DeviceSyncPhase.CONNECTING, "A device answered. Checking that it belongs to your vault.")
+            transfer(socket, true, frames, first)
+        } finally { exchange.unlock() }
+    }
+
+    /** Closes [socket] unless it is cancelled within [PRE_AUTH_DEADLINE_MS] (L-06). */
+    private fun closeUnlessProved(socket: Socket): Job = scope.launch {
+        delay(PRE_AUTH_DEADLINE_MS)
+        runCatching { socket.close() }
+    }
+
+    private fun transfer(socket: Socket, server: Boolean, frames: SyncFrames? = null,
+        checked: LanSyncExchange.ClientFirst? = null): Boolean {
         connections.add(socket)
         var peerId: String? = null
         val locks = TransferLocks()
+        // L-06: an exchange that hasn't proved membership within the deadline is closed.
+        val deadline = closeUnlessProved(socket)
         try {
             socket.use {
                 // Until the peer proves group membership, keep the exchange lock only briefly.
                 socket.soTimeout = PRE_AUTH_TIMEOUT_MS
-                LanSyncExchange.run(SyncFrames(socket.getInputStream(), socket.getOutputStream()),
-                    store(this), server) { authenticatedId, platform ->
+                LanSyncExchange.run(frames ?: SyncFrames(socket.getInputStream(), socket.getOutputStream()),
+                    store(this), server, checked) { authenticatedId, platform ->
+                    deadline.cancel()
                     socket.soTimeout = SESSION_TIMEOUT_MS
                     locks.acquire()
                     runCatching { store(this).recordPeerPlatform(authenticatedId, platform) }
@@ -472,7 +517,7 @@ class LanSyncService : Service() {
             setStatus(DeviceSyncPhase.ATTENTION, "The connection closed before the check finished. Retrying on Wi-Fi.")
             peerId?.let { setPeerStatus(it, DeviceSyncPhase.ATTENTION, "Connection closed before the check finished.") }
         }
-        finally { connections.remove(socket); locks.release() }
+        finally { deadline.cancel(); connections.remove(socket); locks.release() }
         return false
     }
 
@@ -667,6 +712,10 @@ class LanSyncService : Service() {
     companion object {
         internal fun syncPort(vaultId: String): Int = 20_000 + Math.floorMod(vaultId.hashCode(), 30_000)
         private const val PRE_AUTH_TIMEOUT_MS = 15_000
+        /** L-06: the whole check before a device proves membership, however slowly it sends. */
+        private const val PRE_AUTH_DEADLINE_MS = 20_000L
+        /** L-06: how long a proved device waits for another exchange; below the peers' 15 s read timeout. */
+        private const val LOCK_WAIT_MS = 8_000L
         private const val SESSION_TIMEOUT_MS = 30_000
         private const val FOLLOW_UP_DEBOUNCE_MS = 750L
         private const val LEAVE_RETRY_MS = 60_000L

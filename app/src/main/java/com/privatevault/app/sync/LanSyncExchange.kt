@@ -32,8 +32,38 @@ internal object LanSyncExchange {
     private val encoder = Base64.getUrlEncoder().withoutPadding()
     private val removalNotices = NoticeRateLimiter()
 
-    /** [onAuthenticated] receives the peer's device ID and its announced platform ("android" or "windows"). */
-    fun run(frames: SyncFrames, store: LockedSyncStore, server: Boolean,
+    /**
+     * Security review L-06: a connecting device's first message, read by the server before it takes
+     * the exchange lock. [checkClient] made it; [run] finishes the exchange under the lock.
+     */
+    class ClientFirst internal constructor(internal val challenge: ByteArray, internal val frame: ByteArray)
+
+    /**
+     * Server side, first step: sends the challenge and reads the reply, without any lock and without
+     * writing anything. Returns only when the reply could come from a device that knows one of this
+     * group's secrets (a current, future, retained or stranded epoch) or is a leave request, which
+     * [run] verifies in full. Anything else throws, so a device on the network that isn't in the
+     * group never reaches the exchange lock.
+     */
+    fun checkClient(frames: SyncFrames, store: LockedSyncStore): ClientFirst {
+        val mirror = requireNotNull(store.snapshot())
+        val challenge = ByteArray(32).also(SecureRandom()::nextBytes)
+        frames.send(challenge, MembershipWire.CONTROL_FRAME)
+        val frame = frames.receive(MembershipWire.CONTROL_FRAME)
+        if (MembershipWire.parseLeaveFrame(frame) != null) return ClientFirst(challenge, frame)
+        val supplied = Base64.getUrlDecoder().decode(frame.toString(Charsets.US_ASCII))
+        val known = transportSecretFor(supplied, challenge, store, mirror) != null ||
+            store.retainedEpochs().any { MembershipWire.proofMatches(supplied, store.transportSecret(it), challenge) } ||
+            store.strandedEpochFor(supplied, challenge) != null
+        require(known) { "Device is not a group member" }
+        return ClientFirst(challenge, frame)
+    }
+
+    /**
+     * [onAuthenticated] receives the peer's device ID and its announced platform ("android" or "windows").
+     * A server passes the [checked] first message from [checkClient], or none to read it here.
+     */
+    fun run(frames: SyncFrames, store: LockedSyncStore, server: Boolean, checked: ClientFirst? = null,
         onAuthenticated: (String, String) -> Unit = { _, _ -> }) {
         val mirror = requireNotNull(store.snapshot())
         val currentSecret = mirror.epochSecret(mirror.keyEpoch)
@@ -41,9 +71,9 @@ internal object LanSyncExchange {
         val challenge: ByteArray
         val secret: String
         if (server) {
-            challenge = ByteArray(32).also(SecureRandom()::nextBytes)
-            frames.send(challenge, MembershipWire.CONTROL_FRAME)
-            val frame = frames.receive(MembershipWire.CONTROL_FRAME)
+            val first = checked ?: checkClient(frames, store)
+            challenge = first.challenge
+            val frame = first.frame
             MembershipWire.parseLeaveFrame(frame)?.let { leave ->
                 throw MembershipMessageServed(answerLeave(frames, store, leave, challenge))
             }
@@ -81,7 +111,11 @@ internal object LanSyncExchange {
             require(challenge.size == 32)
             frames.send(encoder.encodeToString(TransportEpochs.probeProof(secret, challenge))
                 .toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME)
-            val reply = frames.receive(MembershipWire.CONTROL_FRAME).toString(Charsets.US_ASCII)
+            val replyBytes = frames.receive(MembershipWire.CONTROL_FRAME)
+            // L-06: a server checks the proof before it waits for its exchange lock, so it may
+            // answer BUSY here instead of before the challenge.
+            if (MembershipWire.isBusyReply(replyBytes)) throw PeerBusy()
+            val reply = replyBytes.toString(Charsets.US_ASCII)
             if (reply == MembershipWire.REMOVED) receiveRemovalNotice(frames, store, mirror)
             require(reply == MembershipWire.OK) { "Device is not a group member" }
         }

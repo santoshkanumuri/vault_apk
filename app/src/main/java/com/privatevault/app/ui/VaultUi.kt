@@ -81,7 +81,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -106,15 +105,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberBottomSheetScaffoldState
-import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material.icons.Icons
@@ -1433,15 +1429,8 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
         if (androidx.core.content.ContextCompat.checkSelfPermission(cameraContext, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) launchCamera()
         else cameraPermission.launch(android.Manifest.permission.CAMERA)
     }
-    val actionSheet = rememberStandardBottomSheetState(initialValue = SheetValue.PartiallyExpanded, skipHiddenState = true)
-    val actionScaffold = rememberBottomSheetScaffoldState(actionSheet)
-    val actionScope = rememberCoroutineScope()
-    val actionSheetExpanded = actionSheet.currentValue == SheetValue.Expanded
+    // Phone and wide layouts share one action model: Edit in the top bar, everything else in its overflow menu.
     var actionsMenuExpanded by remember(item.entry.id) { mutableStateOf(false) }
-    val toggleActions: () -> Unit = {
-        if (widePane) actionsMenuExpanded = !actionsMenuExpanded
-        else actionScope.launch { if (actionSheetExpanded) actionSheet.partialExpand() else actionSheet.expand() }
-    }
     val detailContent: @Composable (PaddingValues) -> Unit = { contentPadding ->
     Column(Modifier.fillMaxSize().padding(contentPadding).background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1455,19 +1444,20 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            IconButton(onClick = edit, modifier = Modifier.size(48.dp)) {
+                Icon(NuvoriIcons.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Box {
-                IconButton(onClick = toggleActions, modifier = Modifier.size(48.dp)) {
+                IconButton(onClick = { actionsMenuExpanded = !actionsMenuExpanded }, modifier = Modifier.size(48.dp)) {
                     Icon(NuvoriIcons.More,
-                        contentDescription = if (if (widePane) actionsMenuExpanded else actionSheetExpanded) "Close entry actions" else "Open entry actions",
+                        contentDescription = if (actionsMenuExpanded) "Close entry actions" else "Open entry actions",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (widePane) DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
+                DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
                     DropdownMenuItem(text = { Text("Add photo") }, onClick = { actionsMenuExpanded = false; addPhoto() },
                         leadingIcon = { Icon(NuvoriIcons.AddPhoto, null, Modifier.size(18.dp)) })
                     DropdownMenuItem(text = { Text("Camera") }, onClick = { actionsMenuExpanded = false; openCamera() },
                         leadingIcon = { Icon(NuvoriIcons.Camera, null, Modifier.size(18.dp)) })
-                    DropdownMenuItem(text = { Text("Edit") }, onClick = { actionsMenuExpanded = false; edit() },
-                        leadingIcon = { Icon(NuvoriIcons.Edit, null, Modifier.size(18.dp)) })
                     if (item.entry.type != EntryType.AUTHENTICATOR) DropdownMenuItem(text = { Text("Duplicate") },
                         onClick = { actionsMenuExpanded = false; viewModel.duplicateEntry(item); close() },
                         leadingIcon = { Icon(NuvoriIcons.Duplicate, null, Modifier.size(18.dp)) })
@@ -1584,59 +1574,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
         }
     }
     }
-    if (widePane) {
-        Box(modifier.background(MaterialTheme.colorScheme.background)) { detailContent(PaddingValues()) }
-    } else BottomSheetScaffold(
-        modifier = modifier.background(MaterialTheme.colorScheme.background),
-        scaffoldState = actionScaffold,
-        sheetPeekHeight = 56.dp,
-        sheetContainerColor = MaterialTheme.colorScheme.surface,
-        sheetShape = NuvoriShapes.Sheet,
-        sheetTonalElevation = 8.dp,
-        sheetShadowElevation = 12.dp,
-        sheetDragHandle = {
-            Surface(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                    .clickable(role = Role.Button, onClick = toggleActions),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-            ) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(36.dp).clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = .18f)), contentAlignment = Alignment.Center) {
-                        AnimatedContent(actionSheetExpanded, label = "entry action direction") { expanded ->
-                            Icon(if (expanded) NuvoriIcons.ChevronDown else NuvoriIcons.ChevronUp,
-                                contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                        }
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    AnimatedContent(actionSheetExpanded, modifier = Modifier.weight(1f), label = "entry action instruction") { expanded ->
-                        Text(if (expanded) "Pull down to close" else "Pull up to edit",
-                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-            }
-        },
-        sheetContent = {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = addPhoto, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Add photo") }
-                        OutlinedButton(onClick = openCamera, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Camera") }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = edit, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Edit") }
-                        if (item.entry.type != EntryType.AUTHENTICATOR) OutlinedButton(onClick = { viewModel.duplicateEntry(item); close() },
-                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Duplicate") }
-                        DeleteButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
-                    }
-                }
-            }
-        }
-    ) { contentPadding -> detailContent(contentPadding) }
+    Box(modifier.background(MaterialTheme.colorScheme.background)) { detailContent(PaddingValues()) }
     if (confirmDelete) AlertDialog(
         modifier = wideDialogModifier,
         properties = wideDialogProperties,

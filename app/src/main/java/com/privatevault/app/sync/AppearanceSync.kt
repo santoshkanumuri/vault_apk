@@ -46,11 +46,12 @@ internal object AppearanceSync {
      */
     internal fun adoptFromSnapshot(context: Context, state: SnapshotSyncState) {
         val chosen = AppearanceSyncRules.current(state.operations) ?: return
+        val keyring = state.keyring()
         val contentKey = Base64.getUrlDecoder().decode(state.contentKey)
         val appearance = try {
-            val plaintext = IncomingEntryChangeApplier.decryptBytes(chosen.toSyncChange(), contentKey)
+            val plaintext = IncomingEntryChangeApplier.decryptBytes(chosen.toSyncChange(), keyring)
             try { AppearanceSyncRules.parsePayload(plaintext.toString(Charsets.UTF_8)) } finally { plaintext.fill(0) }
-        } finally { contentKey.fill(0) }
+        } finally { contentKey.fill(0); keyring.wipe() }
         val stored = AppearanceStore.read(context)
         val localId = if (stored.pendingSync && stored.updatedByDevice == null)
             AndroidDeviceIdentityStore(context).getOrCreate().deviceId else null

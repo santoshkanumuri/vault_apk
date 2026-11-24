@@ -36,7 +36,7 @@ internal object LanSyncExchange {
     fun run(frames: SyncFrames, store: LockedSyncStore, server: Boolean,
         onAuthenticated: (String, String) -> Unit = { _, _ -> }) {
         val mirror = requireNotNull(store.snapshot())
-        val currentSecret = TransportEpochs.secret(mirror.transportSecret, mirror.vaultId, mirror.keyEpoch)
+        val currentSecret = mirror.epochSecret(mirror.keyEpoch)
         require(Base64.getUrlDecoder().decode(currentSecret).size == 32) { "Invalid transport credential" }
         val challenge: ByteArray
         val secret: String
@@ -54,12 +54,21 @@ internal object LanSyncExchange {
                 val previous = store.retainedEpochs().firstOrNull { epoch ->
                     MembershipWire.proofMatches(supplied, store.transportSecret(epoch), challenge)
                 }
-                require(previous != null && removalNotices.allow(System.currentTimeMillis())) {
+                // A survivor that knows a rotated epoch but not its package proves the secret derived
+                // for that epoch ([TransportMirror.stranded]). It gets the history up to that REMOVE
+                // (which it already holds) and the sealed packages, never anything after it.
+                val stranded = if (previous == null) store.strandedEpochFor(supplied, challenge) else null
+                require((previous != null || stranded != null) && removalNotices.allow(System.currentTimeMillis())) {
                     "Device is not a group member"
                 }
                 frames.send(MembershipWire.REMOVED.toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME)
-                frames.send(MembershipWire.encodeHistory(MembershipWire.historyForEpoch(mirror.membershipEvents, previous)),
-                    MembershipWire.HISTORY_FRAME)
+                frames.send(MembershipWire.encodeHistory(MembershipWire.historyForEpoch(mirror.membershipEvents,
+                    previous ?: (requireNotNull(stranded) - 1))), MembershipWire.HISTORY_FRAME)
+                // Then the sealed key packages of later epochs ([EpochKeys]): a survivor that missed a
+                // rotation opens its own; the removed device can open none. Older clients stop reading.
+                store.keyPackages().filter { it.epoch > (previous ?: 1L) }.takeIf { it.isNotEmpty() }?.let { sets ->
+                    runCatching { frames.send(EpochKeyRotation.encodeFrame(null, sets), MembershipWire.HISTORY_FRAME) }
+                }
                 throw MembershipMessageServed(MembershipWire.REMOVED)
             }
             require(mirror.members.count { it.status == MemberStatus.ACTIVE.name } in 2..MAX_ACTIVE_SYNC_DEVICES)
@@ -115,6 +124,14 @@ internal object LanSyncExchange {
                     identityProof(session.key, accepted.vaultId, session.peer.deviceId, identity.deviceId),
                     remoteSignature)) { "Peer identity proof failed" }
                 runCatching { store.recordPeerFeatures(member.deviceId, session.peerFeatures) }
+                // Key statements and sealed key packages, when the peer announced epoch-keys-v1 (this
+                // build always does, so both sides send and both receive one frame).
+                if (EpochKeys.FEATURE in session.peerFeatures) {
+                    channel.send(EpochKeyRotation.encodeFrame(store.ownKeyStatement(), store.keyPackages()))
+                    val (statement, sets) = EpochKeyRotation.parseFrame(channel.receive())
+                    statement?.takeIf { it.deviceId == member.deviceId }?.let { store.acceptKeyStatement(it) }
+                    store.acceptKeyPackages(sets)
+                }
                 onAuthenticated(member.deviceId, session.peerPlatform)
                 val membershipHead = accepted.membershipEvents.last().hash
                 val finished = exchangeChanges(channel, store, server, member.deviceId,
@@ -139,9 +156,22 @@ internal object LanSyncExchange {
             .map { store.transportSecret(it) }
             .firstOrNull { MembershipWire.proofMatches(supplied, it, challenge) }
 
-    /** Client side of `removed1`: act only on a signed history that extends this device's own. */
+    /**
+     * Client side of `removed1`: act only on a signed history that extends this device's own, capped
+     * first by a "Mark as lost" freeze ([LostManagerFreeze]), so the lost manager can't detach this
+     * device. A history this device already holds comes with the sealed packages it waits for
+     * ([TransportMirror.stranded]): it takes them and reconnects with the new secret.
+     */
     private fun receiveRemovalNotice(frames: SyncFrames, store: LockedSyncStore, mirror: TransportMirror): Nothing {
-        val history = MembershipWire.parseHistory(frames.receive(MembershipWire.HISTORY_FRAME))
+        val history = LostManagerFreeze.keptEvents(mirror.lostManager,
+            MembershipWire.parseHistory(frames.receive(MembershipWire.HISTORY_FRAME)))
+        val held = mirror.membershipEvents
+        if (history.isNotEmpty() && history.size <= held.size && history.indices.all { history[it].hash == held[it].hash }) {
+            val learned = runCatching { EpochKeyRotation.parseFrame(frames.receive(MembershipWire.HISTORY_FRAME)) }.getOrNull()
+                ?.let { (_, sets) -> store.acceptKeyPackages(sets) } ?: false
+            if (learned) throw MembershipCaughtUp()
+            throw IllegalArgumentException("Device is not a group member")
+        }
         when (val notice = RemovalNoticeVerifier.verify(mirror.membershipEvents, mirror.localDeviceId, history)) {
             is RemovalNotice.Removed -> {
                 store.acceptMembershipEvents(notice.history)
@@ -149,6 +179,9 @@ internal object LanSyncExchange {
             }
             is RemovalNotice.CatchUp -> {
                 store.acceptMembershipEvents(notice.history)
+                // A newer server also sends the key packages of the epochs this device missed.
+                runCatching { EpochKeyRotation.parseFrame(frames.receive(MembershipWire.HISTORY_FRAME)) }.getOrNull()
+                    ?.let { (_, sets) -> store.acceptKeyPackages(sets) }
                 throw MembershipCaughtUp()
             }
         }
@@ -160,7 +193,7 @@ internal object LanSyncExchange {
         val mirror = requireNotNull(store.snapshot())
         val decision = LeaveRequestHandler.handle(leave, challenge, mirror.transportSecret,
             mirror.membershipEvents.map { it.toEvent() }, setOf(mirror.keyEpoch) + store.retainedEpochs(),
-            mirror.localDeviceId, System.currentTimeMillis(), store::signIdentity, store::removalCutoff)
+            mirror.localDeviceId, System.currentTimeMillis(), store::signIdentity, mirror.randomSecrets(), store::removalCutoff)
         val reply = when (decision) {
             LeaveDecision.Reject -> throw IllegalArgumentException("Invalid leave request")
             is LeaveDecision.Left -> {

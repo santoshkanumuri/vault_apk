@@ -25,6 +25,13 @@ import org.junit.Assert.assertTrue
 class DetailLayoutTest {
     @get:Rule val compose = createComposeRule()
 
+    /** Scrolls Home to a tile. The test clock is paused (see below); the lazy list animates its scroll, so it runs one second. */
+    private fun scrolledTo(description: String): SemanticsNodeInteraction {
+        compose.onNodeWithContentDescription(description).performScrollTo()
+        compose.mainClock.advanceTimeBy(1_000)
+        return compose.onNodeWithContentDescription(description)
+    }
+
     @Test fun dashboardSummaryUsesCompactTargetsAndOpensCategories() {
         val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
         val opened = mutableStateOf<EntryType?>(null)
@@ -37,6 +44,9 @@ class DetailLayoutTest {
             EntryWithDetails(VaultEntry(type = EntryType.QUESTION, title = "Question"), emptyList(), emptyList()),
             EntryWithDetails(VaultEntry(type = EntryType.AUTOFILL, title = "Profile"), emptyList(), emptyList())
         )
+        // Home shows live codes that tick every 250 ms. With the test clock running on its own, every idle wait
+        // advances it and the codes recompose forever, so this test moves the clock only when it needs to.
+        compose.mainClock.autoAdvance = false
         compose.setContent {
             MaterialTheme {
                 Box(Modifier.requiredSize(320.dp, 420.dp)) {
@@ -45,18 +55,22 @@ class DetailLayoutTest {
                 }
             }
         }
-        val cards = compose.onNodeWithContentDescription("Cards, 1").assertIsDisplayed()
+        // Home scrolls: Quick access and Codes sit above "Your vault", so in this short box the grid starts near
+        // the bottom edge. Scroll to each tile, as a person would, before checking its size.
+        val cards = scrolledTo("Cards, 1").assertIsDisplayed()
         val bounds = cards.fetchSemanticsNode().boundsInRoot
-        assertTrue("Summary target must remain compact and touchable: $bounds", bounds.height in (48f * density)..(80f * density))
+        // A tile holds an icon, the count and a label (about 90 dp at font scale 1): at least a 48 dp touch target,
+        // and still compact, at most 96 dp. The old 80 dp limit dated from the count-only summary.
+        assertTrue("Summary target must remain compact and touchable: $bounds", bounds.height in (48f * density)..(96f * density))
         cards.performClick()
         compose.runOnIdle { assertEquals(EntryType.CARD, opened.value) }
-        compose.onNodeWithContentDescription("Codes, 1").assertIsDisplayed().performClick()
+        scrolledTo("Codes, 1").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(EntryType.AUTHENTICATOR, opened.value) }
-        compose.onNodeWithContentDescription("Questions, 1").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Autofill, 1").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Passkeys, 2").assertIsDisplayed().performClick()
+        scrolledTo("Questions, 1").assertIsDisplayed()
+        scrolledTo("Autofill, 1").assertIsDisplayed()
+        scrolledTo("Passkeys, 2").assertIsDisplayed().performClick()
         compose.runOnIdle { assertTrue(passkeysOpened.value) }
-        compose.onNodeWithContentDescription("Groups, 3").assertIsDisplayed().performClick()
+        scrolledTo("Groups, 3").assertIsDisplayed().performClick()
         compose.runOnIdle { assertTrue(groupsOpened.value) }
         compose.onNodeWithText("Quick add").assertDoesNotExist()
     }
@@ -317,13 +331,32 @@ class DetailLayoutTest {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as android.app.Application
         val model = VaultViewModel(app)
         val keyboardHeight = mutableIntStateOf(0)
+        var keyboard: androidx.compose.ui.platform.SoftwareKeyboardController? = null
+        var view: android.view.View? = null
         compose.setContent {
+            view = androidx.compose.ui.platform.LocalView.current
+            // The test window must resize for the keyboard like MainActivity (adjustResize in the manifest);
+            // the test host activity has no such setting, so its window would only pan and report no IME inset.
+            val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+            androidx.compose.runtime.DisposableEffect(activity) {
+                @Suppress("DEPRECATION")
+                activity?.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+                onDispose {}
+            }
             val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
             SideEffect { keyboardHeight.intValue = imeBottom }
+            keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
             MaterialTheme { EntryEditor(null, EntryType.NOTE, emptyList(), emptySet(), model, {}, { _, _, _ -> }) }
         }
-        compose.onNodeWithText("Note title").performClick()
-        compose.waitUntil(5_000) { keyboardHeight.intValue > 0 }
+        // A system dialog (an "isn't responding" prompt on a busy emulator) takes the window focus, and Android
+        // shows no keyboard for a window without focus. Wait until this window has it.
+        compose.waitUntil(60_000) { view?.hasWindowFocus() == true }
+        compose.onNodeWithText("Note title").performClick().assertIsFocused()
+        // The keyboard app can take many seconds to start on a busy emulator, and a tap that lands before the
+        // window has focus does not open it. Ask for it once more, then wait for the real inset.
+        compose.runOnIdle { keyboard?.show() }
+        compose.waitUntil(30_000) { keyboardHeight.intValue > 0 }
+        compose.waitForIdle()
         val viewport = compose.onRoot().fetchSemanticsNode().boundsInWindow
         val save = compose.onNodeWithContentDescription("Save entry").assertIsDisplayed().fetchSemanticsNode().boundsInWindow
         assertTrue("Save must stay in the resized window above the keyboard", save.top >= viewport.top && save.bottom <= viewport.bottom)

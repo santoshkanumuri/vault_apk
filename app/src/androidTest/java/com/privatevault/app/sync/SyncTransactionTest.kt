@@ -358,16 +358,31 @@ class SyncTransactionTest {
                 PasskeyCrypto.encode(pair.private.encoded), PasskeyCrypto.encode(pair.public.encoded), 1_700_000_000_000)
             val key = ByteArray(32) { (it + 1).toByte() }
             val writer = LocalPasskeyChangeWriter(database, identityStore)
-            writer.save(passkey, key)
+            val icon = byteArrayOf(1, 2, 3)
+            writer.save(passkey, key, com.privatevault.app.data.PasskeyOrigin(passkey.id, "com.android.chrome", "Chrome", icon))
             val upsert = database.syncDao().operations().single()
             assertTrue(passkey.privateKey !in upsert.payloadCiphertext)
             assertEquals(IncomingResult.APPLIED, IncomingEntryChangeApplier(receiver).apply(upsert, key))
             assertEquals(passkey, receiver.dao().allPasskeys().single())
 
+            // Ledger: created here with its app and icon; synced in on the other device, named by its sender.
+            val created = database.passkeyHistory().recent(10).single()
+            assertEquals(listOf("CREATED", "com.android.chrome", "Chrome"), listOf(created.kind, created.appPackage, created.appLabel))
+            assertTrue(icon.contentEquals(database.passkeyHistory().origins().single().icon))
+            val synced = receiver.passkeyHistory().recent(10).single()
+            assertEquals(listOf("SYNCED_IN", "Source", "example.com", "user"), listOf(synced.kind, synced.detail, synced.rpId, synced.username))
+            // The ledger never holds key material.
+            assertTrue(listOf(created, synced).none { passkey.privateKey in it.toString() })
+
             writer.delete(passkey, key)
             assertEquals(IncomingResult.APPLIED, IncomingEntryChangeApplier(receiver)
                 .apply(database.syncDao().operations().last(), key))
             assertTrue(receiver.dao().allPasskeys().isEmpty())
+            // A deletion keeps its line after the passkey is gone, and drops the stored app icon.
+            assertEquals("DELETED", database.passkeyHistory().recent(10).first().kind)
+            assertTrue(database.passkeyHistory().origins().isEmpty())
+            assertEquals(listOf("DELETED_ON_OTHER_DEVICE", "Source"),
+                receiver.passkeyHistory().recent(10).first().let { listOf(it.kind, it.detail) })
         } finally {
             receiver.close()
             identityStore.clear()

@@ -12,12 +12,21 @@ import org.json.JSONObject
 import java.security.SecureRandom
 import java.time.Clock
 import java.time.Instant
-import java.util.Base64
 import java.util.UUID
-import javax.crypto.Cipher
-import javax.crypto.Mac
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
+
+/** The entry JSON shared with Windows: sync payloads, and this phone's Recently deleted copies. */
+internal fun VaultEntry.toSyncJson(): JSONObject = JSONObject()
+    .put("id", id).put("type", type.name).put("title", title)
+    .put("primaryValue", primaryValue).put("secondaryValue", secondaryValue)
+    .put("tertiaryValue", tertiaryValue).put("fourthValue", fourthValue)
+    .put("cardKind", cardKind.name).put("network", network)
+    .put("totpAlgorithm", totpAlgorithm).put("totpDigits", totpDigits).put("totpPeriod", totpPeriod)
+    .put("linkedApps", linkedApps).put("autofillSignatures", autofillSignatures)
+    .put("autofillOrigins", autofillOrigins)
+    .put("linkedAuthenticatorId", linkedAuthenticatorId).put("notes", notes)
+    .put("color", color).put("tags", tags).put("favorite", favorite)
+    .put("lastOpenedAt", lastOpenedAt).put("sortOrder", sortOrder)
+    .put("createdAt", createdAt).put("updatedAt", updatedAt)
 
 class LocalEntryChangeWriter(
     private val database: VaultDatabase,
@@ -61,15 +70,16 @@ class LocalEntryChangeWriter(
                 val present = database.dao().entry(entry.id) != null
                 require(present != alreadyDeleted) { "Entry deletion state changed" }
             }
-            val contentKey = database.syncContentKey(vaultKey)
-            val encrypted = try { encryptPayload(
-                savedEntry,
-                groupIds,
-                contentKey,
-                settings.vaultId,
-                mutationId,
-                kind,
-            ) } finally { contentKey.fill(0) }
+            val plaintext = JSONObject().apply {
+                if (kind == ChangeKind.UPSERT) {
+                    put("entry", savedEntry.toSyncJson())
+                    put("groupIds", JSONArray(groupIds.sorted()))
+                } else put("deleted", true)
+            }.toString().toByteArray(Charsets.UTF_8)
+            val encrypted = try {
+                SyncPayloadCrypto.sealFor(database, vaultKey, ENTITY_TYPE, settings.vaultId, mutationId, savedEntry.id, plaintext)
+                    .let { EncryptedPayload(it.ciphertext, it.nonce) }
+            } finally { plaintext.fill(0) }
             val change = SyncChangeRecord.createSigned(
                 vaultId = settings.vaultId,
                 deviceId = identity.deviceId,
@@ -122,68 +132,15 @@ class LocalEntryChangeWriter(
         database.syncDao().deleteAttachmentManifestsForOwner("entry", entryId)
     }
 
-    private fun encryptPayload(
-        entry: VaultEntry,
-        groupIds: Set<String>,
-        vaultKey: ByteArray,
-        vaultId: String,
-        mutationId: String,
-        kind: ChangeKind,
-    ): EncryptedPayload {
-        val plaintext = JSONObject()
-            .apply {
-                if (kind == ChangeKind.UPSERT) {
-                    put("entry", entry.toSyncJson())
-                    put("groupIds", JSONArray(groupIds.sorted()))
-                } else put("deleted", true)
-            }
-            .toString()
-            .toByteArray(Charsets.UTF_8)
-        val nonce = ByteArray(12).also(random::nextBytes)
-        val payloadKey = Mac.getInstance("HmacSHA256").run {
-            init(SecretKeySpec(vaultKey, "HmacSHA256"))
-            doFinal(PAYLOAD_KEY_LABEL.toByteArray(Charsets.UTF_8))
-        }
-        return try {
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
-                init(Cipher.ENCRYPT_MODE, SecretKeySpec(payloadKey, "AES"), GCMParameterSpec(128, nonce))
-                updateAAD(aad(vaultId, mutationId, entry.id))
-            }
-            EncryptedPayload(encode(cipher.doFinal(plaintext)), encode(nonce))
-        } finally {
-            plaintext.fill(0)
-            payloadKey.fill(0)
-        }
-    }
-
-    private fun VaultEntry.toSyncJson() = JSONObject()
-        .put("id", id).put("type", type.name).put("title", title)
-        .put("primaryValue", primaryValue).put("secondaryValue", secondaryValue)
-        .put("tertiaryValue", tertiaryValue).put("fourthValue", fourthValue)
-        .put("cardKind", cardKind.name).put("network", network)
-        .put("totpAlgorithm", totpAlgorithm).put("totpDigits", totpDigits).put("totpPeriod", totpPeriod)
-        .put("linkedApps", linkedApps).put("autofillSignatures", autofillSignatures)
-        .put("autofillOrigins", autofillOrigins)
-        .put("linkedAuthenticatorId", linkedAuthenticatorId).put("notes", notes)
-        .put("color", color).put("tags", tags).put("favorite", favorite)
-        .put("lastOpenedAt", lastOpenedAt).put("sortOrder", sortOrder)
-        .put("createdAt", createdAt).put("updatedAt", updatedAt)
-
     private fun SyncChangeRecord.toEntity() = SyncOperationEntity(
         mutationId, formatVersion, vaultId, deviceId, sequence, previousHash,
         entityType, entityId, kind.name.lowercase(), baseRevision, recordVersion.toJson(),
         occurredAtUtc, payloadCiphertext, payloadNonce, deviceSignature, hash,
     )
 
-    private fun aad(vaultId: String, mutationId: String, entityId: String) =
-        "nuvori-sync-entry-v1:$vaultId:$mutationId:$entityId".toByteArray(Charsets.UTF_8)
-
-    private fun encode(value: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(value)
-
     private data class EncryptedPayload(val ciphertext: String, val nonce: String)
 
     private companion object {
         const val ENTITY_TYPE = "entry"
-        const val PAYLOAD_KEY_LABEL = "nuvori-sync-payload-key-v1"
     }
 }

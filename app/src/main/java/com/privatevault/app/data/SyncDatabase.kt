@@ -123,6 +123,14 @@ data class SyncOperationEntity(
     }
 }
 
+/** A row of `sync_operations` reduced to its chain coordinates ([SyncDao.operationPointers]). */
+data class SyncOperationPointer(val vaultId: String, val deviceId: String, val sequence: Long,
+    val hash: String, val previousHash: String)
+
+/** A row of `sync_operations` without its payload ([SyncDao.operationSummaries]). */
+data class SyncOperationSummary(val deviceId: String, val sequence: Long, val hash: String, val entityType: String,
+    val entityId: String, val kind: String, val recordVersionJson: String, val occurredAtUtc: String)
+
 @Entity(tableName = "sync_device_heads", primaryKeys = ["vaultId", "deviceId"])
 data class SyncDeviceHeadEntity(
     val vaultId: String,
@@ -196,13 +204,122 @@ data class SyncPeerAcknowledgementEntity(
     val acknowledgedAtUtc: String,
 )
 
+/**
+ * Per group: [checkpointJson] is the signed enrollment checkpoint this device joined from ("" when
+ * it joined with full history), so changes below it are known to be missing on purpose.
+ * [floorJson] maps an author to the highest of its changes this device deleted by history
+ * compaction, as `{"<deviceId>": [sequence, "<hash>"]}`.
+ */
+@Entity(tableName = "sync_checkpoints")
+data class SyncCheckpointEntity(
+    @androidx.room.PrimaryKey val vaultId: String,
+    val checkpointJson: String,
+    val floorJson: String,
+    val updatedAt: Long,
+)
+
+/**
+ * "Mark as lost" ([com.privatevault.app.sync.LostManagerFreeze]): the managing device [deviceId] of
+ * group [vaultId] is gone. This device keeps only the first [membershipCount] signed membership
+ * events of the group and refuses changes by [deviceId] after its change [headSequence] ([headHash]).
+ * Local only; joining or starting another group clears it.
+ */
+@Entity(tableName = "sync_lost_manager")
+data class SyncLostManagerEntity(
+    @androidx.room.PrimaryKey val vaultId: String,
+    val deviceId: String,
+    val membershipCount: Long,
+    val headSequence: Long,
+    val headHash: String,
+    val markedAt: Long,
+)
+
+/**
+ * The record versions of the most recent group this device left or split from ([fromVaultId]),
+ * without payloads ([com.privatevault.app.sync.MergeJoin]). A later merge join compares versions of
+ * the same old group to tell an item the new group already saw from one it never had.
+ */
+@Entity(tableName = "sync_lineage", primaryKeys = ["entityType", "entityId"])
+data class SyncLineageEntity(
+    val fromVaultId: String,
+    val entityType: String,
+    val entityId: String,
+    val recordVersionJson: String,
+    val deleted: Boolean,
+    /** SHA-256 of the item's compared content when this device left ([com.privatevault.app.sync.MergeJoinRules.contentDigest]); empty when unknown. */
+    @androidx.room.ColumnInfo(defaultValue = "") val contentDigest: String = "",
+)
+
+/** A content key and transport secret of epoch [epoch] >= 2 (feature epoch-keys-v1), base64url. In SQLCipher only. */
+@Entity(tableName = "sync_epoch_keys", primaryKeys = ["vaultId", "epoch"])
+data class SyncEpochKeyEntity(
+    val vaultId: String,
+    val epoch: Long,
+    val contentKey: String,
+    val transportSecret: String,
+)
+
+/**
+ * The signed package set of epoch [epoch] ([com.privatevault.app.sync.PackageSet] as JSON). Each package
+ * is sealed to one survivor's X25519 key, so any member may keep and relay the set.
+ */
+@Entity(tableName = "sync_key_packages", primaryKeys = ["vaultId", "epoch"])
+data class SyncKeyPackageEntity(
+    val vaultId: String,
+    val epoch: Long,
+    val setJson: String,
+)
+
 @Dao
 abstract class SyncDao {
     @Upsert
     abstract suspend fun savePeer(peer: SyncPeerEntity)
 
+    @Upsert
+    abstract suspend fun saveCheckpoint(checkpoint: SyncCheckpointEntity)
+
+    @Query("SELECT * FROM sync_checkpoints WHERE vaultId = :vaultId")
+    abstract suspend fun checkpoint(vaultId: String): SyncCheckpointEntity?
+
     @Query("SELECT * FROM sync_peers WHERE vaultId = :vaultId")
     abstract suspend fun peers(vaultId: String): List<SyncPeerEntity>
+
+    @Upsert
+    abstract suspend fun saveEpochKey(key: SyncEpochKeyEntity)
+
+    @Query("SELECT * FROM sync_epoch_keys ORDER BY epoch")
+    abstract suspend fun epochKeys(): List<SyncEpochKeyEntity>
+
+    @Upsert
+    abstract suspend fun saveKeyPackages(set: SyncKeyPackageEntity)
+
+    @Query("SELECT * FROM sync_key_packages WHERE vaultId = :vaultId ORDER BY epoch")
+    abstract suspend fun keyPackages(vaultId: String): List<SyncKeyPackageEntity>
+
+    @Query("DELETE FROM sync_epoch_keys")
+    abstract suspend fun clearEpochKeys()
+
+    @Query("DELETE FROM sync_key_packages")
+    abstract suspend fun clearKeyPackages()
+
+    @Upsert
+    abstract suspend fun saveLostManager(lost: SyncLostManagerEntity)
+
+    @Query("SELECT * FROM sync_lost_manager WHERE vaultId = :vaultId")
+    abstract suspend fun lostManager(vaultId: String): SyncLostManagerEntity?
+
+    @Query("DELETE FROM sync_lost_manager")
+    abstract suspend fun clearLostManager()
+
+    @Query("SELECT * FROM sync_lineage")
+    abstract suspend fun lineage(): List<SyncLineageEntity>
+
+    @Query("DELETE FROM sync_lineage")
+    abstract suspend fun clearLineage()
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun insertLineage(rows: List<SyncLineageEntity>)
+
 
     @Upsert
     abstract suspend fun saveVaultState(state: SyncVaultStateEntity)
@@ -299,6 +416,25 @@ abstract class SyncDao {
 
     @Query("SELECT * FROM sync_operations ORDER BY deviceId, sequence")
     abstract suspend fun operations(): List<SyncOperationEntity>
+
+    /** Chain coordinates of every held change, without payloads (about 200 bytes a row). */
+    @Query("SELECT vaultId, deviceId, sequence, hash, previousHash FROM sync_operations ORDER BY deviceId, sequence")
+    abstract suspend fun operationPointers(): List<SyncOperationPointer>
+
+    /** What the keep set needs of every held change, without payloads. */
+    @Query("SELECT deviceId, sequence, hash, entityType, entityId, kind, recordVersionJson, occurredAtUtc FROM sync_operations WHERE vaultId = :vaultId ORDER BY deviceId, sequence")
+    abstract suspend fun operationSummaries(vaultId: String): List<SyncOperationSummary>
+
+    /** History compaction: at most 500 [hashes] a call. */
+    @Query("DELETE FROM sync_operations WHERE hash IN (:hashes)")
+    abstract suspend fun deleteOperations(hashes: List<String>): Int
+
+    @Query("DELETE FROM sync_conflicts WHERE conflictId IN (:ids)")
+    abstract suspend fun deleteConflicts(ids: List<String>)
+
+    /** At most 500 [hashes] a call (SQLite's bound-argument limit is 999). */
+    @Query("SELECT * FROM sync_operations WHERE hash IN (:hashes)")
+    abstract suspend fun operationsByHashes(hashes: List<String>): List<SyncOperationEntity>
 
     @Query("SELECT * FROM sync_operations WHERE vaultId = :vaultId AND deviceId = :deviceId AND sequence > :afterSequence ORDER BY sequence LIMIT :limit")
     abstract suspend fun operationsAfter(vaultId: String, deviceId: String, afterSequence: Long,

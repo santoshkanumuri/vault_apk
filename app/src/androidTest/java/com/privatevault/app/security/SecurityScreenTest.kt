@@ -23,7 +23,7 @@ import org.junit.Test
 
 class SecurityScreenTest {
     @get:Rule val compose = createComposeRule()
-    private val app = InstrumentationRegistry.getInstrumentation().context.applicationContext as Application
+    private val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
 
     @Before fun cleanStart() {
         app.deleteDatabase("vault.db")
@@ -42,7 +42,7 @@ class SecurityScreenTest {
         compose.waitUntil(10_000) { model.entries.value.any { it.entry.title == "Private sentinel" } }
         compose.runOnIdle { model.lock(LockReason.MANUAL) }
         compose.onNodeWithText("Private sentinel").assertDoesNotExist()
-        compose.onNodeWithText("Nuvori").assertIsDisplayed()
+        compose.onNodeWithText("Unlock vault").assertIsDisplayed()
         assertTrue(model.entries.value.isEmpty())
     }
 

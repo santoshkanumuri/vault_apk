@@ -19,6 +19,9 @@ These are the main libraries used by Private Vault. Their code remains subject t
 | Lucide icons (vendored path data in `ui/NuvoriIcons.kt`) | Interface icons shared with Nuvori for Windows | ISC (portions MIT, from Feather) |
 | Jackson | WebAuthn4J JSON and CBOR encoding | Apache-2.0 |
 | Public Suffix List (`app/src/main/resources/nuvori/public_suffix_list.dat`) | Same-site login matching in autofill | MPL-2.0 |
+| Simple Icons 16.36.0, CC0 icons only (`app/src/main/assets/site_icons.json`), domains from the Tranco list 46YVX | Website icons. Brand names and logos belong to their owners and identify a saved site | CC0 1.0 |
+| Simple Icons 16.36.0, CC0 icons only (`ui/SignInMarkData.kt`: Google, Apple, GitHub, Facebook, X, Discord) | Sign-in provider marks on the Sign-ins screen and in Autofill reminders; letter tiles for Microsoft, LinkedIn, Amazon and Slack. Brand names and logos belong to their owners and only name the sign-in method used | CC0 1.0 |
+| EFF large word list (`app/src/main/assets/eff_large_wordlist.txt`, by the Electronic Frontier Foundation) | Passphrase generator | CC BY 3.0 US |
 
 AndroidX Autofill and Credentials provide keyboard suggestions and Android Credential Manager integration under Apache-2.0.
 

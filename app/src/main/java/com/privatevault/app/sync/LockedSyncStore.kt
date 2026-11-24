@@ -13,6 +13,9 @@ import com.privatevault.app.data.*
 import android.database.sqlite.SQLiteConstraintException
 import org.json.JSONException
 import java.io.File
+import java.lang.ref.WeakReference
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.security.KeyStore
 import java.util.Base64
 import javax.crypto.Cipher
@@ -40,7 +43,46 @@ internal data class TransportMirror(val vaultId: String, val localDeviceId: Stri
     /** What each peer announced in its last sync handshake (see [RemovalCutoff.FEATURE]). */
     val peerFeatures: Map<String, List<String>> = emptyMap(),
     /** Photo blob hashes the vault's attachments reference, for the cloud upload ([CloudSyncPass]). */
-    val attachmentHashes: Set<String> = emptySet())
+    val attachmentHashes: Set<String> = emptySet(),
+    /** Per author, the highest change the relay folder dropped because nobody needs it from here ([RelayRetention]). */
+    val relayFloor: Map<String, Long> = emptyMap(),
+    /** "Mark as lost" on this device ([LostManagerFreeze]); null when nothing is frozen. From the vault database. */
+    val lostManager: LostManagerFreeze.Freeze? = null,
+    /** Random transport secrets of rotated epochs (epoch -> base64url, [EpochKeys]). Never a content key. */
+    val transportSecrets: Map<String, String> = emptyMap(),
+    /** Verified key statements of members, this device's own included ([KeyStatement]). */
+    val keyStatements: Map<String, KeyStatement> = emptyMap(),
+    /** Verified package sets by epoch ([PackageSet]): sealed, so the locked store may keep and relay them. */
+    val keyPackages: Map<String, PackageSet> = emptyMap()) {
+    /** [transportSecrets] by epoch. */
+    fun randomSecrets(): Map<Long, String> = transportSecrets.mapNotNull { (epoch, secret) -> epoch.toLongOrNull()?.let { it to secret } }.toMap()
+    fun epochSecret(epoch: Long): String = TransportEpochs.secret(transportSecret, vaultId, epoch, randomSecrets())
+    /** The Google Drive keys new files use now ([EpochKeys.driveSecret]). */
+    /** The newest epoch this device must hold keys for before it sends anything ([EpochKeyRotation.awaitedEpoch]). */
+    fun awaitedEpoch(): Long? = runCatching {
+        EpochKeyRotation.awaitedEpoch(SyncMembershipManager.verify(membershipEvents.map { it.toEvent() }), localDeviceId,
+            keyPackages.values, keyStatements)
+    }.getOrNull()
+
+    /**
+     * True while this device knows a REMOVE that made new keys (or may have) but its package has not
+     * arrived. It then sends nothing, over Wi-Fi or Google Drive: its own changes stay on this device
+     * until the new keys arrive, and then travel only under them. So a removed device, which knows
+     * every older key and prefix, never gets anything this device wrote after it learned of the REMOVE.
+     */
+    fun stranded(): Boolean {
+        val awaited = awaitedEpoch() ?: return false
+        return awaited > (randomSecrets().keys.maxOrNull() ?: 1L)
+    }
+
+    fun driveKeys(): CloudKeys? {
+        val decoder = Base64.getUrlDecoder()
+        val root = decoder.decode(transportSecret)
+        val random = randomSecrets().mapValues { decoder.decode(it.value) }
+        return try { CloudKeys.derive(EpochKeys.driveSecret(root, keyEpoch, random).second, vaultId) }
+        finally { root.fill(0); random.values.forEach { it.fill(0) } }
+    }
+}
 
 /**
  * A leave request kept after this device already left locally. It holds only what is needed to
@@ -78,8 +120,15 @@ internal fun verifyIncomingOperation(mirror: TransportMirror, operation: SyncOpe
         RemovalCutoff.cutoffsOf(mirror.membershipEvents)[operation.deviceId], operation.sequence, operation.hash)) {
         "Unknown or revoked sender"
     }
+    // A managing device marked as lost here: nothing after its last known change.
+    require(LostManagerFreeze.allowsChange(mirror.lostManager, operation.deviceId, operation.sequence, operation.hash)) {
+        "That device was marked as lost"
+    }
     val change = operation.toSyncChange()
     change.validate()
+    // A change can't claim a key epoch the signed membership has not reached: it would wait forever.
+    // (A malformed nonce is set aside when it applies, as before.)
+    require((EpochKeys.epochOf(change.payloadNonce) ?: 1L) <= mirror.keyEpoch) { "Change of an unknown key epoch" }
     require(DeviceIdentityCrypto.verify(Base64.getUrlDecoder().decode(member.identityPublicKey),
         change.signingBytes(), Base64.getUrlDecoder().decode(change.deviceSignature))) { "Invalid sender signature" }
 }
@@ -90,7 +139,9 @@ internal fun verifyIncomingOperation(mirror: TransportMirror, operation: SyncOpe
  */
 internal fun mirrorWithMembership(mirror: TransportMirror, events: List<SyncMembershipEventEntity>): TransportMirror? {
     val current = mirror.membershipEvents.map { it.toEvent() }
-    val incoming = events.map { it.toEvent() }
+    // After "Mark as lost" the old group's membership stays as it was ([LostManagerFreeze]).
+    val kept = LostManagerFreeze.keptEvents(mirror.lostManager, events)
+    val incoming = kept.map { it.toEvent() }
     SyncMembershipManager.verify(current)
     val verified = SyncMembershipManager.verify(incoming)
     require(verified.events.first().vaultId == mirror.vaultId && verified.keyEpoch >= mirror.keyEpoch)
@@ -106,7 +157,19 @@ internal fun mirrorWithMembership(mirror: TransportMirror, events: List<SyncMemb
         val now = System.currentTimeMillis()
         mirror.epochRetiredAt + (mirror.keyEpoch until verified.keyEpoch).associate { it.toString() to now }
     }
-    return mirror.copy(membershipEvents = events, members = members, keyEpoch = verified.keyEpoch, epochRetiredAt = retiredAt)
+    return mirror.copy(membershipEvents = kept, members = members, keyEpoch = verified.keyEpoch, epochRetiredAt = retiredAt)
+}
+
+/**
+ * The membership to write into the vault when queued changes apply: the longer of the vault's
+ * [stored] history and the transport [mirrored] one, which must share a prefix. A mirror published
+ * before a REMOVE committed in the vault is shorter; projecting it would make the removed device
+ * ACTIVE again while the REMOVE stays in the event log.
+ */
+internal fun newerMembership(stored: List<SyncMembershipEventEntity>,
+    mirrored: List<SyncMembershipEventEntity>): VerifiedMembership {
+    require(stored.zip(mirrored).all { (left, right) -> left.hash == right.hash }) { "Conflicting membership history" }
+    return SyncMembershipManager.verify((if (mirrored.size >= stored.size) mirrored else stored).map { it.toEvent() })
 }
 
 /** Contains transport secrets and encrypted operations only. It never stores a vault content key. */
@@ -123,6 +186,8 @@ internal class LockedSyncStore(private val context: Context,
     private val removalNoticeFile = File(directory, "removal-notice")
     private val cloudStateFile = File(directory, "cloud-state")
     private val cloudFilesFile = File(directory, "cloud-files")
+    /** The sealed chain coordinates of the relay folder ([outgoingPointers]). */
+    private val relayIndexFile = File(directory, "outgoing-index")
     override val photoBlobs = PhotoSyncBlobs(File(directory, "blobs"))
     private val gson = Gson()
     private var outgoingIndex: List<OperationPointer>? = null
@@ -130,76 +195,187 @@ internal class LockedSyncStore(private val context: Context,
     private var incomingIndex: List<QueuedPointer>? = null
     @Volatile private var cachedWrappingKey: SecretKey? = null
 
-    suspend fun publish(database: VaultDatabase) {
+    /** Serializes [publish] with the moves of applied changes into the relay folder ([applyQueued]). */
+    private val relayLock = Mutex()
+    /** The database whose relay folder the last full scan rebuilt; null after [clear]. */
+    @Volatile private var fullScanFor: WeakReference<VaultDatabase>? = null
+    /** Raised by [clear], so a publish that read the folder before it does not write a stale one. */
+    private var generation = 0L
+
+    /**
+     * Writes the transport mirror and the relay folder from the vault database. Usually it loads
+     * only the changes above what the folder already reflects ([RelayRetention.relayTop]): O(new
+     * changes). The first publish for an unlocked database, the first after [clear], or one with
+     * [full] reads the chain coordinates of every change instead (no payloads) and loads only the
+     * relay files that are missing.
+     */
+    suspend fun publish(database: VaultDatabase, full: Boolean = false) {
         val identity = AndroidDeviceIdentityStore(context).getOrCreate()
-        val (mirror, operations, photoHashes, hasConflicts) = database.withTransaction {
+        relayLock.withLock {
+            val scanAll = full || fullScanFor?.get() !== database
+            // An incremental publish that finds the folder reset falls back to a full one.
+            check(publishLocked(database, identity, scanAll) || !scanAll && publishLocked(database, identity, true)) {
+                "Sync relay changed during publish"
+            }
+            fullScanFor = WeakReference(database)
+        }
+    }
+
+    private data class PublishedState(val mirror: TransportMirror, val newOperations: List<SyncOperationEntity>?,
+        val pointers: List<SyncOperationPointer>?, val photoHashes: Set<String>, val hasConflicts: Boolean)
+
+    private data class RelayPlan(val generation: Long, val state: PublishedState, val selected: TransportMirror,
+        val keep: List<OperationPointer>, val drop: List<OperationPointer>, val load: List<String>,
+        val write: List<SyncOperationEntity>, val full: Boolean)
+
+    /** False when an incremental publish can't trust the folder, or [clear] ran meanwhile. */
+    private suspend fun publishLocked(database: VaultDatabase, identity: DeviceIdentity, scanAll: Boolean): Boolean {
+        // Lock order: the store's monitor is never held while waiting on the database.
+        val top = if (scanAll) null else synchronized(this) {
+            val mirror = snapshot() ?: return false
+            mirror.vaultId to RelayRetention.relayTop(outgoingPointers().filter { it.vaultId == mirror.vaultId }
+                .map { RelayRetention.Held(it.deviceId, it.sequence, it.hash) }, mirror.relayFloor)
+        }
+        val state = database.withTransaction {
+            val dao = database.syncDao()
             val vaultId = requireNotNull(database.dao().settings()).vaultId
-            val group = requireNotNull(database.syncDao().vaultState()) { "Sync group is not ready" }
+            val group = requireNotNull(dao.vaultState()) { "Sync group is not ready" }
             require(group.vaultId == vaultId && Base64.getUrlDecoder().decode(group.transportSecret).size == 32)
-            val events = database.syncDao().membershipEvents(vaultId)
+            if (top != null && top.first != vaultId) return@withTransaction null
+            val events = dao.membershipEvents(vaultId)
             val epoch = events.takeIf { it.isNotEmpty() }?.let { list ->
                 SyncMembershipManager.verify(list.map { it.toEvent() }).keyEpoch
             } ?: group.keyEpoch
+            val heads = dao.deviceHeads(vaultId)
+            val epochKeys = dao.epochKeys().filter { it.vaultId == vaultId }
             val mirror = TransportMirror(vaultId, identity.deviceId, identity.publicKeyBase64Url,
-                group.transportSecret, epoch,
-                database.syncDao().peers(vaultId), database.syncDao().memberships(vaultId),
-                events, database.syncDao().deviceHeads(vaultId))
-            PublishedState(mirror, database.syncDao().operations(),
-                database.syncDao().attachments().mapTo(hashSetOf()) { it.ciphertextHash },
-                database.syncDao().conflicts().any { it.resolvedAtUtc.isEmpty() })
-        }
-        publishState(mirror.copy(attachmentHashes = photoHashes), operations, photoHashes, hasConflicts)
+                group.transportSecret, epoch, dao.peers(vaultId), dao.memberships(vaultId), events, heads,
+                lostManager = LostManagerFreeze.of(dao.lostManager(vaultId)),
+                transportSecrets = epochKeys.associate { it.epoch.toString() to it.transportSecret },
+                keyPackages = dao.keyPackages(vaultId).mapNotNull { row ->
+                    runCatching { gson.fromJson(row.setJson, PackageSet::class.java) }.getOrNull()?.let { row.epoch.toString() to it }
+                }.toMap())
+            val newOperations = top?.second?.let { relayTop ->
+                heads.flatMap { head -> operationsAbove(database, vaultId, head, relayTop[head.deviceId] ?: 0L) }
+            }
+            val photoHashes = dao.attachments().mapTo(hashSetOf()) { it.ciphertextHash }
+            PublishedState(mirror.copy(attachmentHashes = photoHashes), newOperations,
+                if (top == null) dao.operationPointers() else null, photoHashes,
+                dao.conflicts().any { it.resolvedAtUtc.isEmpty() })
+        } ?: return false
+        val plan = synchronized(this) { planRelay(state) } ?: return false
+        // Payloads only for retained changes whose relay file is missing, 500 a query.
+        val loaded = plan.load.chunked(500).flatMap { database.syncDao().operationsByHashes(it) }
+        return synchronized(this) { finishRelay(plan, loaded) }
     }
 
-    private data class PublishedState(val mirror: TransportMirror, val operations: List<SyncOperationEntity>,
-        val photoHashes: Set<String>, val hasConflicts: Boolean)
+    /** Changes of [head]'s author above [after], up to the head, 500 a query. */
+    private suspend fun operationsAbove(database: VaultDatabase, vaultId: String, head: SyncDeviceHeadEntity,
+        after: Long): List<SyncOperationEntity> {
+        val result = ArrayList<SyncOperationEntity>()
+        var reach = after
+        while (reach < head.sequence) {
+            val batch = database.syncDao().operationsAfter(vaultId, head.deviceId, reach, 500)
+            if (batch.isEmpty()) break
+            result += batch
+            reach = batch.last().sequence
+        }
+        return result
+    }
 
-    @Synchronized private fun publishState(mirror: TransportMirror, operations: List<SyncOperationEntity>,
-        photoHashes: Set<String>, hasConflicts: Boolean) {
-        val previous = snapshot()
-        if (previous != null && previous.vaultId != mirror.vaultId) clear()
-        val selected = if (previous != null && previous.vaultId == mirror.vaultId) {
-            require(previous.transportSecret == mirror.transportSecret)
-            val databaseEvents = mirror.membershipEvents.map { it.toEvent() }
-            val storedEvents = previous.membershipEvents.map { it.toEvent() }
-            SyncMembershipManager.verify(databaseEvents)
-            val stored = SyncMembershipManager.verify(storedEvents)
-            require(databaseEvents.zip(storedEvents).all { (left, right) -> left.hash == right.hash }) {
-                "Conflicting membership history"
-            }
-            val kept = if (storedEvents.size > databaseEvents.size) mirror.copy(
-                membershipEvents = previous.membershipEvents, members = previous.members, keyEpoch = stored.keyEpoch)
-                else mirror
-            kept.copy(peerProgress = previous.peerProgress, peerAddresses = previous.peerAddresses,
-                lastContactAt = previous.lastContactAt, lastExchangeAt = previous.lastExchangeAt,
-                pendingPhotoHashes = previous.pendingPhotoHashes, clientOnlyPeers = previous.clientOnlyPeers,
-                peerFeatures = previous.peerFeatures,
-                epochRetiredAt = retire(previous.epochRetiredAt, previous.keyEpoch, kept.keyEpoch))
-        } else mirror
-        val activePeers = selected.members.filter {
-            it.status == MemberStatus.ACTIVE.name && it.deviceId != selected.localDeviceId
+    /** The mirror to write: the database's, keeping what only the transport store knows. */
+    private fun selectMirror(mirror: TransportMirror, previous: TransportMirror?): TransportMirror {
+        if (previous == null || previous.vaultId != mirror.vaultId) return mirror
+        require(previous.transportSecret == mirror.transportSecret)
+        val databaseEvents = mirror.membershipEvents.map { it.toEvent() }
+        // A freeze ([LostManagerFreeze]) caps what the transport store may hold beyond the vault's history.
+        val storedEntities = LostManagerFreeze.keptEvents(mirror.lostManager, previous.membershipEvents)
+        val storedEvents = storedEntities.map { it.toEvent() }
+        SyncMembershipManager.verify(databaseEvents)
+        val stored = SyncMembershipManager.verify(storedEvents)
+        require(databaseEvents.zip(storedEvents).all { (left, right) -> left.hash == right.hash }) {
+            "Conflicting membership history"
         }
-        // Cloud sync needs a gap-free history on the drive, so this device keeps its own changes
-        // until the drive holds them, even after every peer applied them over Wi-Fi.
+        val kept = if (storedEvents.size > databaseEvents.size) mirror.copy(
+            membershipEvents = storedEntities, members = if (storedEntities.size == previous.membershipEvents.size)
+                previous.members else stored.members.map { member ->
+                    member.copy(displayName = previous.members.firstOrNull { it.deviceId == member.deviceId }?.displayName
+                        ?: member.displayName) },
+            keyEpoch = stored.keyEpoch)
+            else mirror
+        return kept.copy(peerProgress = previous.peerProgress, peerAddresses = previous.peerAddresses,
+            lastContactAt = previous.lastContactAt, lastExchangeAt = previous.lastExchangeAt,
+            pendingPhotoHashes = previous.pendingPhotoHashes, clientOnlyPeers = previous.clientOnlyPeers,
+            peerFeatures = previous.peerFeatures, relayFloor = previous.relayFloor,
+            // Keys learned while locked stay until the vault stores them; the vault's own win.
+            transportSecrets = previous.transportSecrets + kept.transportSecrets,
+            keyStatements = previous.keyStatements, keyPackages = previous.keyPackages + kept.keyPackages,
+            epochRetiredAt = retire(previous.epochRetiredAt, previous.keyEpoch, kept.keyEpoch))
+    }
+
+    private fun retentionContext(selected: TransportMirror): RelayRetention.Context {
         val cloud = cloudState().normalized()
-        val cloudCovered = if (!cloud.enabled) null
-            else if (cloud.vaultId == selected.vaultId) cloud.covered[selected.localDeviceId] ?: 0L else 0L
-        val retained = operations.filter { operation ->
-            operation.deviceId != selected.localDeviceId || activePeers.isEmpty() ||
-                (cloudCovered != null && operation.sequence > cloudCovered) || activePeers.any { peer ->
-                (selected.peerProgress[peer.deviceId]?.applied?.get(operation.deviceId)?.sequence ?: 0L) < operation.sequence
-            }
+        return RelayRetention.Context(selected.localDeviceId,
+            selected.members.filter { it.status == MemberStatus.ACTIVE.name && it.deviceId != selected.localDeviceId }
+                .mapTo(hashSetOf()) { it.deviceId },
+            selected.peerProgress.mapValues { (_, progress) -> progress.applied.mapValues { it.value.sequence } },
+            RemovalCutoff.cutoffsOf(selected.membershipEvents), relayableAuthors(selected.members),
+            // Cloud sync needs a gap-free history on the drive, so changes stay until the drive holds them.
+            if (!cloud.enabled) null else if (cloud.vaultId == selected.vaultId) cloud.covered else emptyMap())
+    }
+
+    /** Null when the folder state no longer matches an incremental publish (another group or a cleared store). */
+    private fun planRelay(state: PublishedState): RelayPlan? {
+        val previous = snapshot()
+        val full = state.pointers != null
+        if (!full && (previous == null || previous.vaultId != state.mirror.vaultId)) return null
+        if (previous != null && previous.vaultId != state.mirror.vaultId) clear()
+        val selected = selectMirror(state.mirror, previous)
+        val context = retentionContext(selected)
+        fun kept(pointer: OperationPointer) = RelayRetention.keep(
+            RelayRetention.Held(pointer.deviceId, pointer.sequence, pointer.hash), context)
+        fun pointer(it: SyncOperationEntity) = OperationPointer(it.vaultId, it.deviceId, it.sequence, it.hash, it.previousHash)
+        return if (full) {
+            val (keep, drop) = state.pointers!!.map { OperationPointer(it.vaultId, it.deviceId, it.sequence, it.hash,
+                it.previousHash) }.partition(::kept)
+            RelayPlan(generation, state, selected, keep, drop,
+                keep.filter { !File(outgoing, it.hash).exists() }.map { it.hash }, emptyList(), full = true)
+        } else {
+            val held = outgoingPointers().filter { it.vaultId == selected.vaultId }
+            val heldHashes = held.mapTo(hashSetOf()) { it.hash }
+            val (keepFresh, dropFresh) = state.newOperations!!.filter { it.hash !in heldHashes }
+                .partition { kept(pointer(it)) }
+            val (keepHeld, dropHeld) = held.partition(::kept)
+            RelayPlan(generation, state, selected, keepHeld + keepFresh.map(::pointer),
+                dropHeld + dropFresh.map(::pointer), emptyList(), keepFresh, full = false)
         }
+    }
+
+    private fun finishRelay(plan: RelayPlan, loaded: List<SyncOperationEntity>): Boolean {
+        if (plan.generation != generation) return false
+        // A full scan sees every change, so its floor starts fresh; an incremental one only rises.
+        val selected = plan.selected.copy(relayFloor = RelayRetention.raiseFloor(
+            if (plan.full) emptyMap() else plan.selected.relayFloor,
+            plan.drop.map { RelayRetention.Held(it.deviceId, it.sequence, it.hash) }))
         outgoing.mkdirs(); incoming.mkdirs()
-        val retainedHashes = retained.mapTo(hashSetOf()) { it.hash }
-        outgoing.listFiles().orEmpty().filter { it.name.matches(HASH) && it.name !in retainedHashes }
-            .forEach { check(it.delete()) { "Could not prune acknowledged sync change" } }
-        retained.forEach { operation ->
+        val keepHashes = plan.keep.mapTo(hashSetOf()) { it.hash }
+        val loadedByHash = loaded.associateBy { it.hash }
+        (plan.write + plan.load.mapNotNull { loadedByHash[it] }).forEach { operation ->
+            require(operation.hash in keepHashes && operation.vaultId == selected.vaultId)
             val file = File(outgoing, operation.hash)
             if (!file.exists()) writeProtected(file, gson.toJson(operation).toByteArray(Charsets.UTF_8))
         }
+        // A full scan also removes stray files that no held change explains. [relayLock] keeps
+        // [applyQueued] from moving a file in meanwhile.
+        val dropHashes = plan.drop.mapTo(hashSetOf()) { it.hash }
+        outgoing.listFiles().orEmpty().filter { it.name.matches(HASH) && it.name !in keepHashes &&
+            (plan.full || it.name in dropHashes) }
+            .forEach { check(it.delete()) { "Could not prune acknowledged sync change" } }
         writeProtected(File(directory, "peers"), gson.toJson(selected).toByteArray(Charsets.UTF_8))
         photoBlobs.pruneAbandonedPartials(selected.pendingPhotoHashes)
+        val activePeers = selected.members.filter {
+            it.status == MemberStatus.ACTIVE.name && it.deviceId != selected.localDeviceId
+        }
         // A removed device's history is no longer relayed, so a peer may never reach its head.
         val authors = relayableAuthors(selected.members)
         val allApplied = activePeers.isNotEmpty() && selected.heads.filter { it.deviceId in authors }.all { head ->
@@ -209,11 +385,14 @@ internal class LockedSyncStore(private val context: Context,
         }
         // Blobs no attachment manifest references (deleted or replaced photos) go once every peer
         // applied everything; the short age only protects a blob whose manifest is being written.
-        if (allApplied && !hasConflicts && selected.pendingPhotoHashes.isEmpty() &&
+        if (allApplied && !plan.state.hasConflicts && selected.pendingPhotoHashes.isEmpty() &&
             incoming.listFiles().isNullOrEmpty() && rejected.listFiles().isNullOrEmpty())
-            photoBlobs.pruneCompleted(photoHashes, System.currentTimeMillis() - 24L * 60 * 60 * 1000)
-        outgoingIndex = retained.map { OperationPointer(it.vaultId, it.deviceId, it.sequence, it.hash, it.previousHash) }
+            photoBlobs.pruneCompleted(plan.state.photoHashes, System.currentTimeMillis() - 24L * 60 * 60 * 1000)
+        // A retained change whose row went meanwhile (compacted) has no file and is left out.
+        outgoingIndex = plan.keep.filter { File(outgoing, it.hash).exists() }
             .sortedWith(compareBy({ it.deviceId }, { it.sequence }))
+        writeRelayIndex()
+        return true
     }
 
     @Synchronized override fun snapshot(): TransportMirror? {
@@ -231,7 +410,11 @@ internal class LockedSyncStore(private val context: Context,
                 epochRetiredAt = mirror.epochRetiredAt ?: emptyMap(),
                 clientOnlyPeers = mirror.clientOnlyPeers ?: emptySet(),
                 peerFeatures = mirror.peerFeatures ?: emptyMap(),
-                attachmentHashes = mirror.attachmentHashes ?: emptySet())
+                attachmentHashes = mirror.attachmentHashes ?: emptySet(),
+                relayFloor = mirror.relayFloor ?: emptyMap(),
+                transportSecrets = mirror.transportSecrets ?: emptyMap(),
+                keyStatements = mirror.keyStatements ?: emptyMap(),
+                keyPackages = mirror.keyPackages ?: emptyMap())
         }
         finally { bytes.fill(0) }
     }
@@ -267,20 +450,150 @@ internal class LockedSyncStore(private val context: Context,
         return retiredAt + (from until to).associate { it.toString() to now }
     }
 
-    /** The secret for [epoch] of the current group (epoch 1 is the stored group secret). */
-    @Synchronized fun transportSecret(epoch: Long): String {
+    /** The secret for [epoch] of the current group (epoch 1 is the stored group secret; rotated ones are random). */
+    @Synchronized fun transportSecret(epoch: Long): String = requireNotNull(snapshot()).epochSecret(epoch)
+
+    /** This device's key statement for the current group, made once and kept in the mirror. */
+    @Synchronized override fun ownKeyStatement(): KeyStatement {
         val mirror = requireNotNull(snapshot())
-        return TransportEpochs.secret(mirror.transportSecret, mirror.vaultId, epoch)
+        mirror.keyStatements[mirror.localDeviceId]?.takeIf { it.vaultId == mirror.vaultId }?.let { return it }
+        val statement = KeyStatement.of(AndroidDeviceIdentityStore(context), mirror.vaultId)
+        require(statement.deviceId == mirror.localDeviceId) { "Device identity changed" }
+        writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
+            keyStatements = mirror.keyStatements + (mirror.localDeviceId to statement))).toByteArray(Charsets.UTF_8))
+        return statement
     }
 
-    /** Previous epochs whose secrets this server still answers with a removal notice. */
-    @Synchronized fun retainedEpochs(now: Long = System.currentTimeMillis()): List<Long> {
-        val mirror = snapshot() ?: return emptyList()
-        return TransportEpochs.retained(mirror.keyEpoch,
-            mirror.epochRetiredAt.mapNotNull { (epoch, at) -> epoch.toLongOrNull()?.let { it to at } }.toMap(), now)
+    /** Keeps a member's statement when its signed identity key signed it for this group. */
+    @Synchronized override fun acceptKeyStatement(statement: KeyStatement): Boolean {
+        val mirror = snapshot() ?: return false
+        val member = mirror.members.firstOrNull { it.deviceId == statement.deviceId && it.status == MemberStatus.ACTIVE.name }
+            ?: return false
+        if (!statement.valid(mirror.vaultId, member.identityPublicKey) || mirror.keyStatements[statement.deviceId] == statement) return false
+        writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
+            keyStatements = mirror.keyStatements + (statement.deviceId to statement))).toByteArray(Charsets.UTF_8))
+        return true
     }
+
+    /**
+     * Keeps each package set the manager of its REMOVE signed (never replacing a valid one already
+     * kept), and opens this device's package: its transport secret goes into the mirror (Wi-Fi and
+     * Drive work again, even while locked). The package key is dropped here: the content key needs it
+     * and K(1) ([EpochKeys.contentKey]), so only [installEpochKeys] makes it, once the vault is open.
+     * True when a new secret arrived.
+     */
+    @Synchronized override fun acceptKeyPackages(sets: List<PackageSet>): Boolean {
+        val mirror = snapshot() ?: return false
+        val verified = runCatching { SyncMembershipManager.verify(mirror.membershipEvents.map { it.toEvent() }) }.getOrNull()
+            ?: return false
+        var packages = mirror.keyPackages
+        var secrets = mirror.transportSecrets
+        for (incoming in sets.take(EpochKeyRotation.MAX_SETS)) {
+            if (!EpochKeyRotation.validSet(incoming, mirror.vaultId, verified)) continue
+            val kept = packages[incoming.epoch.toString()]?.takeIf { EpochKeyRotation.validSet(it, mirror.vaultId, verified) }
+            val set = kept ?: incoming
+            if (kept == null) packages = packages + (set.epoch.toString() to set)
+            if (secrets.containsKey(set.epoch.toString())) continue
+            val sealed = set.packages[mirror.localDeviceId] ?: continue
+            val private = AndroidDeviceIdentityStore(context).x25519Private()
+            val opened = try { EpochKeys.open(mirror.vaultId, set.epoch, mirror.localDeviceId, private,
+                Base64.getUrlDecoder().decode(sealed)) } finally { private.fill(0) } ?: continue
+            secrets = secrets + (set.epoch.toString() to Base64.getUrlEncoder().withoutPadding().encodeToString(opened.first))
+            opened.first.fill(0); opened.second.fill(0)
+        }
+        if (packages == mirror.keyPackages && secrets == mirror.transportSecrets) return false
+        writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(keyPackages = packages, transportSecrets = secrets))
+            .toByteArray(Charsets.UTF_8))
+        return secrets != mirror.transportSecrets
+    }
+
+    /** Epochs whose content key a queued change needed and this device lacks ([MissingEpochKeyException]). */
+    @Volatile private var missingEpochs: Set<Long> = emptySet()
+
+    /**
+     * True while a received change waits for the key package of its epoch, or while this device holds
+     * back what it sends because its package has not arrived ([TransportMirror.stranded]).
+     */
+    fun waitingForKeys(): Boolean = missingEpochs.isNotEmpty() || runCatching { snapshot()?.stranded() == true }.getOrDefault(false)
+
+    /** True while this device sends nothing until its new keys arrive ([TransportMirror.stranded]). */
+    @Synchronized fun stranded(): Boolean = snapshot()?.stranded() == true
+
+    /** Package sets to relay to a peer (each package is sealed to one survivor). */
+    @Synchronized override fun keyPackages(): List<PackageSet> = snapshot()?.keyPackages?.values?.sortedBy { it.epoch }.orEmpty()
+
+    /** Statements known here, for the managing device's rotation gate ([EpochKeyRotation.gate]). */
+    @Synchronized fun keyStatements(): Map<String, KeyStatement> = snapshot()?.keyStatements.orEmpty()
+
+    /**
+     * Unlocked: stores the content key of each epoch whose package for this device arrived, with its
+     * transport secret ([SyncKeyring]), and keeps every valid set in the vault. K(N) is derived from
+     * the package key and the vault's K(1) ([EpochKeys.contentKey]), so it exists only here. Call it
+     * after the transport store's membership is in the vault ([applyQueued] does): a set is valid only
+     * against a history that holds its REMOVE. Changes that waited for it then apply.
+     */
+    suspend fun installEpochKeys(database: VaultDatabase): Int {
+        val mirror = snapshot() ?: return 0
+        val vaultId = database.dao().settings()?.vaultId ?: return 0
+        if (vaultId != mirror.vaultId) return 0
+        val dao = database.syncDao()
+        val held = dao.epochKeys().filter { it.vaultId == vaultId }.mapTo(hashSetOf()) { it.epoch }
+        val stored = dao.keyPackages(vaultId).mapTo(hashSetOf()) { it.epoch }
+        val verified = runCatching { newerMembership(dao.membershipEvents(vaultId), mirror.membershipEvents) }.getOrNull() ?: return 0
+        val group = dao.vaultState()?.takeIf { it.vaultId == vaultId } ?: return 0
+        var installed = 0
+        val first = Base64.getUrlDecoder().decode(group.contentKey)
+        try {
+            require(first.size == 32) { "Invalid sync key state" }
+            for (set in mirror.keyPackages.values.sortedBy { it.epoch }) {
+                if (!EpochKeyRotation.validSet(set, vaultId, verified)) continue
+                if (set.epoch !in stored) dao.saveKeyPackages(SyncKeyPackageEntity(vaultId, set.epoch, gson.toJson(set)))
+                if (set.epoch in held) continue
+                val sealed = set.packages[mirror.localDeviceId]?.let(EpochKeys::strictDecode) ?: continue
+                val private = AndroidDeviceIdentityStore(context).x25519Private()
+                val opened = try { EpochKeys.open(vaultId, set.epoch, mirror.localDeviceId, private, sealed) }
+                    finally { private.fill(0) } ?: continue
+                val key = EpochKeys.contentKey(first, vaultId, set.epoch, opened.second)
+                val encoder = Base64.getUrlEncoder().withoutPadding()
+                try {
+                    dao.saveEpochKey(SyncEpochKeyEntity(vaultId, set.epoch, encoder.encodeToString(key), encoder.encodeToString(opened.first)))
+                } finally { opened.first.fill(0); opened.second.fill(0); key.fill(0) }
+                installed++
+            }
+        } finally { first.fill(0) }
+        return installed
+    }
+
+    /**
+     * The rotated epoch whose HMAC-derived secret (what a survivor without its package uses,
+     * [TransportMirror.stranded]) the client proved, or null. Such a client gets the sealed packages.
+     */
+    @Synchronized fun strandedEpochFor(supplied: ByteArray, challenge: ByteArray): Long? {
+        val mirror = snapshot() ?: return null
+        val decoder = Base64.getUrlDecoder()
+        val root = decoder.decode(mirror.transportSecret)
+        val random = mirror.randomSecrets().mapValues { decoder.decode(it.value) }
+        try {
+            return random.keys.sorted().firstOrNull { epoch ->
+                val derived = EpochKeys.transportSecret(root, mirror.vaultId, epoch, random.filterKeys { it < epoch })
+                try { MembershipWire.proofMatches(supplied, Base64.getUrlEncoder().withoutPadding().encodeToString(derived), challenge) }
+                finally { derived.fill(0) }
+            }
+        } finally { root.fill(0); random.values.forEach { it.fill(0) } }
+    }
+
+    /** Previous epochs whose secrets this server still answers with a removal notice ([TransportEpochs.retained]). */
+    @Synchronized fun retainedEpochs(): List<Long> {
+        val mirror = snapshot() ?: return emptyList()
+        return TransportEpochs.retained(mirror.keyEpoch)
+    }
+
+    private fun retiredAt(mirror: TransportMirror): Map<Long, Long> =
+        mirror.epochRetiredAt.mapNotNull { (epoch, at) -> epoch.toLongOrNull()?.let { it to at } }.toMap()
 
     fun signIdentity(bytes: ByteArray): ByteArray = AndroidDeviceIdentityStore(context).sign(bytes)
+
+    override fun signProgress(bytes: ByteArray): ByteArray? = signIdentity(bytes)
 
     @Synchronized override fun progress(): SyncProgress {
         val mirror = requireNotNull(snapshot())
@@ -313,13 +626,20 @@ internal class LockedSyncStore(private val context: Context,
                 else mirror.lastExchangeAt)).toByteArray(Charsets.UTF_8))
     }
 
-    /** A peer's progress report on the drive was written at [at]; contact times never move backward. */
+    /**
+     * A peer's progress report on the drive was written at [at]. The peer writes it at the end of a
+     * finished drive pass, so it counts as an exchange as well as a contact (Home and Devices read
+     * the exchange time). Neither time moves backward.
+     */
     @Synchronized override fun recordPeerSeen(deviceId: String, at: Long) {
         val mirror = requireNotNull(snapshot())
         require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })
-        if (at <= (mirror.lastContactAt[deviceId] ?: 0L)) return
+        val contact = mirror.lastContactAt[deviceId] ?: 0L
+        val exchange = mirror.lastExchangeAt[deviceId] ?: 0L
+        if (at <= contact && at <= exchange) return
         writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
-            lastContactAt = mirror.lastContactAt + (deviceId to at))).toByteArray(Charsets.UTF_8))
+            lastContactAt = mirror.lastContactAt + (deviceId to maxOf(contact, at)),
+            lastExchangeAt = mirror.lastExchangeAt + (deviceId to maxOf(exchange, at)))).toByteArray(Charsets.UTF_8))
     }
 
     @Synchronized override fun heldOperations(author: String, after: Long, limit: Int): List<SyncOperationEntity> {
@@ -392,7 +712,7 @@ internal class LockedSyncStore(private val context: Context,
             .toByteArray(Charsets.UTF_8))
     }
 
-    @Synchronized fun recordPeerFeatures(deviceId: String, features: Set<String>) {
+    @Synchronized override fun recordPeerFeatures(deviceId: String, features: Set<String>) {
         val mirror = requireNotNull(snapshot())
         require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })
         val list = features.sorted().take(32)
@@ -409,6 +729,12 @@ internal class LockedSyncStore(private val context: Context,
     @Synchronized fun appearanceSyncOpen(): Boolean {
         val mirror = snapshot() ?: return false
         return AppearanceSyncRules.gateOpen(mirror.localDeviceId, mirror.members, mirror.peerFeatures)
+    }
+
+    /** The same gate for sign-in method changes ([SignInMethodSyncRules.gateOpen]). */
+    @Synchronized fun signInMethodSyncOpen(): Boolean {
+        val mirror = snapshot() ?: return false
+        return SignInMethodSyncRules.gateOpen(mirror.localDeviceId, mirror.members, mirror.peerFeatures)
     }
 
     /**
@@ -501,6 +827,8 @@ internal class LockedSyncStore(private val context: Context,
     @Synchronized override fun pending(frontier: SyncFrontier, relayRemoved: Boolean): List<SyncOperationEntity> {
         frontier.validate()
         val mirror = requireNotNull(snapshot())
+        // Waiting for new keys: nothing leaves this device until they arrive ([TransportMirror.stranded]).
+        if (mirror.stranded()) return emptyList()
         val vaultId = mirror.vaultId
         // A receiver rejects a change by a device that is not an active member, and that ends the
         // session. Changes of a removed device go only to a peer that accepts them up to the cutoff.
@@ -508,11 +836,15 @@ internal class LockedSyncStore(private val context: Context,
         // without SyncFeatures.APPEARANCE): each author's changes form a hash chain, so a gap would
         // stop every later change of that author on the peer just as a rejected change does. The
         // writer's gate (AppearanceSyncRules.gateOpen) keeps such changes out of the chain instead.
+        // Each author's run stops at the first missing change ([RelayRetention.gapFree]).
         val authors = relayableAuthors(mirror.members)
         val cutoffs = if (relayRemoved) RemovalCutoff.cutoffsOf(mirror.membershipEvents) else emptyMap()
-        return outgoingPointers().asSequence().filter { it.vaultId == vaultId &&
-            (it.deviceId in authors || RemovalCutoff.allows(cutoffs[it.deviceId], it.sequence, it.hash)) &&
-            it.sequence > (frontier.counters[it.deviceId] ?: 0L) }.take(100).map { pointer ->
+        val pointers = outgoingPointers().filter { it.vaultId == vaultId }
+        val byHash = pointers.associateBy { it.hash }
+        return RelayRetention.gapFree(pointers.map { ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) },
+            frontier.counters, { it.deviceId in authors || RemovalCutoff.allows(cutoffs[it.deviceId], it.sequence, it.hash) },
+            100).map { link ->
+            val pointer = byHash.getValue(link.hash)
             val bytes = readProtected(File(outgoing, pointer.hash))
             try {
                 gson.fromJson(bytes.toString(Charsets.UTF_8), SyncOperationEntity::class.java).also {
@@ -531,7 +863,8 @@ internal class LockedSyncStore(private val context: Context,
         // A resend of something already held is acknowledged again without a second copy.
         if (file.exists() || File(outgoing, change.hash).exists()) return
         val link = ChainLink(change.deviceId, change.sequence, change.hash, change.previousHash)
-        IncomingChain.admit(link, progress().received, emptySet())
+        // An older change resent (its relay file may be gone) is acknowledged, never stored again.
+        if (IncomingChain.admit(link, progress().received, emptySet()) != IncomingChain.Admission.STORE) return
         val bytes = gson.toJson(operation).toByteArray(Charsets.UTF_8)
         try {
             val files = incoming.listFiles().orEmpty().filter { it.isFile }
@@ -545,20 +878,23 @@ internal class LockedSyncStore(private val context: Context,
     }
 
     suspend fun applyQueued(database: VaultDatabase, localKey: ByteArray): Int {
+        missingEpochs = emptySet()
         val mirror = requireNotNull(snapshot())
         database.withTransaction {
             val dao = database.syncDao()
             val current = dao.membershipEvents(mirror.vaultId)
-            val accepted = SyncMembershipManager.verify(mirror.membershipEvents.map { it.toEvent() })
-            require(current.zip(mirror.membershipEvents).all { (left, right) -> left.hash == right.hash }) {
-                "Conflicting membership history"
-            }
+            val accepted = newerMembership(current, mirror.membershipEvents)
             mirror.membershipEvents.drop(current.size).forEach { dao.insertMembershipEvent(it) }
             accepted.members.forEach { member ->
                 val label = dao.membership(mirror.vaultId, member.deviceId)?.displayName
                 dao.upsertMembership(member.copy(displayName = label ?: member.displayName))
             }
         }
+        // The managing device gives REMOVEs answered while locked (leave requests) their keys or a
+        // marker. Then the keys that arrived while locked: their sets are valid only against the
+        // history just stored, so this comes after it. Changes of their epoch can then apply.
+        runCatching { EpochKeyRotation.coverRemovals(database, AndroidDeviceIdentityStore(context), keyStatements()) }
+        runCatching { installEpochKeys(database) }
         val applier = IncomingEntryChangeApplier(database, photoBlobs, context)
         var applied = 0
         var progress: Boolean
@@ -571,7 +907,7 @@ internal class LockedSyncStore(private val context: Context,
                 if (operation.sequence > (appliedHead?.sequence ?: 0L) + 1L) continue
                 // A group or linked authenticator from another device may need to be applied first.
                 val result = applyOne(applier, operation, localKey) ?: continue
-                synchronized(this) {
+                relayLock.withLock { synchronized(this) {
                     val queued = File(incoming, operation.hash)
                     if (queued.exists()) {
                         outgoing.mkdirs()
@@ -584,13 +920,50 @@ internal class LockedSyncStore(private val context: Context,
                         check(queued.delete()) { "Could not acknowledge queued change" }
                         incomingIndex = incomingIndex?.filterNot { it.link.hash == operation.hash }
                     }
-                }
+                } }
                 if (result != IncomingResult.REPLAY) applied++
                 progress = true
             }
         } while (progress)
         publish(database)
         return applied
+    }
+
+    /**
+     * Before a forced leave: keeps what [applyQueued] could not apply (the incoming and set-aside
+     * changes) in Recently deleted, while the old group's content key still exists. See
+     * [RemovalArchive]. Only changes that still pass the signed membership check are read. Throws
+     * when the vault can't be written; the caller then must not leave yet.
+     */
+    suspend fun archiveUnapplied(database: VaultDatabase, localKey: ByteArray,
+        now: Long = System.currentTimeMillis()): RemovalArchive.Summary {
+        val mirror = snapshot() ?: return RemovalArchive.Summary(0, 0)
+        val operations = synchronized(this) { readOperations(incoming) + readOperations(rejected) }
+            .filter { it.vaultId == mirror.vaultId && runCatching { verifyIncomingOperation(mirror, it) }.isSuccess }
+            .distinctBy { it.hash }
+        if (operations.isEmpty()) return RemovalArchive.Summary(0, 0)
+        val contentKey = database.syncKeyring(localKey)
+        val candidates = try {
+            operations.filter { it.entityType == "entry" && it.kind == "upsert" }.mapNotNull { operation ->
+                runCatching {
+                    val payload = IncomingEntryChangeApplier.decryptBytes(operation.toSyncChange(), contentKey)
+                    val json = try { org.json.JSONObject(payload.toString(Charsets.UTF_8)) } finally { payload.fill(0) }
+                    val groups = json.optJSONArray("groupIds")
+                    RemovalArchive.Candidate(operation,
+                        SyncEntryCodec.parseEntry(json.getJSONObject("entry").toString(), operation.entityId),
+                        if (groups == null) emptyList() else (0 until groups.length()).map(groups::getString))
+                }.getOrNull()
+            }
+        } finally { contentKey.wipe() }
+        val local = candidates.mapNotNull { database.dao().entryRow(it.operation.entityId) }.associateBy { it.id }
+        val kept = RemovalArchive.pick(candidates, local)
+        database.withTransaction {
+            kept.forEach { candidate ->
+                val row = RemovalArchive.trashRow(candidate, now)
+                if (database.dao().trashed(row.id) == null) database.dao().insertTrash(row)
+            }
+        }
+        return RemovalArchive.Summary(kept.size, RemovalArchive.otherChanges(operations))
     }
 
     /** Returns null when the change must wait or was set aside; the loop then moves on. */
@@ -609,6 +982,8 @@ internal class LockedSyncStore(private val context: Context,
     }
     catch (_: MissingPhotoDependencyException) { null }
     catch (_: MissingRecordDependencyException) { null }
+    // A change of an epoch whose key has not arrived yet waits for its package ([EpochKeys]), never set aside.
+    catch (missing: MissingEpochKeyException) { missingEpochs = missingEpochs + missing.epoch; null }
     catch (_: SQLiteConstraintException) { quarantine(operation.hash); null }
     catch (_: IllegalArgumentException) { quarantine(operation.hash); null }
     catch (_: JSONException) { quarantine(operation.hash); null }
@@ -646,8 +1021,11 @@ internal class LockedSyncStore(private val context: Context,
         listOf("peers.bak", "peers.new").forEach { name ->
             File(directory, name).let { if (it.exists()) check(it.delete()) }
         }
+        AtomicFile(relayIndexFile).delete()
         outgoingIndex = null
         incomingIndex = null
+        generation++
+        fullScanFor = null
     }
 
     // Leave and removal notices.
@@ -678,6 +1056,18 @@ internal class LockedSyncStore(private val context: Context,
     }
 
     @Synchronized fun clearPendingLeave() { AtomicFile(leaveNoticeFile).delete() }
+
+    /**
+     * After this device joined a group as [joinedDeviceId]: drops a pending leave request that this
+     * same identity signed, so the manager can't remove it again when the request arrives. A request
+     * of an earlier identity stays (see [MembershipChoices.dropLeaveAfterJoin]). True when it dropped one.
+     */
+    @Synchronized fun clearPendingLeaveOf(joinedDeviceId: String): Boolean {
+        val notice = pendingLeave() ?: return false
+        if (!MembershipChoices.dropLeaveAfterJoin(notice.deviceId, joinedDeviceId)) return false
+        clearPendingLeave()
+        return true
+    }
 
     @Synchronized fun recordRemoval(notice: SyncRemovalNotice) {
         writeProtected(removalNoticeFile, gson.toJson(notice).toByteArray(Charsets.UTF_8))
@@ -710,13 +1100,47 @@ internal class LockedSyncStore(private val context: Context,
         if (pendingLeave() != null) return true
         val mirror = snapshot() ?: return false
         val localActive = mirror.members.any { it.deviceId == mirror.localDeviceId && it.status == MemberStatus.ACTIVE.name }
-        return localActive && mirror.members.any { it.status == MemberStatus.REVOKED.name } && retainedEpochs().isNotEmpty()
+        return localActive && mirror.members.any { it.status == MemberStatus.REVOKED.name } &&
+            TransportEpochs.keepServiceFor(mirror.keyEpoch, retiredAt(mirror), System.currentTimeMillis()).isNotEmpty()
     }
 
-    private fun outgoingPointers(): List<OperationPointer> = outgoingIndex ?: readOperations(outgoing)
-        .map { OperationPointer(it.vaultId, it.deviceId, it.sequence, it.hash, it.previousHash) }
-        .sortedWith(compareBy({ it.deviceId }, { it.sequence }))
-        .also { outgoingIndex = it }
+    /**
+     * The relay folder's chain coordinates. A cold start reads the sealed index file (one file)
+     * instead of decrypting every relay file. The index is rebuilt from the files when it is
+     * missing or names other files than the folder holds (for example after a crash).
+     */
+    private fun outgoingPointers(): List<OperationPointer> {
+        outgoingIndex?.let { return it }
+        val names = outgoing.listFiles().orEmpty().filter { it.name.matches(HASH) }.mapTo(hashSetOf()) { it.name }
+        val stored = readRelayIndex()?.takeIf { index -> index.size == names.size && index.all { it.hash in names } }
+        if (stored != null) return stored.sortedWith(compareBy({ it.deviceId }, { it.sequence })).also { outgoingIndex = it }
+        return readOperations(outgoing)
+            .map { OperationPointer(it.vaultId, it.deviceId, it.sequence, it.hash, it.previousHash) }
+            .sortedWith(compareBy({ it.deviceId }, { it.sequence }))
+            .also { outgoingIndex = it; writeRelayIndex() }
+    }
+
+    private fun readRelayIndex(): List<OperationPointer>? {
+        if (!relayIndexFile.exists() && !File(relayIndexFile.path + ".bak").exists()) return null
+        return runCatching {
+            val bytes = readProtected(relayIndexFile, RELAY_INDEX_LIMIT)
+            try {
+                @Suppress("SENSELESS_COMPARISON")
+                gson.fromJson(bytes.toString(Charsets.UTF_8), Array<OperationPointer>::class.java).toList().also { list ->
+                    require(list.all { it != null && it.vaultId != null && it.deviceId != null && it.hash != null &&
+                        it.previousHash != null && it.sequence > 0 && it.hash.matches(HASH) })
+                }
+            } finally { bytes.fill(0) }
+        }.getOrNull()
+    }
+
+    /** Best effort: without the index, the next cold start reads the relay files. */
+    private fun writeRelayIndex() {
+        val index = outgoingIndex ?: return
+        val bytes = gson.toJson(index).toByteArray(Charsets.UTF_8)
+        if (bytes.size <= RELAY_INDEX_LIMIT) runCatching { writeProtected(relayIndexFile, bytes, RELAY_INDEX_LIMIT) }
+        else { bytes.fill(0); AtomicFile(relayIndexFile).delete() }
+    }
 
     private fun incomingPointers(): List<QueuedPointer> = incomingIndex ?: readOperations(incoming)
         .map { QueuedPointer(it.vaultId, ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash), meta(it)) }
@@ -778,6 +1202,8 @@ internal class LockedSyncStore(private val context: Context,
         const val KEY_ALIAS = "nuvori_sync_transport_v1"
         /** The cached Drive file list (about 150 bytes a file); Windows stops listing at 200,000 files. */
         const val CLOUD_FILES_LIMIT = 32 * 1024 * 1024
+        /** The relay folder's index, about 250 bytes a change. */
+        const val RELAY_INDEX_LIMIT = 32 * 1024 * 1024
         val HASH = Regex("[a-f0-9]{64}")
     }
 }

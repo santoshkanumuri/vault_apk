@@ -1,6 +1,6 @@
 # Release builds and downloads
 
-The phone release is version 2.3.1, version code 72, package `com.application.private_vault`. Use the existing release key to keep updates installable over earlier releases.
+The phone release is version 2.3.3, version code 74, package `com.application.private_vault`. Use the existing release key to keep updates installable over earlier releases.
 
 ## Signing setup
 
@@ -20,7 +20,7 @@ On macOS or Linux, use `sh gradlew` with the same tasks.
 
 Build the watch companion separately. It uses version 2.1.2, code 360012:
 
-For each new Google Play upload, update `versionCode` in `wear/build.gradle.kts` to an unused, higher number and rebuild. Codes up to 360011 were used by earlier releases, so this watch release uses 360012. `versionName` is the displayed label; the watch is 2.1.2 with the phone at 2.3.1. Renaming an APK or AAB does not change its embedded version. See [Android app versioning](https://developer.android.com/studio/publish/versioning).
+For each new Google Play upload, update `versionCode` in `wear/build.gradle.kts` to an unused, higher number and rebuild. Codes up to 360011 were used by earlier releases, so this watch release uses 360012. `versionName` is the displayed label; the watch is 2.1.2 with the phone at 2.3.3. Renaming an APK or AAB does not change its embedded version. See [Android app versioning](https://developer.android.com/studio/publish/versioning).
 
 ```powershell
 .\gradlew.bat :watchcommon:test :wear:testDebugUnitTest :wear:lintRelease :wear:assembleRelease :wear:bundleRelease --console=plain

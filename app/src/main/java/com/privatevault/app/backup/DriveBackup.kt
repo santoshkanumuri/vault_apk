@@ -1,6 +1,7 @@
 package com.privatevault.app.backup
 
 import android.content.Context
+import com.privatevault.app.security.vaultKdf
 import com.privatevault.app.sync.CloudError
 import com.privatevault.app.sync.CloudException
 import com.privatevault.app.sync.CloudFile
@@ -154,9 +155,13 @@ internal class DriveBackupKeyFile(private val file: File) {
         file.parentFile?.mkdirs()
         val temporary = File(file.path + ".tmp")
         FileOutputStream(temporary).use { it.write(nonce); it.write(sealed); it.fd.sync() }
-        if (!temporary.renameTo(file)) {
+        // Replaces an existing key in one step. File.renameTo cannot replace a file on every platform.
+        try {
+            java.nio.file.Files.move(temporary.toPath(), file.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        } catch (failure: Exception) {
             temporary.delete()
-            error("Could not save the backup key")
+            throw IllegalStateException("Could not save the backup key", failure)
         }
     }
 
@@ -254,7 +259,7 @@ internal object DriveBackupRunner {
     suspend fun turnOn(context: Context, password: CharArray, vaultKey: ByteArray, interval: Long) = withContext(Dispatchers.Default) {
         require(interval in DriveBackupPlan.INTERVALS)
         mutex.withLock {
-            BackupCipher.create(password).use { key -> keyFile(context).save(key, vaultKey) }
+            BackupCipher.create(password, vaultKdf(context)).use { key -> keyFile(context).save(key, vaultKey) }
             val saved = preferences(context)
             val backupId = saved.getString("backup_id", null) ?: DriveBackupNames.newBackupId()
             saved.edit().putBoolean("enabled", true).putLong("interval_ms", interval).putString("backup_id", backupId)
@@ -269,7 +274,27 @@ internal object DriveBackupRunner {
      */
     suspend fun changePassword(context: Context, password: CharArray, vaultKey: ByteArray) = withContext(Dispatchers.Default) {
         if (!status.value.enabled) return@withContext
-        mutex.withLock { BackupCipher.create(password).use { key -> keyFile(context).save(key, vaultKey) } }
+        mutex.withLock { BackupCipher.create(password, vaultKdf(context)).use { key -> keyFile(context).save(key, vaultKey) } }
+    }
+
+    /**
+     * After an unlock with the master password: a backup key made by 2.3.1 or earlier moves to the
+     * vault's timed settings, so the next backups cost an attacker as much per guess as the vault.
+     * The key changes only when [password] opens it; backups that use another password stay as
+     * they are. Files already in the Drive keep their own settings. Slow (Argon2id, twice).
+     */
+    suspend fun strengthenKey(context: Context, password: CharArray, vaultKey: ByteArray) = withContext(Dispatchers.Default) {
+        if (!preferences(context).getBoolean("enabled", false)) return@withContext
+        mutex.withLock {
+            val file = keyFile(context)
+            val key = file.load(vaultKey) ?: return@withLock
+            key.use { current ->
+                val target = vaultKdf(context)
+                if (BackupCipher.settings(current).iterations >= target.iterations) return@use
+                if (!BackupCipher.opens(current, password)) return@use
+                BackupCipher.rewrap(current, password, target).use { stronger -> file.save(stronger, vaultKey) }
+            }
+        }
     }
 
     /** Stops backups on this phone and deletes its backup key. The files in the Drive stay. */

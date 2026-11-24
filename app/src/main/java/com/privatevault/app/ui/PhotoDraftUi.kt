@@ -51,8 +51,7 @@ internal fun rememberPhotoDraftEditor(viewModel: VaultViewModel): PhotoDraftEdit
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        viewModel.externalFlowActive = false
-        if (uri == null) state.busy = false
+        if (!viewModel.pickerReturned(com.privatevault.app.PickerAction.PHOTO, uri) || uri == null) state.busy = false
         else scope.launch {
             try { state.photos.add(viewModel.stagePhoto(uri)) }
             catch (failure: Exception) { state.error = "Could not add that photo." }

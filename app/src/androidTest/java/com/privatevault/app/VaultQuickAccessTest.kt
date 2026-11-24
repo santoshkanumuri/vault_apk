@@ -48,6 +48,32 @@ class VaultQuickAccessTest {
         compose.runOnIdle { assertTrue(selected) }
     }
 
+    @Test fun mostUsedPasswordComesFirstWithOneBadgePerSite() {
+        val work = login.copy(id = "work", title = "Work mail", primaryValue = "work@example.com", linkedAuthenticatorId = "")
+        val home = login.copy(id = "home", title = "Home mail", primaryValue = "home@example.com", linkedAuthenticatorId = "")
+        var uses = emptyMap<String, com.privatevault.app.security.ItemUse>()
+        repeat(3) { uses = com.privatevault.app.security.ItemUsage.record(uses, "work", 1_000L) }
+        val usage = com.privatevault.app.security.UsageSnapshot(uses, 1_000L)
+        compose.setContent {
+            MaterialTheme {
+                Column(Modifier.fillMaxSize().padding(16.dp)) { VaultQuickAccessContent(listOf(home, work), null, usage = usage) { _, _ -> } }
+            }
+        }
+        compose.onNodeWithText("Passwords").performClick()
+        compose.onAllNodesWithText("Most used").assertCountEquals(1)
+        val workTop = compose.onNodeWithText("Work mail").fetchSemanticsNode().boundsInRoot.top
+        val homeTop = compose.onNodeWithText("Home mail").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the most used login is listed first", workTop < homeTop)
+    }
+
+    @Test fun pickerRowSaysMostUsedOnlyWhenMarked() {
+        compose.setContent {
+            MaterialTheme { Column { AutofillAccountRow(login, "Fill login", mostUsed = true) {}; AutofillAccountRow(login.copy(id = "b"), "Fill") {} } }
+        }
+        compose.onAllNodesWithText("Most used", useUnmergedTree = true).assertCountEquals(1)
+        compose.onNodeWithContentDescription("Fill login: user@example.com, Mail login, most used").assertExists()
+    }
+
     @Test fun passwordTabSearchesAccountsAndCopiesOnlySelectedField() {
         var selection: Pair<VaultEntry, QuickField>? = null
         compose.setContent {
@@ -72,6 +98,9 @@ class VaultQuickAccessTest {
     }
 
     @Test fun totpSearchIncludesAccountsOutsidePreviousAppSuggestions() {
+        // Code rows tick while shown. With the test clock running on its own, each idle wait advances it and the
+        // rows recompose forever, so this test moves the clock one frame after each step.
+        compose.mainClock.autoAdvance = false
         compose.setContent {
             MaterialTheme {
                 Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -79,12 +108,15 @@ class VaultQuickAccessTest {
                 }
             }
         }
+        compose.mainClock.advanceTimeByFrame()
         compose.onNodeWithText(linkedCode.title).assertExists()
         compose.onNodeWithText(otherCode.title).assertDoesNotExist()
-        compose.onNodeWithText("Search TOTP accounts").performTextInput("Other")
+        compose.onNodeWithText("Search codes").performTextInput("Other")
+        compose.mainClock.advanceTimeByFrame()
         compose.onNodeWithText(otherCode.title).assertExists()
         compose.onNodeWithText(login.title).assertDoesNotExist()
         compose.onNodeWithText("Passwords").performClick()
+        compose.mainClock.advanceTimeByFrame()
         compose.onNodeWithText(login.title).assertExists()
     }
 

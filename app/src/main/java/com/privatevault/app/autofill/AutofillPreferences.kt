@@ -49,6 +49,19 @@ internal object AutofillPreferences {
     fun keyboardSuggestions(context: Context): Boolean =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(KEYBOARD_SUGGESTIONS, KEYBOARD_SUGGESTIONS_DEFAULT)
 
+    private const val SIGN_IN_REMINDERS = "autofill_sign_in_reminders"
+
+    /**
+     * "Last time: GitHub · octocat" next to a site's logins, when Nuvori for Windows remembered how the user signed in
+     * there. On by default: it holds no secret and fills no password.
+     */
+    fun signInReminders(context: Context): Boolean =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(SIGN_IN_REMINDERS, true)
+
+    fun setSignInReminders(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean(SIGN_IN_REMINDERS, enabled).apply()
+    }
+
     fun offerCards(context: Context): Boolean =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(OFFER_CARDS, true)
 

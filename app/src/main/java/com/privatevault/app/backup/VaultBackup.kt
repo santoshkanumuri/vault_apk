@@ -27,7 +27,7 @@ class VaultBackupManager(
     private val photoStore: EncryptedPhotoStore
 ) {
     suspend fun export(output: OutputStream, password: CharArray, vaultKey: ByteArray) {
-        BackupCipher.create(password).use { key -> export(output, key, vaultKey) }
+        BackupCipher.create(password, com.privatevault.app.security.vaultKdf(context)).use { key -> export(output, key, vaultKey) }
     }
 
     /**

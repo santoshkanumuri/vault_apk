@@ -124,6 +124,8 @@ internal fun SettingsHub(summary: SettingsHubSummary, open: (String) -> Unit) {
             SettingsHubDivider()
             SettingsHubRow("Passkeys", "Website sign-in and encrypted backups", NuvoriIcons.Passkey,
                 listOf(StatusKind.NEUTRAL to if (summary.passkeys == 0) "None saved" else "${summary.passkeys} saved")) { open("Passkeys") }
+            SettingsHubDivider()
+            SettingsHubRow("Sign-ins", "Which “Continue with” account you used on a site", NuvoriIcons.LogIn) { open("Sign-ins") }
         }
         SettingsHubGroup("Sync") {
             val pairedChip = if (summary.pairedDevices == 0) StatusKind.NEUTRAL to "Not paired"
@@ -145,9 +147,11 @@ internal fun SettingsHub(summary: SettingsHubSummary, open: (String) -> Unit) {
             SettingsHubRow("Backup and import", "Encrypted backups and password exports", NuvoriIcons.Import) { open("Backup and import") }
             SettingsHubDivider()
             SettingsHubRow("Import authenticator codes", "Move codes from another app", NuvoriIcons.Code) { open("Import authenticator codes") }
+            SettingsHubDivider()
+            SettingsHubRow("Recently deleted", "Restore items deleted in the last 30 days", NuvoriIcons.Delete) { open("Recently deleted") }
         }
         SettingsHubGroup("App") {
-            SettingsHubRow("Appearance", "Light or dark, accent and background colors", if (summary.lightMode) NuvoriIcons.Sun else NuvoriIcons.Moon,
+            SettingsHubRow("Appearance", "Light or dark, colors and website icons", if (summary.lightMode) NuvoriIcons.Sun else NuvoriIcons.Moon,
                 listOf(StatusKind.NEUTRAL to if (summary.lightMode) "Light" else "Dark")) { open("Appearance") }
             SettingsHubDivider()
             SettingsHubRow("Cards and NFC", "Optional contactless card scanning", NuvoriIcons.Nfc,
@@ -238,7 +242,8 @@ internal fun SettingsSwitchRow(label: String, checked: Boolean, onCheckedChange:
         role = Role.Switch, onValueChange = onCheckedChange),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
+            Text(label, style = MaterialTheme.typography.bodyLarge,
+                color = if (enabled) androidx.compose.ui.graphics.Color.Unspecified else MaterialTheme.colorScheme.onSurface.copy(alpha = .38f))
             if (description != null) Text(description, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

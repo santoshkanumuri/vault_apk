@@ -46,6 +46,8 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -82,6 +84,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -297,7 +300,8 @@ fun PrivateVaultApp(
                         }
                 }
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
-                    .padding(bottom = if (status is VaultStatus.Unlocked) 64.dp else 0.dp)) { data ->
+                    // Above the bottom bar when unlocked, and above the "Privacy policy" button on the lock screen.
+                    .padding(bottom = if (status is VaultStatus.Unlocked) 64.dp else 48.dp)) { data ->
                     NoticeSnackbar(data)
                 }
                 if (status is VaultStatus.Locked || status is VaultStatus.NeedsSetup && showSetup)
@@ -314,20 +318,22 @@ private fun SetupScreen(viewModel: VaultViewModel, firstRunChoice: FirstRunChoic
     var enableNfc by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf("") }
     val valid = password.length >= PasswordCrypto.MIN_PASSWORD_LENGTH && password == confirm
+    val checking by viewModel.checkingPassword.collectAsStateWithLifecycle()
     BackHandler(onBack = onBack)
     val description = when (firstRunChoice) {
         FirstRunChoice.NEW -> "Your master password cannot be recovered. To pair this empty device with an existing vault, use that vault's master password."
         FirstRunChoice.JOIN -> "Create an empty vault with the same master password as your managing device. After setup, scan its pairing QR. If the passwords differ, you can change this empty vault's password on the pairing screen."
         FirstRunChoice.RESTORE -> "Create a password for this phone. You will enter the backup's original password next."
-        FirstRunChoice.BROWSER_IMPORT -> "Create your encrypted vault first. Then choose your Chrome or Brave password CSV."
+        FirstRunChoice.BROWSER_IMPORT -> "Create your encrypted vault first. Then choose a password export from your browser or password manager."
     }
     CenteredAuthCard("Create your private vault", description, onBack = onBack) {
         SecretField("Master password", password) { password = it }
         SecretField("Confirm password", confirm) { confirm = it }
         Text("Use at least ${PasswordCrypto.MIN_PASSWORD_LENGTH} characters. A long phrase is easier to remember.", style = MaterialTheme.typography.bodySmall)
         NfcPreference(enableNfc, viewModel.nfcSupported) { enableNfc = it }
-        Button(onClick = { viewModel.setup(password.toCharArray(), enableNfc); password = ""; confirm = "" }, enabled = valid, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-            Text(if (firstRunChoice == FirstRunChoice.JOIN) "Create and continue" else "Create vault")
+        Button(onClick = { viewModel.setup(password.toCharArray(), enableNfc); password = ""; confirm = "" }, enabled = valid && !checking, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            if (checking) PasswordCheckProgress("Creating vault…")
+            else Text(if (firstRunChoice == FirstRunChoice.JOIN) "Create and continue" else "Create vault")
         }
     }
 }
@@ -336,6 +342,7 @@ private fun SetupScreen(viewModel: VaultViewModel, firstRunChoice: FirstRunChoic
 internal fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, canUseBiometric: Boolean, biometric: () -> Unit) {
     var password by remember { mutableStateOf("") }
     var usePassword by remember(canUseBiometric) { mutableStateOf(!canUseBiometric) }
+    val checking by viewModel.checkingPassword.collectAsStateWithLifecycle()
     LaunchedEffect(canUseBiometric) { if (canUseBiometric) biometric() }
     val reason = when (state.reason) {
         LockReason.STARTUP -> if (state.canUseBiometric) "Use fingerprint or enter the master password." else "Enter the master password to unlock."
@@ -343,8 +350,9 @@ internal fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, 
         LockReason.SCREEN_OFF -> "The vault locked when the screen turned off. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
         LockReason.BACKGROUND -> "The vault locked when you left the app. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
         LockReason.MANUAL -> "The vault locked. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
+        LockReason.RESTORED -> "The backup was restored. Enter this vault's master password to open it."
     }
-    CenteredAuthCard("Nuvori", reason) {
+    CenteredAuthCard("Unlock vault", reason) {
         if (canUseBiometric) {
             OutlinedButton(onClick = { password = ""; biometric() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Text("Use fingerprint")
@@ -352,8 +360,8 @@ internal fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, 
         }
         if (usePassword) {
             SecretField("Master password", password) { password = it }
-            Button(onClick = { viewModel.unlock(password.toCharArray()); password = "" }, enabled = password.isNotEmpty(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                Text("Unlock")
+            Button(onClick = { viewModel.unlock(password.toCharArray()); password = "" }, enabled = password.isNotEmpty() && !checking, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                if (checking) PasswordCheckProgress("Unlocking…") else Text("Unlock")
             }
         } else {
             Text("If the fingerprint prompt does not appear, tap Use fingerprint to try again.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .72f))
@@ -362,9 +370,42 @@ internal fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, 
     }
 }
 
+/**
+ * The restore review: what the backup holds, then what the restore does to this device's sync group.
+ * A managing device can move its role first, so the group keeps a manager.
+ */
+@Composable
+internal fun RestoreReviewDialog(summary: String, impact: com.privatevault.app.backup.RestoreSyncImpact, canMoveRole: Boolean,
+    onReplace: () -> Unit, onMoveRole: () -> Unit, onCancel: () -> Unit) {
+    val manager = impact.role == com.privatevault.app.backup.RestoreGroupRole.MANAGER
+    AlertDialog(modifier = wideDialogModifier, properties = wideDialogProperties, onDismissRequest = onCancel,
+        title = { Text("Backup ready to restore") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("$summary Your current vault password stays the same. Fingerprint access must be enabled again.")
+            if (impact.role != com.privatevault.app.backup.RestoreGroupRole.NONE) StatusBanner(kind = StatusKind.WARNING,
+                message = if (manager) "This device will leave its sync group without a manager." else "This device will leave its sync group.")
+            if (manager && canMoveRole) OutlinedButton(onClick = onMoveRole, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text("Move managing role first")
+            }
+        } },
+        confirmButton = { Button(onClick = onReplace) { Text(if (manager) "Restore anyway" else "Replace vault") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
+}
+
+/** Button content while Argon2id checks the master password (about one second). */
+@Composable
+private fun PasswordCheckProgress(label: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
+        Text(label)
+    }
+}
+
 @Composable
 private fun CenteredAuthCard(title: String, subtitle: String, onBack: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
-    Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(24.dp), contentAlignment = Alignment.Center) {
+    // The bottom padding keeps the card clear of the "Privacy policy" button drawn at the bottom of the screen.
+    Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()
+        .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 56.dp), contentAlignment = Alignment.Center) {
         Card(Modifier.widthIn(max = 460.dp).fillMaxWidth(), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (onBack != null) BackIcon(onBack)
@@ -451,6 +492,12 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
     val openSettings: (String?) -> Unit = { page -> navigate {
         settingsPage = page; settingsOpenToken++; showSettings = true
     } }
+    val pendingPick by viewModel.pendingPick.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingPick) {
+        // A file chosen while the vault locked: its page continues the action (see SettingsDialog).
+        val page = pendingPick?.let { PickerResults.settingsPage(it.action) } ?: return@LaunchedEffect
+        if (!showSettings) openSettings(page)
+    }
     LaunchedEffect(openSyncSettings) {
         if (openSyncSettings) {
             navigate {
@@ -517,12 +564,14 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
         selectedId = null
         selectedFolderId = null
     } }
+    val signInMethods by viewModel.signInMethods.collectAsStateWithLifecycle()
     val homeContent: @Composable (Modifier) -> Unit = { modifier ->
         AnimatedContent(searchQuery.isBlank(), modifier, label = "home search",
             transitionSpec = { NuvoriMotion.fadeThrough(this, reduceMotion) }) { browsing ->
             if (browsing) HomeScreen(entries, selectEntry, openCategory, Modifier.fillMaxSize(),
                 passkeyCount = passkeys.size, openPasskeys = { openSettings("Passkeys") },
                 groupCount = groups.count { it.folderType == null }, openGroups = { showGroups = true },
+                signInCount = signInMethods.size, openSignIns = { openSettings("Sign-ins") },
                 sync = homeSync, membershipNotice = membershipNotice,
                 dismissMembershipNotice = { membershipNotice?.let { dismissMembershipNotice(viewModel, it, appContext) } }, listState = listStates.getValue(VaultTab.HOME),
                 openDevices = { openSettings("Android devices") }, copy = onCopySecret, authenticate = onBiometricAction,
@@ -810,11 +859,10 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
         )
     }
     restoreSummary?.let { summary ->
-        AlertDialog(properties = wideDialogProperties, onDismissRequest = viewModel::cancelRestore,
-            title = { Text("Backup ready to restore") },
-            text = { Text("$summary Your current vault password stays the same. Fingerprint access must be enabled again.") },
-            confirmButton = { Button(onClick = viewModel::confirmRestore) { Text("Replace vault") } },
-            dismissButton = { TextButton(onClick = viewModel::cancelRestore) { Text("Cancel") } })
+        val restoreImpact by viewModel.restoreSyncImpact.collectAsStateWithLifecycle()
+        val canMoveRole by viewModel.restoreCanMoveRole.collectAsStateWithLifecycle()
+        RestoreReviewDialog(summary, restoreImpact, canMoveRole, onReplace = viewModel::confirmRestore,
+            onMoveRole = { viewModel.cancelRestore(); openSettings("Android devices") }, onCancel = viewModel::cancelRestore)
     }
     if (showQuickAdd) AddTypeSheet(onDismiss = { showQuickAdd = false }) { type ->
         showQuickAdd = false
@@ -906,7 +954,19 @@ private fun NuvoriBottomBar(current: VaultTab, onSelect: (Int) -> Unit) {
                 val selected = current.navigationOwner == tab
                 NavigationBarItem(selected, { onSelect(tab.ordinal) },
                     icon = { Icon(tab.icon, contentDescription = null, modifier = Modifier.size(22.dp)) },
-                    label = { Text(tab.label, maxLines = 1, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) },
+                    label = {
+                        // Large font sizes or narrow screens clipped "Passwords" to "Passwor". The label may use part of
+                        // the gap beside its short neighbours ("Cards", "Codes"), and shrinks only as far as it must.
+                        val style = MaterialTheme.typography.labelMedium.copy(fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                        val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+                        androidx.compose.foundation.layout.BoxWithConstraints(contentAlignment = Alignment.Center) {
+                            val natural = remember(tab.label, style) { measurer.measure(tab.label, style, softWrap = false, maxLines = 1).size.width }
+                            val room = constraints.maxWidth + with(androidx.compose.ui.platform.LocalDensity.current) { 16.dp.roundToPx() }
+                            val labelScale = if (natural <= room) 1f else (room.toFloat() / natural).coerceAtLeast(0.6f)
+                            Text(tab.label, Modifier.wrapContentWidth(unbounded = true), maxLines = 1, softWrap = false,
+                                style = style.copy(fontSize = style.fontSize * labelScale, letterSpacing = style.letterSpacing * labelScale))
+                        }
+                    },
                     colors = NavigationBarItemDefaults.colors(
                         indicatorColor = scheme.primaryContainer,
                         selectedIconColor = scheme.onPrimaryContainer,
@@ -1079,15 +1139,28 @@ private fun CardFace(
 ) {
     val base = Color(entry.color)
     val ink = cardInk(base)
+    // The face masks the number like the field below it. "View" shows the number for 15 seconds, as the field's
+    // eye does, and the CVV too after the fingerprint check.
     var cvvVisible by remember(entry.id) { mutableStateOf(false) }
+    var numberVisible by remember(entry.id) { mutableStateOf(false) }
     LaunchedEffect(cvvVisible) { if (cvvVisible) { kotlinx.coroutines.delay(15_000); cvvVisible = false } }
+    LaunchedEffect(numberVisible) { if (numberVisible) { kotlinx.coroutines.delay(15_000); numberVisible = false } }
     Card(modifier.clip(NuvoriShapes.Card).tappable(pressedScale = .98f, onClick = onClick)
         .semantics { contentDescription = "Open ${entry.title} ${entry.cardKind.label()} card" },
         shape = NuvoriShapes.Card, colors = CardDefaults.cardColors(containerColor = base, contentColor = ink),
         border = if (base.luminance() < .03f || base.luminance() > .9f) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.hairline) else null,
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
+        // A card keeps its shape, so its text follows the card's size: large font on a narrow card clipped the name,
+        // the expiry and the CVV row. The font scale is at most (card width / 300 dp). Below 320 dp the face is laid
+        // out at 320 dp and drawn smaller as a whole, like a picture of the card.
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val system = androidx.compose.ui.platform.LocalDensity.current
+        val design = maxOf(maxWidth, 320.dp)
+        val shrink = maxWidth / design
+        val cardScale = minOf(system.fontScale, maxOf(0.8f, design.value / 300f))
+        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(system.density, cardScale)) {
         Column(
-            Modifier.fillMaxSize().padding(18.dp),
+            Modifier.requiredSize(design, design / CARD_ASPECT_RATIO).graphicsLayer { scaleX = shrink; scaleY = shrink }.padding(18.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1096,19 +1169,23 @@ private fun CardFace(
             }
             Column {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(formatCardNumber(entry.primaryValue), Modifier.weight(1f), fontSize = 19.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    // Large font on a narrow card clipped the number and the expiry: shrink to fit instead.
+                    FittedCardText(if (numberVisible || entry.primaryValue.isBlank()) formatCardNumber(entry.primaryValue) else maskCard(entry.primaryValue),
+                        Modifier.weight(1f).then(if (numberVisible || entry.primaryValue.isBlank()) Modifier
+                            else Modifier.semantics { contentDescription = "Card number ending ${entry.primaryValue.filter(Char::isDigit).takeLast(4)}" }),
+                        fontSize = 19.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.Medium)
                     if (copy != null && entry.primaryValue.isNotBlank()) CardCopyAction("Copy card number") { copy("Card number", entry.primaryValue) }
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(Modifier.weight(1f)) {
                         Text("CARDHOLDER", fontSize = 9.sp, color = ink, letterSpacing = .8.sp)
-                        Text(entry.secondaryValue.ifBlank { "Name on card" }, maxLines = 1)
+                        Text(entry.secondaryValue.ifBlank { "Name on card" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text("EXPIRES", fontSize = 9.sp, color = ink, letterSpacing = .8.sp)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(entry.tertiaryValue.ifBlank { "MM/YY" })
+                            Text(entry.tertiaryValue.ifBlank { null }?.let(::displayExpiry) ?: "MM/YY", maxLines = 1, softWrap = false)
                             if (copy != null && entry.tertiaryValue.isNotBlank()) CardCopyAction("Copy expiry date") { copy("Expiry", entry.tertiaryValue) }
                         }
                     }
@@ -1120,15 +1197,22 @@ private fun CardFace(
                         Text(if (visible) entry.fourthValue.ifBlank { "—" } else "•••", fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(Modifier.weight(1f))
-                    if (authenticate != null && entry.fourthValue.isNotBlank()) {
-                        CompactCardAction(if (cvvVisible) "Hide" else "View") {
-                            if (cvvVisible) cvvVisible = false else authenticate { cvvVisible = true }
+                    if (authenticate != null && (entry.fourthValue.isNotBlank() || entry.primaryValue.isNotBlank())) {
+                        CompactCardAction(if (cvvVisible || numberVisible) "Hide" else "View") {
+                            if (cvvVisible || numberVisible) { cvvVisible = false; numberVisible = false }
+                            else {
+                                numberVisible = true
+                                if (entry.fourthValue.isNotBlank()) authenticate { cvvVisible = true }
+                            }
                         }
-                        CardCopyAction("Authenticate to copy CVV") { authenticate { copy?.invoke("CVV", entry.fourthValue) } }
+                        if (entry.fourthValue.isNotBlank())
+                            CardCopyAction("Authenticate to copy CVV") { authenticate { copy?.invoke("CVV", entry.fourthValue) } }
                     }
                     NetworkLogo(entry.network.ifBlank { cardNetwork(entry.primaryValue) }, Modifier.padding(start = 6.dp))
                 }
             }
+        }
+    }
         }
     }
 }
@@ -1329,8 +1413,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
     var confirmDelete by remember { mutableStateOf(false) }
     var selectedPhoto by remember { mutableStateOf<VaultPhoto?>(null) }
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        viewModel.externalFlowActive = false
-        if (uri != null) viewModel.addPhoto(item.entry.id, uri) else viewModel.touch()
+        if (viewModel.pickerReturned(PickerAction.PHOTO, uri) && uri != null) viewModel.addPhoto(item.entry.id, uri) else viewModel.touch()
     }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         viewModel.finishCamera(item.entry.id, success)
@@ -1444,6 +1527,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 if (item.entry.tertiaryValue.isNotBlank()) item { PlainRow("Website", item.entry.tertiaryValue, copy) }
                 item { SectionTitle("Security") }
                 item { SecretRow("Password", item.entry.secondaryValue, revealed.contains("secondary"), { revealed = toggle(revealed, "secondary") }, copy) }
+                item { PreviousPasswords(viewModel, item.entry.id, item.entry.updatedAt, copy) }
                 val linked = vaultEntries.firstOrNull { it.entry.id == item.entry.linkedAuthenticatorId && it.entry.type == EntryType.AUTHENTICATOR }?.entry
                 if (linked != null) item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1451,6 +1535,8 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                         TotpTile(linked, copy, {}, initiallyMasked = true)
                     }
                 }
+                // "Continue with GitHub · octocat" remembered for this login's site (SignInMethodsUi.kt). Nothing when none.
+                if (item.entry.tertiaryValue.isNotBlank()) item { LoginSignInMethods(viewModel, item.entry.tertiaryValue) }
             } else if (item.entry.type == EntryType.QUESTION) {
                 item { SectionTitle("Security question") }
                 item { PlainRow("Question", item.entry.primaryValue) }
@@ -1556,7 +1642,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
         properties = wideDialogProperties,
         onDismissRequest = { confirmDelete = false },
         title = { Text("Delete ${item.entry.title}?") },
-        text = { Text("This removes the entry and its encrypted photos. It does not delete its groups.") },
+        text = { Text("This removes the entry from this phone and from paired devices on the next sync. This phone keeps a copy in Recently deleted for 30 days (Settings > Recently deleted). Its photos are deleted for good.") },
         confirmButton = { DeleteButton(onClick = { viewModel.deleteEntry(item); confirmDelete = false; close() }) },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } }
     )
@@ -1656,7 +1742,7 @@ private fun PlainRow(label: String, value: String, copy: ((String, String) -> Un
                     color = if (value.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
             }
             if (copy != null && value.isNotBlank()) IconButton(onClick = { copy(label, value) }, modifier = Modifier.size(48.dp)) {
-                Icon(NuvoriIcons.Copy, contentDescription = "Copy ${label.lowercase(Locale.ROOT)}", modifier = Modifier.size(20.dp))
+                Icon(NuvoriIcons.Copy, contentDescription = "Copy ${spokenLabel(label)}", modifier = Modifier.size(20.dp))
             }
         }
     }
@@ -1679,11 +1765,11 @@ private fun SecretRow(label: String, value: String, revealed: Boolean, toggle: (
             }
             IconButton(onClick = toggle, modifier = Modifier.size(48.dp)) {
                 Icon(if (revealed) NuvoriIcons.EyeOff else NuvoriIcons.Eye,
-                    contentDescription = if (revealed) "Hide ${label.lowercase(Locale.ROOT)}" else "Reveal ${label.lowercase(Locale.ROOT)}",
+                    contentDescription = if (revealed) "Hide ${spokenLabel(label)}" else "Reveal ${spokenLabel(label)}",
                     modifier = Modifier.size(20.dp))
             }
             if (value.isNotBlank()) IconButton(onClick = { copy(label, value) }, modifier = Modifier.size(48.dp)) {
-                Icon(NuvoriIcons.Copy, contentDescription = "Copy ${label.lowercase(Locale.ROOT)}", modifier = Modifier.size(20.dp))
+                Icon(NuvoriIcons.Copy, contentDescription = "Copy ${spokenLabel(label)}", modifier = Modifier.size(20.dp))
             }
         }
     }
@@ -1827,7 +1913,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                     item { LoginOptions(loginApps, loginSignatures, linkedCode,
                         vaultEntries.map { it.entry }.filter { it.type == EntryType.AUTHENTICATOR },
                         onApps = { apps, signatures -> loginApps = apps; loginSignatures = signatures },
-                        onCode = { linkedCode = it }, generate = { secondary = com.privatevault.app.security.generateLoginPassword() }) }
+                        onCode = { linkedCode = it }, onGenerated = { secondary = it }) }
                 }
                 EntryType.QUESTION -> {
                     item { OutlinedTextField(primary, { primary = it }, label = { Text("Security question") }, modifier = Modifier.fillMaxWidth()) }
@@ -2148,12 +2234,12 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     val authenticatorPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) authenticatorScanner = true else authenticatorError = "Camera permission is needed to scan a transfer QR."
     }
+    fun importAuthenticatorImage(uri: Uri) = transferScope.launch {
+        runCatching { readQrImage(context, uri) }.onSuccess(::acceptAuthenticatorQr)
+            .onFailure { authenticatorError = "Could not read that QR image." }
+    }
     val authenticatorImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        viewModel.externalFlowActive = false
-        if (uri != null) transferScope.launch {
-            runCatching { readQrImage(context, uri) }.onSuccess(::acceptAuthenticatorQr)
-                .onFailure { authenticatorError = "Could not read that QR image." }
-        }
+        if (viewModel.pickerReturned(PickerAction.AUTHENTICATOR_IMAGE, uri) && uri != null) importAuthenticatorImage(uri)
     }
     suspend fun readAuthenticatorFile(uri: Uri): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val bytes = context.contentResolver.openInputStream(uri)!!.use { input ->
@@ -2171,16 +2257,16 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         }
         try { bytes.toString(Charsets.UTF_8) } finally { bytes.fill(0) }
     }
+    fun importAuthenticatorFile(uri: Uri) = transferScope.launch {
+        runCatching { readAuthenticatorFile(uri) }.onSuccess { content ->
+            if (com.privatevault.app.security.isEncryptedOneAuthExport(content)) oneAuthUri = uri
+            else runCatching { com.privatevault.app.security.parseAuthenticatorTransferText(content) }
+                .onSuccess(::acceptAuthenticatorPage)
+                .onFailure { authenticatorError = "Use a OneAuth oneauth_04 JSON export or a text file with one otpauth://totp link per line." }
+        }.onFailure { authenticatorError = "Could not read that authenticator export file." }
+    }
     val authenticatorFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        viewModel.externalFlowActive = false
-        if (uri != null) transferScope.launch {
-            runCatching { readAuthenticatorFile(uri) }.onSuccess { content ->
-                if (com.privatevault.app.security.isEncryptedOneAuthExport(content)) oneAuthUri = uri
-                else runCatching { com.privatevault.app.security.parseAuthenticatorTransferText(content) }
-                    .onSuccess(::acceptAuthenticatorPage)
-                    .onFailure { authenticatorError = "Use a OneAuth oneauth_04 JSON export or a text file with one otpauth://totp link per line." }
-            }.onFailure { authenticatorError = "Could not read that authenticator export file." }
-        }
+        if (viewModel.pickerReturned(PickerAction.AUTHENTICATOR_FILE, uri) && uri != null) importAuthenticatorFile(uri)
     }
     var transferBusy by remember { mutableStateOf(false) }
     val lightMode by viewModel.lightMode.collectAsStateWithLifecycle()
@@ -2197,21 +2283,37 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         if (passwordDuplicateReview == null) confirmPasswordDuplicateDelete = false
     }
 
+    // A password typed before the picker never outlives a lock: after unlock, the backup dialog asks again.
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
-        viewModel.externalFlowActive = false
         val pass = pendingBackupPassword
         pendingBackupPassword = null
-        if (uri != null && pass != null) viewModel.exportBackup(uri, pass) else { pass?.fill('\u0000'); viewModel.touch() }
+        if (viewModel.pickerReturned(PickerAction.EXPORT_BACKUP, uri) && uri != null && pass != null) viewModel.exportBackup(uri, pass)
+        else { pass?.fill('\u0000'); viewModel.touch() }
     }
     val restore = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        viewModel.externalFlowActive = false
         val pass = pendingBackupPassword
         pendingBackupPassword = null
-        if (uri != null && pass != null) viewModel.restoreBackup(uri, pass) else { pass?.fill('\u0000'); viewModel.touch() }
+        if (viewModel.pickerReturned(PickerAction.RESTORE_BACKUP, uri) && uri != null && pass != null) viewModel.restoreBackup(uri, pass)
+        else { pass?.fill('\u0000'); viewModel.touch() }
     }
     val importPasswords = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        viewModel.externalFlowActive = false
-        if (uri != null) viewModel.previewPasswordImport(uri) else viewModel.touch()
+        if (viewModel.pickerReturned(PickerAction.IMPORT_PASSWORDS, uri) && uri != null) viewModel.previewPasswordImport(uri) else viewModel.touch()
+    }
+    // A file chosen while the vault locked continues here after unlock (see VaultViewModel.pickerReturned).
+    var resumeBackupUri by remember { mutableStateOf<Uri?>(null) }
+    val pendingPick by viewModel.pendingPick.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingPick, page) {
+        val waiting = pendingPick ?: return@LaunchedEffect
+        if (PickerResults.settingsPage(waiting.action) != page) return@LaunchedEffect
+        val pick = viewModel.takePendingPick() ?: return@LaunchedEffect
+        when (pick.action) {
+            PickerAction.EXPORT_BACKUP -> { resumeBackupUri = pick.uri; action = "export" }
+            PickerAction.RESTORE_BACKUP -> { resumeBackupUri = pick.uri; action = "restore" }
+            PickerAction.IMPORT_PASSWORDS -> viewModel.previewPasswordImport(pick.uri)
+            PickerAction.AUTHENTICATOR_IMAGE -> importAuthenticatorImage(pick.uri)
+            PickerAction.AUTHENTICATOR_FILE -> importAuthenticatorFile(pick.uri)
+            PickerAction.PHOTO, PickerAction.OTHER -> Unit
+        }
     }
     val browserImportContent: @Composable () -> Unit = {
         SettingsSection("Import passwords",
@@ -2264,12 +2366,21 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     },
                         description = "Turn off for a black background.")
                 }
+                val siteIconContext = androidx.compose.ui.platform.LocalContext.current
+                SettingsSection("Icons") {
+                    SettingsSwitchRow("Website icons", SiteIconSettings.enabled(siteIconContext), { on ->
+                        SiteIconSettings.set(siteIconContext, on)
+                    },
+                        description = "Logos for popular sites are built in. Icons that Nuvori for Windows saves from your browser arrive through sync. This phone downloads nothing.")
+                }
                 val storedAppearance by viewModel.appearance.collectAsStateWithLifecycle()
                 AppearanceColorSections(storedAppearance.appearance.accent, storedAppearance.appearance.surface,
                     pendingSyncNote = storedAppearance.pendingSync && pairedDevices.any { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name }) { accent, surface ->
                     viewModel.setAppearance(accent, surface)
                 }
             }
+            if (page == "Recently deleted") RecentlyDeletedPage(viewModel)
+            if (page == "Sign-ins") SignInMethodsPage(viewModel)
             if (page == "Android devices") DeviceSyncSettings(viewModel, copyPairingLink,
                 joiningExisting = initialImportChoice == FirstRunChoice.JOIN)
             if (page == "Help") HelpPage { destination ->
@@ -2299,7 +2410,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                                         knownExtensions = emptySet()
                                     )
                                     val response = manager.importCredentials(context, request)
-                                    viewModel.previewCredentialTransfer(
+                                    // The vault may have locked while the other manager was open: say so.
+                                    if (viewModel.externalScreenReturned()) viewModel.previewCredentialTransfer(
                                         response.response.responseJson,
                                         response.callingAppInfo.packageName
                                     )
@@ -2318,26 +2430,13 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                         })
                     Text("Supports ES256 passkeys for websites and native apps that use Android Credential Manager. Apps using legacy FIDO APIs, enterprise attestation, or unsupported extensions cannot offer Nuvori.", style = MaterialTheme.typography.bodySmall)
                 }
-                if (android.os.Build.VERSION.SDK_INT >= 34) PasskeyRequestsSection()
-                SettingsSection("Saved passkeys",
-                    description = if (passkeys.isEmpty()) null else "${passkeys.size} in this vault.") {
-                    if (passkeys.isEmpty()) Text("No passkeys saved yet.")
-                    passkeys.forEachIndexed { index, passkey ->
-                        if (index > 0) HorizontalDivider()
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(passkey.rpId, style = MaterialTheme.typography.titleSmall,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(passkey.username, style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            IconButton(onClick = { deletePasskey = passkey }, modifier = Modifier.size(48.dp)) {
-                                Icon(NuvoriIcons.Delete, contentDescription = "Delete passkey for ${passkey.rpId}",
-                                    tint = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    }
+                // Manager view: icon, site and account per passkey, details on tap; then the ledger and the requests.
+                val passkeyPage by viewModel.passkeyPage.collectAsStateWithLifecycle()
+                SavedPasskeysSection(passkeyPage) { info ->
+                    deletePasskey = com.privatevault.app.data.PasskeySummary(info.id, info.rpId, info.username, info.createdAt)
                 }
+                PasskeyHistorySection(passkeyPage.history, viewModel::clearPasskeyHistory)
+                if (android.os.Build.VERSION.SDK_INT >= 34) PasskeyRequestsSection()
             }
             if (page == "Cards and NFC") SettingsSection("Contactless cards") {
                 NfcPreference(nfcEnabled, viewModel.nfcSupported) { on ->
@@ -2362,7 +2461,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 }
                 if (authenticatorPages.isNotEmpty()) {
                     val expected = authenticatorPages.values.first().batchSize
-                    SettingsSection("${authenticatorPages.size} of $expected QR ${if (expected == 1) "page" else "pages"} scanned") {
+                    // A file or single QR is one complete batch: "1 of 1 QR page scanned" would be wrong for a file.
+                    SettingsSection(if (expected == 1) "Accounts to import" else "${authenticatorPages.size} of $expected QR pages scanned") {
                         val accounts = authenticatorPages.toSortedMap().values.flatMap { it.accounts }
                         val statuses = com.privatevault.app.security.authenticatorImportStatuses(savedAuthenticatorEntries.map { it.entry }, accounts)
                         accounts.zip(statuses).forEach { (account, status) ->
@@ -2386,9 +2486,10 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 }
             }
             if (page == "Autofill and codes") {
-                AutofillPreference(viewModel::refreshAutofillCopy)
+                AutofillPreference(viewModel::refreshAutofillCopy,
+                    onUsageCleared = { viewModel.notify("Most used cleared. Counting starts again.", StatusKind.SUCCESS) })
                 SettingsSection("Quick copy tile",
-                    description = "Copy passwords, TOTP codes, card details and security answers from Quick Settings after unlocking. After one copy, the other fields of that item stay in your notifications for 2 minutes. The tile works with any Autofill provider.") {
+                    description = "Copy passwords, codes, card details and security answers from Quick Settings after unlocking. After one copy, the other fields of that item stay in your notifications for 2 minutes. The tile works with any Autofill provider.") {
                     SettingsSecondaryButton("Add Quick copy tile", icon = Icons.Outlined.AppShortcut,
                         onClick = { requestVaultCodesTile(context) })
                 }
@@ -2466,7 +2567,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     onClick = { viewModel.notify("Vault locked", StatusKind.SUCCESS); viewModel.lock(LockReason.MANUAL); close() })
                 SecurityChoices("Auto-lock after leaving the app", "The vault locks after you switch apps. Screen-off always locks immediately.",
                     security.backgroundTimeoutMs, backgroundLockChoices, onSelect = viewModel::setBackgroundTimeout)
-                SecurityChoices("Auto-lock after inactivity while open", "The countdown starts after your last interaction. Leaving the app never extends it.",
+                SecurityChoices("Auto-lock after inactivity while open", "The countdown starts after your last interaction. Switching apps never extends it. A file or photo picker that Nuvori opens counts as time in the app, for up to 10 minutes.",
                     security.inactivityTimeoutMs, listOf(60_000L to "1 minute", 300_000L to "5 minutes", 900_000L to "15 minutes", 1_800_000L to "30 minutes"),
                     onSelect = viewModel::setInactivityTimeout)
                 SecurityChoices("Require the master password again", "Fingerprint is required for every biometric unlock. This controls how long the protected vault key remains available for fingerprint unlock.",
@@ -2496,7 +2597,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             if (page == "About") {
                 SettingsSection("Nuvori") {
                     Text("Yours, by design", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                    Text("Local encrypted storage. No account or cloud sync. Keep encrypted backups and recovery codes somewhere safe. This app has not undergone an independent security audit.")
+                    Text("Local encrypted storage. No Nuvori account or server. Optional sync uses local Wi-Fi or your own Google Drive. Keep encrypted backups and recovery codes somewhere safe. This app has not undergone an independent security audit.")
                     TextButton(onClick = { showPrivacy = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Privacy policy") }
                 }
             }
@@ -2634,19 +2735,35 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     if (action == "export" || action == "restore") AlertDialog(
         modifier = wideDialogModifier,
         properties = wideDialogProperties,
-        onDismissRequest = { action = null; password = "" },
+        onDismissRequest = { action = null; password = ""; resumeBackupUri = null },
         title = { Text(if (action == "export") "Protect backup" else "Replace this vault?") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (resumeBackupUri != null) StatusBanner(kind = StatusKind.INFO, message = if (action == "export")
+                "The vault locked while you chose where to save. Enter the password again to finish the backup."
+                else "The vault locked while you chose the backup. Enter its password again to continue.")
             Text(if (action == "export") "This backup will always require the current master password." else "The backup will be validated first. You will review its contents before confirming replacement.")
             SecretField(if (action == "export") "Current master password" else "Backup password", password) { password = it }
         } },
         confirmButton = { Button(onClick = {
-            pendingBackupPassword = password.toCharArray(); password = ""
-            viewModel.externalFlowActive = true
-            if (action == "export") export.launch("nuvori.pvault") else restore.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
+            val resume = resumeBackupUri
+            resumeBackupUri = null
+            if (resume != null) {
+                // The file was chosen before the vault locked.
+                val pass = password.toCharArray(); password = ""
+                if (action == "export") viewModel.exportBackup(resume, pass) else viewModel.restoreBackup(resume, pass)
+            } else {
+                pendingBackupPassword = password.toCharArray(); password = ""
+                viewModel.externalFlowActive = true
+                if (action == "export") export.launch("nuvori.pvault") else restore.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
+            }
             action = null
-        }, enabled = password.isNotEmpty()) { Text(if (action == "export") "Choose location" else "Choose and validate") } },
-        dismissButton = { TextButton(onClick = { action = null; password = "" }) { Text("Cancel") } }
+        }, enabled = password.isNotEmpty()) { Text(when {
+            resumeBackupUri != null && action == "export" -> "Save backup"
+            resumeBackupUri != null -> "Validate backup"
+            action == "export" -> "Choose location"
+            else -> "Choose and validate"
+        }) } },
+        dismissButton = { TextButton(onClick = { action = null; password = ""; resumeBackupUri = null }) { Text("Cancel") } }
     )
 
     if (action == "password") AlertDialog(
@@ -2710,6 +2827,10 @@ internal fun SecretField(label: String, value: String, onValue: (String) -> Unit
     )
 }
 
+/** A field label inside a sentence ("Copy card number"); acronyms such as "CVV" keep their capitals. */
+private fun spokenLabel(label: String): String =
+    if (label.length > 1 && label.all { it.isUpperCase() }) label else label.lowercase(Locale.ROOT)
+
 /** Settings pages keep their internal names; a few show the name shared with Windows. */
 private fun settingsPageTitle(page: String?): String = when (page) {
     null -> "Settings"
@@ -2772,6 +2893,16 @@ private fun NfcPreference(enabled: Boolean, supported: Boolean, change: (Boolean
             else "This phone has no NFC reader. You can still enter cards manually.")
 }
 private const val CARD_ASPECT_RATIO = 1.586f
+
+/** One line of card text that shrinks (to 60 %) instead of clipping on a narrow card or with large font. */
+@Composable
+private fun FittedCardText(text: String, modifier: Modifier, fontSize: androidx.compose.ui.unit.TextUnit,
+    letterSpacing: androidx.compose.ui.unit.TextUnit, fontWeight: FontWeight) {
+    val config = androidx.compose.ui.platform.LocalConfiguration.current
+    var scale by remember(text, config.fontScale, config.screenWidthDp) { androidx.compose.runtime.mutableFloatStateOf(1f) }
+    Text(text, modifier, fontSize = fontSize * scale, letterSpacing = letterSpacing * scale, fontWeight = fontWeight,
+        maxLines = 1, softWrap = false, onTextLayout = { if (it.hasVisualOverflow && scale > 0.6f) scale -= 0.05f })
+}
 private fun maskCard(number: String): String {
     val digits = number.filter(Char::isDigit)
     return if (digits.length <= 4) "•••• ${digits}" else "•••• •••• •••• ${digits.takeLast(4)}"

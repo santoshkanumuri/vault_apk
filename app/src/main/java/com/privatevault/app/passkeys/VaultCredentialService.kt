@@ -78,7 +78,7 @@ class VaultCredentialService : CredentialProviderService() {
             .putExtra("credential_password_issued", SystemClock.elapsedRealtime())
         return PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
-    /** Records one request for Settings > Passkeys > Recent passkey requests. Never the challenge, user or account. */
+    /** Records one request for Settings > Passkeys > Passkey requests. Never the challenge, user or account. */
     private fun record(create: Boolean, passkey: Boolean, caller: CallingAppInfo?, requestJson: String?, error: Throwable?) {
         runCatching {
             val packageName = caller?.packageName.orEmpty()
@@ -89,7 +89,7 @@ class VaultCredentialService : CredentialProviderService() {
                 val json = JSONObject(requestJson ?: return@runCatching "")
                 (if (create) json.optJSONObject("rp")?.optString("id") else json.optString("rpId")).orEmpty().take(253)
             }.getOrDefault("")
-            PasskeyRequestLog.add(PasskeyRequestRecord(System.currentTimeMillis(), create, passkey, label.take(80), packageName.take(255),
+            PasskeyRequestLog.add(this, PasskeyRequestRecord(System.currentTimeMillis(), create, passkey, label.take(80), packageName.take(255),
                 site, error == null, error?.let(PasskeyRequestLog::reasonOf).orEmpty()))
         }
     }

@@ -29,7 +29,9 @@ internal data class LoginFillRequest(val packageName: String, val identity: Stri
     val username: AutofillId?, val password: AutofillId?, val otp: AutofillId?, val expiresAt: Long, val origin: String? = null,
     val newPasswords: List<AutofillId> = emptyList(), val embeddedWebView: Boolean = false,
     val previousUsername: AutofillId? = null, val pinPassword: Boolean = false, val embeddedSite: String? = null,
-    val unverified: Boolean = false)
+    val unverified: Boolean = false,
+    /** The user was in the username or email field and it was empty: a sign-in reminder may fill its account there. */
+    val usernameFocusedEmpty: Boolean = false)
 
 private const val SAVE_USERNAME_ID = "save_username_id"
 private const val SAVE_ORIGIN = "save_origin"
@@ -168,6 +170,21 @@ internal fun focusedAutofillId(structure: AssistStructure): AutofillId? {
     return null
 }
 
+/** The text of the field [id] as the structure reports it, or null when it has none or is not found. */
+internal fun autofillTextOf(structure: AssistStructure, id: AutofillId): CharSequence? {
+    var count = 0
+    fun find(node: AssistStructure.ViewNode, depth: Int): AssistStructure.ViewNode? {
+        if (++count > 2000 || depth > 40) return null
+        if (node.autofillId == id) return node
+        for (index in 0 until node.childCount) find(node.getChildAt(index), depth + 1)?.let { return it }
+        return null
+    }
+    for (index in 0 until structure.windowNodeCount) find(structure.getWindowNodeAt(index).rootViewNode, 0)?.let { node ->
+        return node.autofillValue?.takeIf { it.isText }?.textValue ?: node.text
+    }
+    return null
+}
+
 /** Intent extra of a save review: the site an app's WebView claimed. A default name only, never a link or website. */
 internal const val SAVE_EMBEDDED_SITE = "login_save_embedded_site"
 
@@ -186,9 +203,25 @@ class VaultAutofillService : AutofillService() {
         keyboardSignIn(event.datasetId, stamp, packageName, identity, SystemClock.elapsedRealtime())?.let(RecentLoginFills::remember)
     }
 
+    /**
+     * Counts each login picked from a keyboard strip as one use, for "Most used". Android reports the pick only here,
+     * at the next fill request, after the picker has closed: the record takes the login id, never a value.
+     */
+    @Suppress("DEPRECATION")
+    private fun countKeyboardPicks() {
+        val events = runCatching { fillEventHistory?.events }.getOrNull() ?: return
+        for (event in events) {
+            if (event.type != FillEventHistory.Event.TYPE_DATASET_SELECTED) continue
+            val stamp = runCatching { event.clientState?.suggestionStamp() }.getOrNull() ?: continue
+            val key = keyboardPickKey(event.datasetId, stamp) ?: continue
+            com.privatevault.app.security.ItemUsageStore.recordKeyboardPick(this, key, requireNotNull(event.datasetId))
+        }
+    }
+
     @Suppress("DEPRECATION")
     override fun onFillRequest(request: FillRequest, cancellationSignal: CancellationSignal, callback: FillCallback) {
         if (cancellationSignal.isCanceled) return
+        countKeyboardPicks()
         val response = runCatching {
             val structure = request.fillContexts.lastOrNull()?.structure ?: return@runCatching null
             val destination = structure.activityComponent?.packageName ?: return@runCatching null
@@ -244,7 +277,9 @@ class VaultAutofillService : AutofillService() {
             val previousUsername = if (browser) request.clientState?.previousUsernameFor(destination, identity, fields.origin) else null
             val fill = LoginFillRequest(destination, identity, fields.username, fields.password, fields.otp,
                 SystemClock.elapsedRealtime() + 120_000, fields.origin, fields.newPasswords, fields.embeddedWebView || unverified,
-                previousUsername, fields.pinPassword, fields.embeddedSite, unverified = unverified)
+                previousUsername, fields.pinPassword, fields.embeddedSite, unverified = unverified,
+                usernameFocusedEmpty = fields.username != null && focused == fields.username &&
+                    autofillTextOf(structure, fields.username).isNullOrEmpty())
             if (fields.otp != null) rememberKeyboardSignIn(destination, identity)
             val keyboard = AutofillPreferences.keyboardSuggestions(this) && fields.otp == null && fields.newPasswords.isEmpty()
             val token = PendingLoginFills.put(fill)
@@ -324,6 +359,8 @@ class VaultAutofillService : AutofillService() {
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
+        // A pick can also show up first here, when the form is submitted. The event key stops a double count.
+        countKeyboardPicks()
         var pending: LoginSaveRequest? = null
         var token: String? = null
         try {

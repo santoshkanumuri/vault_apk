@@ -249,6 +249,11 @@ internal object NuvoriIcons {
         path("M21 12H9")
         path("M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4")
     } }
+    val LogIn by lazy { lucide("log-in") {
+        path("m10 17 5-5-5-5")
+        path("M15 12H3")
+        path("M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4")
+    } }
     val History by lazy { lucide("history") {
         path("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8")
         path("M3 3v5h5")

@@ -71,6 +71,10 @@
             android:windowSoftInputMode="adjustResize"
             android:excludeFromRecents="true" android:taskAffinity="${applicationId}.codes"
             android:theme="@style/Theme.PrivateVault.Codes" />
+        <!-- The note behind a sign-in reminder in Autofill: a toast, then finish. Fills nothing. -->
+        <activity android:name=".autofill.SignInReminderActivity" android:exported="false"
+            android:excludeFromRecents="true" android:noHistory="true"
+            android:theme="@style/Theme.PrivateVault.Codes" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.camera"

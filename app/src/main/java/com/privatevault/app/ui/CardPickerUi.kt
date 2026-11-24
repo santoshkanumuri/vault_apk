@@ -33,13 +33,14 @@ internal fun cardSummary(entry: VaultEntry): String {
     val last4 = entry.primaryValue.filter(Char::isDigit).takeLast(4)
     return listOfNotNull(
         listOfNotNull(displayNetwork(entry).ifEmpty { null }, last4.takeIf { it.length == 4 }?.let { "•••• $it" }).joinToString(" ").ifEmpty { null },
-        // The expiry as "MM/YY" however it was typed ("0829", "8/2029"); unreadable text is shown as saved.
-        entry.tertiaryValue.trim().ifEmpty { null }?.let { saved ->
-            com.privatevault.app.autofill.parseExpiry(saved)?.let { (month, year) ->
-                String.format(java.util.Locale.ROOT, "%02d/%02d", month, year % 100) } ?: saved
-        },
+        entry.tertiaryValue.trim().ifEmpty { null }?.let(::displayExpiry),
     ).joinToString(" · ").ifEmpty { if (entry.cardKind.name == "DEBIT") "Debit card" else "Credit card" }
 }
+
+/** The expiry as "MM/YY" however it was typed ("0829", "8/2029"); unreadable text is shown as saved. */
+internal fun displayExpiry(saved: String): String =
+    com.privatevault.app.autofill.parseExpiry(saved.trim())?.let { (month, year) ->
+        String.format(java.util.Locale.ROOT, "%02d/%02d", month, year % 100) } ?: saved
 
 /** Cards matching [query] by name, network, holder or last four digits. Favorites stay first. */
 internal fun filterCards(cards: List<VaultEntry>, query: String): List<VaultEntry> {

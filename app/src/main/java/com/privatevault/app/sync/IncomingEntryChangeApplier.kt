@@ -3,7 +3,10 @@ package com.privatevault.app.sync
 import android.content.Context
 import androidx.room.withTransaction
 import com.privatevault.app.appearance.AppearanceStore
+import com.privatevault.app.data.SyncedSiteIcon
 import com.privatevault.app.data.EntryType
+import com.privatevault.app.data.PasskeyEventKind
+import com.privatevault.app.data.logPasskeyEvents
 import com.privatevault.app.data.SyncConflictEntity
 import com.privatevault.app.data.SyncAttachmentManifestEntity
 import com.privatevault.app.data.SyncDeviceHeadEntity
@@ -52,10 +55,14 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             member.deviceId == operation.deviceId && member.keyEpoch >= 1L) {
             "Device is not an active vault member"
         }
+        // "Mark as lost" on this device: nothing after the lost device's last known change.
+        require(LostManagerFreeze.allowsChange(LostManagerFreeze.of(database.syncDao().lostManager(operation.vaultId)),
+            operation.deviceId, operation.sequence, operation.hash)) { "That device was marked as lost" }
         require(operation.entityType == "entry" || operation.entityType == "group" ||
             operation.entityType == "passkey" || operation.entityType == "photo" ||
             operation.entityType == "photo_cover" || operation.entityType == "device_name" ||
-            operation.entityType == AppearanceSyncRules.ENTITY_TYPE) {
+            operation.entityType == AppearanceSyncRules.ENTITY_TYPE || operation.entityType == SiteIconSyncRules.ENTITY_TYPE ||
+            operation.entityType == SignInMethodSyncRules.ENTITY_TYPE) {
             "Unsupported sync entity"
         }
         val change = operation.toChangeRecord()
@@ -64,8 +71,30 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
         require(DeviceIdentityCrypto.verify(Base64.getUrlDecoder().decode(member.identityPublicKey), change.signingBytes(), signature)) {
             "Invalid device signature"
         }
+        // Entity-ID HMACs use the epoch-1 key; the payload uses the key of its own epoch ([SyncKeyring]).
         val contentKey = database.syncContentKey(vaultKey)
-        val payload = try { decrypt(change, contentKey) } finally { contentKey.fill(0) }
+        val keyring = database.syncKeyring(vaultKey)
+        // A site icon's entity id is an HMAC of its site under the content key: check it while the key is here.
+        var siteIcon: SiteIconSyncRules.Icon? = null
+        // A sign-in method's id is an HMAC of its site, provider and account: checked here too. A delete carries no
+        // method, so the row it removes is found by its id (recomputed when the row came from another group's key).
+        var signIn: SignInMethodSyncRules.Method? = null
+        var signInRow: SignInMethodKey? = null
+        val payload = try {
+            decrypt(change, keyring).also {
+                if (change.entityType == SiteIconSyncRules.ENTITY_TYPE) {
+                    require(change.kind == ChangeKind.UPSERT) { "Invalid site icon change" }
+                    siteIcon = SiteIconSyncRules.parsePayload(it.toString(), change.entityId, contentKey)
+                }
+                if (change.entityType == SignInMethodSyncRules.ENTITY_TYPE) {
+                    if (change.kind == ChangeKind.UPSERT) signIn = SignInMethodSyncRules.parsePayload(it.toString(), change.entityId, contentKey)
+                    else {
+                        require(SignInMethodSyncRules.isDelete(it.toString())) { "Invalid delete payload" }
+                        signInRow = SignInMethodSync.rowFor(database, contentKey, change.entityId)
+                    }
+                }
+            }
+        } finally { contentKey.fill(0); keyring.wipe() }
         val deviceName = if (change.entityType == "device_name") {
             require(change.kind == ChangeKind.UPSERT && change.entityId == change.deviceId) {
                 "A device can only name itself"
@@ -153,6 +182,24 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
                     AppearanceStore.applyRemote(appContext, appearance, change.occurredAtUtc, change.deviceId)
                     IncomingResult.APPLIED
                 } else IncomingResult.OBSOLETE
+            } else if (change.entityType == SignInMethodSyncRules.ENTITY_TYPE) {
+                // Never a conflict to review (SignInMethodSyncRules.decide). Stored whatever the device's settings:
+                // each method was confirmed by the user on some device.
+                SignInMethodSync.apply(database, change, signIn, signInRow, state, localVersion, relation)
+            } else if (siteIcon != null) {
+                // Never a conflict to review: last writer wins (SiteIconSyncRules.decide). This phone never writes icons.
+                val icon = requireNotNull(siteIcon)
+                val icons = database.syncedSiteIcons()
+                val outcome = SiteIconSyncRules.decide(relation, icons.icon(icon.site), change.occurredAtUtc, change.deviceId)
+                if (outcome != AppearanceOutcome.OBSOLETE) syncDao.upsertRecordState(SyncRecordStateEntity(
+                    change.entityType, change.entityId, maxOf(state?.revision ?: 0L, change.baseRevision) + 1L,
+                    AppearanceSyncRules.merge(localVersion, change.recordVersion).toJson()))
+                if (outcome == AppearanceOutcome.APPLY) {
+                    icons.save(SyncedSiteIcon(icon.site, icon.png, change.occurredAtUtc,
+                        SiteIconSyncRules.millis(change.occurredAtUtc), change.deviceId))
+                    icons.trim()
+                    IncomingResult.APPLIED
+                } else IncomingResult.OBSOLETE
             } else when (relation) {
                 VersionRelation.AFTER -> {
                     if (deviceName != null) syncDao.upsertMembership(
@@ -182,7 +229,11 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
                     else if (group != null) database.dao().insertGroup(group)
                     else if (passkey != null) {
                         val saved = database.dao().allPasskeys().firstOrNull { it.id == passkey.id }
-                        if (saved == null) database.dao().insertPasskeys(listOf(passkey))
+                        if (saved == null) {
+                            database.dao().insertPasskeys(listOf(passkey))
+                            database.logPasskeyEvents(listOf(passkey), PasskeyEventKind.SYNCED_IN,
+                                detail = syncDao.membership(change.vaultId, change.deviceId)?.displayName.orEmpty())
+                        }
                         else require(saved == passkey) { "Passkey credential ID conflict" }
                     }
                     else if (photo != null && (skipPhoto || database.dao().entry(photo.entryId) == null)) {
@@ -192,9 +243,11 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
                     else if (photo != null) {
                         photoEntryId = photo.entryId
                         val store = EncryptedPhotoStore(requireNotNull(context))
-                        val key = database.syncContentKey(vaultKey)
-                        val names = try { requireNotNull(photoBlobs).materialize(photo.ref, store,
-                            vaultKey, key, change.vaultId, photo.id) } finally { key.fill(0) }
+                        // The blob is sealed with the content key of the epoch the photo names.
+                        val keyring = database.syncKeyring(vaultKey)
+                        val names = try { requireNotNull(photoBlobs).materialize(photo.ref, store, vaultKey,
+                            keyring.key(photo.ref.keyEpoch) ?: throw MissingEpochKeyException(photo.ref.keyEpoch),
+                            change.vaultId, photo.id) } finally { keyring.wipe() }
                         val existingPhoto = database.dao().photo(photo.id)
                         if (existingPhoto != null) retiredPhotos += existingPhoto
                         val saved = VaultPhoto(photo.id, photo.entryId, names.first, names.second,
@@ -202,7 +255,7 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
                         database.dao().insertPhoto(saved)
                         if (saved.isCover && existingPhoto == null) database.dao().setPhotoCover(saved)
                         syncDao.upsertAttachmentManifest(SyncAttachmentManifestEntity(photo.id, "entry",
-                            photo.entryId, names.first, photo.ref.hash, photo.ref.size, 1))
+                            photo.entryId, names.first, photo.ref.hash, photo.ref.size, photo.ref.keyEpoch))
                     }
                     else if (coverPhotoId != null) {
                         val selected = database.dao().photo(coverPhotoId)
@@ -220,11 +273,18 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
                         if (change.entityType == "entry") {
                             database.dao().entry(change.entityId)?.let {
                                 retiredPhotos.addAll(it.photos)
-                                database.dao().deleteEntryAndLinks(it.entry)
+                                database.dao().deleteEntryAndLinks(it.entry, elsewhere = true)
                             }
                             syncDao.deleteAttachmentManifestsForOwner("entry", change.entityId)
                         }
-                        else if (change.entityType == "passkey") database.dao().deletePasskey(change.entityId)
+                        else if (change.entityType == "passkey") {
+                            database.dao().allPasskeys().firstOrNull { it.id == change.entityId }?.let { gone ->
+                                database.logPasskeyEvents(listOf(gone), PasskeyEventKind.DELETED_ON_OTHER_DEVICE,
+                                    detail = syncDao.membership(change.vaultId, change.deviceId)?.displayName.orEmpty())
+                            }
+                            database.dao().deletePasskey(change.entityId)
+                            database.passkeyHistory().deleteOrigin(change.entityId)
+                        }
                         else if (change.entityType == "photo") {
                             database.dao().photo(change.entityId)
                                 ?.let { retiredPhotos += it; photoEntryId = it.entryId; database.dao().deletePhoto(it) }
@@ -267,6 +327,7 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             outcome == IncomingResult.APPLIED && photoEntryId != null ->
                 RemoteEntryChanges.record(requireNotNull(photoEntryId), deleted = false, photosOnly = true)
         }
+        if (outcome == IncomingResult.APPLIED) siteIcon?.let { SyncedSiteIconCache.put(it.site, it.png) }
         if (outcome == IncomingResult.APPLIED && retiredPhotos.isNotEmpty() && context != null) {
             val photos = EncryptedPhotoStore(context)
             retiredPhotos.forEach {
@@ -277,30 +338,19 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
         return outcome
     }
 
-    internal fun decrypt(change: SyncChangeRecord, vaultKey: ByteArray): JSONObject {
-        val plaintext = decryptBytes(change, vaultKey)
+    internal fun decrypt(change: SyncChangeRecord, keyring: SyncKeyring): JSONObject {
+        val plaintext = SyncPayloadCrypto.decrypt(change, keyring)
         return try { JSONObject(plaintext.toString(Charsets.UTF_8)) }
         finally { plaintext.fill(0) }
     }
 
     companion object {
-        internal fun decryptBytes(change: SyncChangeRecord, vaultKey: ByteArray): ByteArray {
-            require(change.payloadCiphertext.length <= 1_500_000) { "Sync payload is too large" }
-            val ciphertext = Base64.getUrlDecoder().decode(change.payloadCiphertext)
-            val nonce = Base64.getUrlDecoder().decode(change.payloadNonce)
-            require(nonce.size == 12 && ciphertext.size <= 1_048_592) { "Invalid sync payload size" }
-            val payloadKey = Mac.getInstance("HmacSHA256").run {
-                init(SecretKeySpec(vaultKey, "HmacSHA256"))
-                doFinal("nuvori-sync-payload-key-v1".toByteArray())
-            }
-            return try {
-                Cipher.getInstance("AES/GCM/NoPadding").run {
-                    init(Cipher.DECRYPT_MODE, SecretKeySpec(payloadKey, "AES"), GCMParameterSpec(128, nonce))
-                    updateAAD("nuvori-sync-${change.entityType}-v1:${change.vaultId}:${change.mutationId}:${change.entityId}".toByteArray())
-                    doFinal(ciphertext)
-                }
-            } finally { payloadKey.fill(0) }
-        }
+        /** With the epoch-1 content key only: a change of a later epoch throws [MissingEpochKeyException]. */
+        internal fun decryptBytes(change: SyncChangeRecord, vaultKey: ByteArray): ByteArray =
+            SyncPayloadCrypto.decrypt(change, SyncKeyring(mapOf(1L to vaultKey.copyOf())))
+
+        internal fun decryptBytes(change: SyncChangeRecord, keyring: SyncKeyring): ByteArray =
+            SyncPayloadCrypto.decrypt(change, keyring)
     }
 
     private fun parseGroup(json: JSONObject, expectedId: String): VaultGroup = try {

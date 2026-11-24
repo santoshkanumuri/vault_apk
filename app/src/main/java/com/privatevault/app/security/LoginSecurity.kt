@@ -6,7 +6,6 @@ import com.privatevault.app.data.VaultEntry
 import com.privatevault.app.data.EntryType
 import com.privatevault.app.autofill.RecentLoginFill
 import java.security.MessageDigest
-import java.security.SecureRandom
 
 internal fun appSigningIdentity(context: Context, packageName: String): String? = runCatching {
     @Suppress("DEPRECATION")
@@ -145,10 +144,12 @@ internal fun authorizedPasswordSuggestions(
     packageName: String,
     identity: String,
     origin: String?,
+    usage: UsageSnapshot = UsageSnapshot.EMPTY,
 ): List<VaultEntry> = entries
     .filter { it.type == EntryType.PASSWORD && it.secondaryValue.isNotEmpty() &&
         loginAuthorizedForDestination(it, packageName, identity, origin) }
     .sortedWith(compareByDescending<VaultEntry> { it.favorite }
+        .thenByDescending { usage.score(it.id) }
         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.primaryValue })
 
@@ -181,9 +182,4 @@ internal fun linkLoginToDestination(
     }
 }
 
-internal fun generateLoginPassword(length: Int = 24): String {
-    require(length in 16..64)
-    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#%*-_=+?"
-    val random = SecureRandom()
-    return buildString { repeat(length) { append(alphabet[random.nextInt(alphabet.length)]) } }
-}
+

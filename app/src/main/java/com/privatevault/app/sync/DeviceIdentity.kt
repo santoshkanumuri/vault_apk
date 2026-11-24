@@ -67,17 +67,86 @@ class AndroidDeviceIdentityStore(
             "Unsupported device identity format"
         }
 
-        val deviceId = preferences.getString(DEVICE_ID_KEY, null)
+        return load("")
+    }
+
+    fun sign(message: ByteArray): ByteArray {
+        getOrCreate()
+        return signWith("", message)
+    }
+
+    /**
+     * This device's X25519 private key for epoch-key packages ([EpochKeys.x25519Private]), derived
+     * from the identity seed. Usable while the vault is locked, as signing is. Zero it after use.
+     */
+    fun x25519Private(): ByteArray {
+        getOrCreate()
+        val deviceId = preferences.getString(DEVICE_ID_KEY, null) ?: error("Missing device ID")
+        val privateSeed = unwrapSeed("", deviceId)
+        return try { EpochKeys.x25519Private(privateSeed) } finally { privateSeed.fill(0) }
+    }
+
+    /**
+     * The identity this device switches to when it leaves or learns it was removed (see
+     * [startIndependentSyncGroup]): it signs the new group's genesis before [promoteNext] makes it
+     * the identity in use. The old group keeps the current identity as a member (or as removed)
+     * forever and never adds the same device ID or key again, so only a new identity lets this
+     * device pair with that group again. A prepared identity was never in any group: when a leave
+     * fails, the next leave uses it.
+     */
+    fun prepareNext(): DeviceIdentity {
+        next()?.let { return it }
+        val current = getOrCreate()
+        var created: DeviceIdentity
+        do { created = create(NEXT_PREFIX) } while (created.deviceId == current.deviceId ||
+            created.publicKey.contentEquals(current.publicKey))
+        return created
+    }
+
+    /** The prepared next identity, or null. */
+    fun next(): DeviceIdentity? =
+        if (preferences.getString(NEXT_PREFIX + DEVICE_ID_KEY, null).isNullOrBlank()) null else load(NEXT_PREFIX)
+
+    fun signWithNext(message: ByteArray): ByteArray {
+        requireNotNull(next()) { "No next device identity" }
+        return signWith(NEXT_PREFIX, message)
+    }
+
+    /**
+     * Makes the prepared identity the one in use, in one preferences commit. The old wrapped seed
+     * is overwritten, so the old identity can never sign again and is never reused. Signatures it
+     * made still verify: peers check them against its public key in the old signed membership.
+     * Null when nothing was prepared.
+     */
+    fun promoteNext(): DeviceIdentity? {
+        val next = next() ?: return null
+        val values = listOf(DEVICE_ID_KEY, PUBLIC_KEY, NONCE_KEY, WRAPPED_SEED_KEY)
+            .associateWith { requireNotNull(preferences.getString(NEXT_PREFIX + it, null)) }
+        check(preferences.edit().apply {
+            putInt(FORMAT_KEY, DEVICE_IDENTITY_FORMAT_VERSION)
+            values.forEach { (key, value) -> putString(key, value); remove(NEXT_PREFIX + key) }
+        }.commit()) { "Could not persist device identity" }
+        return next
+    }
+
+    /**
+     * Forgets this store's identity. The Keystore wrapping key ([KEY_ALIAS]) stays: it is shared by every
+     * identity store on the device, and deleting it here made every other stored identity unreadable (tests
+     * clear their own stores, and that broke the app's own identity: "Signature/MAC verification failed" at
+     * unlock). Without its preferences, the wrapped seed is gone, so keeping the key exposes nothing.
+     */
+    fun clear() {
+        check(preferences.edit().clear().commit()) { "Could not clear device identity" }
+    }
+
+    private fun load(prefix: String): DeviceIdentity {
+        val deviceId = preferences.getString(prefix + DEVICE_ID_KEY, null)
             ?.takeIf(String::isNotBlank)
             ?: error("Missing device ID")
-        val nonce = decode(preferences.getString(NONCE_KEY, null) ?: error("Missing identity nonce"))
-        val wrappedSeed = decode(
-            preferences.getString(WRAPPED_SEED_KEY, null) ?: error("Missing wrapped identity seed"),
-        )
         val storedPublicKey = decode(
-            preferences.getString(PUBLIC_KEY, null) ?: error("Missing identity public key"),
+            preferences.getString(prefix + PUBLIC_KEY, null) ?: error("Missing identity public key"),
         )
-        val privateSeed = unwrapSeed(deviceId, nonce, wrappedSeed)
+        val privateSeed = unwrapSeed(prefix, deviceId)
         return try {
             val derivedPublicKey = DeviceIdentityCrypto.publicKey(privateSeed)
             check(storedPublicKey.contentEquals(derivedPublicKey)) { "Device identity is inconsistent" }
@@ -87,13 +156,9 @@ class AndroidDeviceIdentityStore(
         }
     }
 
-    fun sign(message: ByteArray): ByteArray {
-        val identity = getOrCreate()
-        val nonce = decode(preferences.getString(NONCE_KEY, null) ?: error("Missing identity nonce"))
-        val wrappedSeed = decode(
-            preferences.getString(WRAPPED_SEED_KEY, null) ?: error("Missing wrapped identity seed"),
-        )
-        val privateSeed = unwrapSeed(identity.deviceId, nonce, wrappedSeed)
+    private fun signWith(prefix: String, message: ByteArray): ByteArray {
+        val deviceId = preferences.getString(prefix + DEVICE_ID_KEY, null) ?: error("Missing device ID")
+        val privateSeed = unwrapSeed(prefix, deviceId)
         return try {
             DeviceIdentityCrypto.sign(privateSeed, message)
         } finally {
@@ -101,13 +166,7 @@ class AndroidDeviceIdentityStore(
         }
     }
 
-    fun clear() {
-        check(preferences.edit().clear().commit()) { "Could not clear device identity" }
-        val keyStore = keyStore()
-        if (keyStore.containsAlias(KEY_ALIAS)) keyStore.deleteEntry(KEY_ALIAS)
-    }
-
-    private fun create(): DeviceIdentity {
+    private fun create(prefix: String = ""): DeviceIdentity {
         val deviceId = UUID.randomUUID().toString()
         val privateSeed = ByteArray(DeviceIdentityCrypto.PRIVATE_SEED_BYTES).also(random::nextBytes)
         return try {
@@ -118,18 +177,26 @@ class AndroidDeviceIdentityStore(
             }
             val wrappedSeed = cipher.doFinal(privateSeed)
             check(
-                preferences.edit()
-                    .putInt(FORMAT_KEY, DEVICE_IDENTITY_FORMAT_VERSION)
-                    .putString(DEVICE_ID_KEY, deviceId)
-                    .putString(PUBLIC_KEY, encode(publicKey))
-                    .putString(NONCE_KEY, encode(cipher.iv))
-                    .putString(WRAPPED_SEED_KEY, encode(wrappedSeed))
-                    .commit(),
+                preferences.edit().apply {
+                    if (prefix.isEmpty()) putInt(FORMAT_KEY, DEVICE_IDENTITY_FORMAT_VERSION)
+                    putString(prefix + DEVICE_ID_KEY, deviceId)
+                    putString(prefix + PUBLIC_KEY, encode(publicKey))
+                    putString(prefix + NONCE_KEY, encode(cipher.iv))
+                    putString(prefix + WRAPPED_SEED_KEY, encode(wrappedSeed))
+                }.commit(),
             ) { "Could not persist device identity" }
             DeviceIdentity(deviceId, publicKey)
         } finally {
             privateSeed.fill(0)
         }
+    }
+
+    private fun unwrapSeed(prefix: String, deviceId: String): ByteArray {
+        val nonce = decode(preferences.getString(prefix + NONCE_KEY, null) ?: error("Missing identity nonce"))
+        val wrappedSeed = decode(
+            preferences.getString(prefix + WRAPPED_SEED_KEY, null) ?: error("Missing wrapped identity seed"),
+        )
+        return unwrapSeed(deviceId, nonce, wrappedSeed)
     }
 
     private fun unwrapSeed(deviceId: String, nonce: ByteArray, wrappedSeed: ByteArray): ByteArray {
@@ -181,5 +248,7 @@ class AndroidDeviceIdentityStore(
         const val ANDROID_KEY_STORE = "AndroidKeyStore"
         const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
         const val AAD_PREFIX = "nuvori-device-identity-v1"
+        /** Keys of the prepared next identity ([prepareNext]); the same fields with this prefix. */
+        const val NEXT_PREFIX = "next_"
     }
 }

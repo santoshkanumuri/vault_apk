@@ -335,4 +335,78 @@ class SyncSnapshotTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun checkpointEnrollmentSendsOnlyTheKeepSetAndLaterChangesChainOnIt() = runBlocking {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        val root = File(base.cacheDir, "sync-checkpoint-${UUID.randomUUID()}").apply { mkdirs() }
+        val sourceContext = TestContext(base, File(root, "source"), UUID.randomUUID().toString())
+        val targetContext = TestContext(base, File(root, "target"), UUID.randomUUID().toString())
+        val source = Room.inMemoryDatabaseBuilder(sourceContext, VaultDatabase::class.java).build()
+        val target = Room.inMemoryDatabaseBuilder(targetContext, VaultDatabase::class.java).build()
+        val sourceIdentity = AndroidDeviceIdentityStore(sourceContext)
+        val targetIdentity = AndroidDeviceIdentityStore(targetContext)
+        try {
+            val sourceKey = ByteArray(32) { 3 }
+            val targetKey = ByteArray(32) { 9 }
+            val pairingKey = ByteArray(32) { 7 }
+            source.dao().saveSettings(VaultSettings(vaultId = "source-vault"))
+            target.dao().saveSettings(VaultSettings(vaultId = "empty-vault"))
+            val creator = sourceIdentity.getOrCreate()
+            val joiner = targetIdentity.getOrCreate()
+            source.syncDao().upsertMembership(SyncMembershipEntity.from(DeviceMembership("source-vault", creator.deviceId,
+                "Source", creator.publicKeyBase64Url, MemberStatus.ACTIVE, creator.deviceId, 1, 1)))
+            source.prepareSyncGroup(sourceIdentity)
+            val joiningMember = SyncMembershipEntity.from(DeviceMembership("source-vault", joiner.deviceId,
+                "Joined", joiner.publicKeyBase64Url, MemberStatus.ACTIVE, creator.deviceId, 2, 1))
+            val entry = VaultEntry(id = "entry", type = EntryType.NOTE, title = "Edit 0")
+            repeat(20) { LocalEntryChangeWriter(source, sourceIdentity).save(entry.copy(title = "Edit $it"), emptySet(), sourceKey) }
+            assertEquals(20, source.syncDao().operations().size)
+            val output = ByteArrayOutputStream()
+            val admission = SyncSnapshot(sourceContext, source, EncryptedPhotoStore(sourceContext))
+                .export(output, sourceKey, pairingKey, joiningMember, joinerFeatures = setOf(SyncSnapshots.CHECKPOINT_FEATURE))
+            val bytes = output.toByteArray()
+            assertEquals("NUVSYNC4", String(bytes, 0, 8, Charsets.US_ASCII))
+            val targetSnapshot = SyncSnapshot(targetContext, target, EncryptedPhotoStore(targetContext))
+            targetSnapshot.prepare(bytes.inputStream(), targetKey, pairingKey, "source-vault", joiner.deviceId, creator)
+                .use { targetSnapshot.commit(it) }
+            source.syncDao().insertMembershipEvent(requireNotNull(admission))
+            source.syncDao().upsertMembership(joiningMember)
+            // One change explains the item and is its author's head: the other 19 are not sent.
+            val held = target.syncDao().operations().single()
+            assertEquals(20L, held.sequence)
+            assertEquals(source.syncDao().deviceHeads("source-vault"), target.syncDao().deviceHeads("source-vault"))
+            assertEquals("Edit 19", target.dao().entry(entry.id)?.entry?.title)
+            assertTrue(target.syncDao().checkpoint("source-vault")!!.checkpointJson.contains(creator.deviceId))
+            // The next change of the host chains onto the checkpoint head, and the joiner's own chain starts at 1.
+            LocalEntryChangeWriter(source, sourceIdentity).save(entry.copy(title = "After the checkpoint"), emptySet(), sourceKey)
+            val next = source.syncDao().operations().single { it.sequence == 21L }
+            assertEquals(IncomingResult.APPLIED, IncomingEntryChangeApplier(target).apply(next, targetKey))
+            assertEquals("After the checkpoint", target.dao().entry(entry.id)?.entry?.title)
+            LocalEntryChangeWriter(target, targetIdentity).save(entry.copy(title = "From the joiner"), emptySet(), targetKey)
+            val own = target.syncDao().operations().single { it.deviceId == joiner.deviceId }
+            assertEquals(1L, own.sequence)
+            assertEquals(IncomingResult.APPLIED, IncomingEntryChangeApplier(source).apply(own, sourceKey))
+            // The joiner holds a gap below its base: its relay never offers the host's older changes.
+            val planner = SyncTransferPlanner(target)
+            assertTrue(planner.pendingFor(creator.deviceId, SyncFrontier(mapOf(joiner.deviceId to 1L))).isEmpty())
+
+            // An older joiner (no feature) can't read a history with a gap: the host refuses plainly.
+            val older = SyncMembershipEntity.from(DeviceMembership("source-vault", "old-device",
+                "Old", java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { 5 }),
+                MemberStatus.ACTIVE, creator.deviceId, 3, 1))
+            source.openHelper.writableDatabase.execSQL("DELETE FROM sync_operations WHERE sequence = 5")
+            val refused = runCatching {
+                SyncSnapshot(sourceContext, source, EncryptedPhotoStore(sourceContext)).export(ByteArrayOutputStream(),
+                    sourceKey, pairingKey, older, windowsPeer = false)
+            }.exceptionOrNull()
+            assertTrue(refused is JoinerUpdateNeeded)
+            assertEquals("Update Nuvori on the new device to add it. Your sync history is too large for this version.",
+                refused?.message)
+        } finally {
+            source.close(); target.close()
+            sourceIdentity.clear(); targetIdentity.clear()
+            root.deleteRecursively()
+        }
+    }
 }

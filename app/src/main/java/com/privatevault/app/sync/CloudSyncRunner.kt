@@ -136,9 +136,7 @@ internal object CloudSyncRunner {
     fun leaveFile(store: LockedSyncStore, notice: PendingLeaveNotice): Pair<String, ByteArray>? {
         if (!runCatching { store.cloudState().enabled }.getOrDefault(false)) return null
         val mirror = store.snapshot() ?: return null
-        val secret = java.util.Base64.getUrlDecoder().decode(mirror.transportSecret)
-        val derived = try { CloudKeys.derive(secret, mirror.vaultId) } finally { secret.fill(0) }
-        val keys = derived ?: return null
+        val keys = mirror.driveKeys() ?: return null
         val name = keys.leaveName(notice.deviceId)
         return name to keys.seal(name, CloudLeave.encode(notice.request(), notice.signature))
     }
@@ -153,14 +151,23 @@ internal object CloudSyncRunner {
         }
     }
 
+    /** True when the last pass saw (or wrote) the drive file of [mirror]'s current membership history. */
+    private fun driveHasCurrentMembership(store: LockedSyncStore, state: CloudSyncState, mirror: TransportMirror): Boolean =
+        runCatching {
+            if (state.vaultId != mirror.vaultId || mirror.membershipEvents.isEmpty()) return@runCatching false
+            val keys = mirror.driveKeys() ?: return@runCatching false
+            val name = keys.membershipName(mirror.membershipEvents.size.toLong(), mirror.membershipEvents.last().hash)
+            store.cloudFiles().any { it.name == name }
+        }.getOrDefault(false)
+
     private suspend fun pass(app: Context, full: Boolean) {
         val store = LanSyncService.store(app)
         val state = runCatching { store.cloudState() }.getOrNull()
         if (state == null || !state.enabled) { mutableStatus.value = CloudSyncStatus(); return }
         uploadPendingLeave(store, app)
         val mirror = runCatching { store.snapshot() }.getOrNull() ?: return
-        val active = mirror.members.filter { it.status == MemberStatus.ACTIVE.name }
-        if (active.none { it.deviceId == mirror.localDeviceId } || active.size < 2) return
+        if (!MembershipChoices.cloudPassNeeded(mirror.localDeviceId, mirror.members,
+                driveHasCurrentMembership(store, state, mirror))) return
         // An unlocked app writes a pending appearance (if the group allows it); a Drive pass itself
         // never learns handshake features, so it cannot open the appearance gate.
         AppearanceSync.requestFlush()

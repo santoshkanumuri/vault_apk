@@ -13,6 +13,15 @@ import com.privatevault.app.data.VaultEntry
  * instead of quarantining the change and stalling that device's whole chain.
  */
 internal object SyncEntryCodec {
+    /** This phone's Recently deleted copy of an entry, in the sync entry format. */
+    fun VaultEntry.toTrashJson(): String = toSyncJson().toString()
+
+    /** Reads a Recently deleted copy back. */
+    fun parseTrash(json: String): VaultEntry {
+        val id = JsonParser.parseString(json).asJsonObject.text("id").orEmpty()
+        return parseEntry(json, id)
+    }
+
     internal data class PhotoChange(val id: String, val entryId: String, val isCover: Boolean,
         val addedAt: Long, val ref: PhotoBlobRef)
 
@@ -58,8 +67,8 @@ internal object SyncEntryCodec {
         val o = JsonParser.parseString(json).asJsonObject
         PhotoChange(requireNotNull(o.text("id")), requireNotNull(o.text("entryId")),
             o.bool("isCover") ?: false, o.long("addedAt") ?: 0L,
-            PhotoBlobRef(requireNotNull(o.text("blobHash")), requireNotNull(o.long("blobSize")))).also {
-            require(it.id == expectedId && it.entryId.isNotBlank() && it.entryId.length <= 128 &&
+            PhotoBlobRef(requireNotNull(o.text("blobHash")), requireNotNull(o.long("blobSize")), o.long("keyEpoch") ?: 1L)).also {
+            require(it.ref.keyEpoch >= 1L && it.id == expectedId && it.entryId.isNotBlank() && it.entryId.length <= 128 &&
                 it.ref.hash.matches(Regex("[a-f0-9]{64}")) &&
                 it.ref.size in 28..PhotoSyncBlobs.MAX_PHOTO_BYTES + 28)
         }

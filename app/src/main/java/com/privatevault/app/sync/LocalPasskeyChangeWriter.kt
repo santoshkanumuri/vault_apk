@@ -6,30 +6,32 @@ import com.privatevault.app.data.SyncOperationEntity
 import com.privatevault.app.data.SyncRecordStateEntity
 import com.privatevault.app.data.SyncTombstoneEntity
 import com.privatevault.app.data.VaultDatabase
+import com.privatevault.app.data.PasskeyEventKind
+import com.privatevault.app.data.PasskeyOrigin
 import com.privatevault.app.data.VaultPasskey
+import com.privatevault.app.data.logPasskeyEvents
 import com.privatevault.app.passkeys.PasskeyCrypto
 import org.json.JSONObject
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
-import javax.crypto.Cipher
-import javax.crypto.Mac
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 class LocalPasskeyChangeWriter(
     private val database: VaultDatabase,
     private val identityStore: AndroidDeviceIdentityStore,
     private val random: SecureRandom = SecureRandom(),
 ) {
-    suspend fun save(passkey: VaultPasskey, vaultKey: ByteArray) = write(passkey, vaultKey, ChangeKind.UPSERT)
-    suspend fun recordSaved(passkey: VaultPasskey, vaultKey: ByteArray) =
-        write(passkey, vaultKey, ChangeKind.UPSERT, alreadySaved = true)
+    /** A new passkey made on this device. [origin]: the app that asked, with its icon, for the passkeys page. */
+    suspend fun save(passkey: VaultPasskey, vaultKey: ByteArray, origin: PasskeyOrigin? = null) =
+        write(passkey, vaultKey, ChangeKind.UPSERT, origin = origin)
+    /** A passkey [importPasskeys][com.privatevault.app.data.VaultDao.importPasskeys] just saved. [source]: the exporter. */
+    suspend fun recordSaved(passkey: VaultPasskey, vaultKey: ByteArray, source: String = "") =
+        write(passkey, vaultKey, ChangeKind.UPSERT, alreadySaved = true, source = source)
     suspend fun delete(passkey: VaultPasskey, vaultKey: ByteArray) = write(passkey, vaultKey, ChangeKind.DELETE)
 
     private suspend fun write(passkey: VaultPasskey, vaultKey: ByteArray, kind: ChangeKind,
-        alreadySaved: Boolean = false) {
+        alreadySaved: Boolean = false, origin: PasskeyOrigin? = null, source: String = "") {
         require(vaultKey.size == 32) { "Invalid vault key" }
         if (kind == ChangeKind.UPSERT) PasskeyCrypto.validateStored(passkey)
         val identity = identityStore.getOrCreate()
@@ -53,9 +55,11 @@ class LocalPasskeyChangeWriter(
                 .put("username", passkey.username).put("displayName", passkey.displayName)
                 .put("privateKey", passkey.privateKey).put("publicKey", passkey.publicKey)
                 .put("createdAt", passkey.createdAt)) else JSONObject().put("deleted", true)
-            val contentKey = database.syncContentKey(vaultKey)
-            val encrypted = try { encrypt(payload.toString().toByteArray(Charsets.UTF_8), contentKey,
-                "nuvori-sync-passkey-v1:$vaultId:$mutationId:${passkey.id}") } finally { contentKey.fill(0) }
+            val plaintext = payload.toString().toByteArray(Charsets.UTF_8)
+            val encrypted = try {
+                SyncPayloadCrypto.sealFor(database, vaultKey, "passkey", vaultId, mutationId, passkey.id, plaintext)
+                    .let { it.ciphertext to it.nonce }
+            } finally { plaintext.fill(0) }
             val change = SyncChangeRecord.createSigned(vaultId, identity.deviceId, sequence,
                 head?.hash ?: GENESIS_HASH, mutationId, "passkey", passkey.id, kind,
                 state?.revision ?: 0L, version, Instant.now().toString(), encrypted.first,
@@ -64,10 +68,18 @@ class LocalPasskeyChangeWriter(
                 if (alreadySaved) require(database.dao().allPasskeys().any { it == passkey }) {
                     "Passkey changed during import"
                 } else database.dao().insertPasskeys(listOf(passkey))
+                if (alreadySaved) database.logPasskeyEvents(listOf(passkey), PasskeyEventKind.IMPORTED, detail = source)
+                else {
+                    origin?.takeIf { it.passkeyId == passkey.id }?.let { database.passkeyHistory().saveOrigin(it) }
+                    database.logPasskeyEvents(listOf(passkey), PasskeyEventKind.CREATED,
+                        appPackage = origin?.appPackage.orEmpty(), appLabel = origin?.appLabel.orEmpty())
+                }
             }
             else {
                 require(database.dao().allPasskeys().any { it.id == passkey.id }) { "Passkey is missing" }
                 database.dao().deletePasskey(passkey.id)
+                database.passkeyHistory().deleteOrigin(passkey.id)
+                database.logPasskeyEvents(listOf(passkey), PasskeyEventKind.DELETED)
             }
             dao.insertOperation(SyncOperationEntity(change.mutationId, change.formatVersion, change.vaultId,
                 change.deviceId, change.sequence, change.previousHash, change.entityType, change.entityId,
@@ -78,26 +90,6 @@ class LocalPasskeyChangeWriter(
             dao.upsertDeviceHead(SyncDeviceHeadEntity(vaultId, identity.deviceId, sequence, change.hash))
             dao.upsertRecordState(SyncRecordStateEntity("passkey", passkey.id,
                 change.baseRevision + 1L, version.toJson()))
-        }
-    }
-
-    private fun encrypt(plaintext: ByteArray, vaultKey: ByteArray, aad: String): Pair<String, String> {
-        val nonce = ByteArray(12).also(random::nextBytes)
-        val payloadKey = Mac.getInstance("HmacSHA256").run {
-            init(SecretKeySpec(vaultKey, "HmacSHA256"))
-            doFinal("nuvori-sync-payload-key-v1".toByteArray())
-        }
-        return try {
-            val ciphertext = Cipher.getInstance("AES/GCM/NoPadding").run {
-                init(Cipher.ENCRYPT_MODE, SecretKeySpec(payloadKey, "AES"), GCMParameterSpec(128, nonce))
-                updateAAD(aad.toByteArray())
-                doFinal(plaintext)
-            }
-            Base64.getUrlEncoder().withoutPadding().encodeToString(ciphertext) to
-                Base64.getUrlEncoder().withoutPadding().encodeToString(nonce)
-        } finally {
-            plaintext.fill(0)
-            payloadKey.fill(0)
         }
     }
 }

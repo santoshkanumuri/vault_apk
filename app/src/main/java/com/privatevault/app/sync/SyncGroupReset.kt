@@ -13,9 +13,12 @@ import java.util.UUID
 internal suspend fun VaultDatabase.removeOnlyPairedDevice(identityStore: AndroidDeviceIdentityStore,
     peerDeviceId: String): String = startIndependentSyncGroup(identityStore, peerDeviceId)
 
-/** Keeps the local vault while detaching this device from a group of any supported size. */
-internal suspend fun VaultDatabase.leaveSyncGroup(identityStore: AndroidDeviceIdentityStore): String =
-    startIndependentSyncGroup(identityStore, null)
+/**
+ * Detaches this device from a group of any supported size. It keeps the local vault, or with
+ * [emptyItems] it starts empty (entries go to Recently deleted), ready to join another group.
+ */
+internal suspend fun VaultDatabase.leaveSyncGroup(identityStore: AndroidDeviceIdentityStore,
+    emptyItems: Boolean = false): String = startIndependentSyncGroup(identityStore, null, emptyItems = emptyItems)
 
 /**
  * Detaches a device whose own verified history holds a signed REMOVE of it. Items stay; sync state
@@ -25,12 +28,20 @@ internal suspend fun VaultDatabase.leaveRemovedSyncGroup(identityStore: AndroidD
     startIndependentSyncGroup(identityStore, null, removed = true)
 
 /**
+ * After "Mark as lost" ([markManagerLost]): this device starts a new group and manages it. It keeps
+ * its items and the lineage of the old group, so other survivors join it with their items and no
+ * duplicates ([MergeJoin]). Unresolved conflicts keep this device's version, as after a removal.
+ */
+internal suspend fun VaultDatabase.startGroupAfterLostManager(identityStore: AndroidDeviceIdentityStore): String =
+    startIndependentSyncGroup(identityStore, null, lostManager = true)
+
+/**
  * The manager removes another device with a signed REMOVE (raising the key epoch), cancelling a
  * transfer offered to that same device first. Returns the new events so the caller can append
  * them to the transport mirror too.
  */
 internal suspend fun VaultDatabase.removeSyncMember(identityStore: AndroidDeviceIdentityStore,
-    deviceId: String, cutoff: String = ""): List<SyncMembershipEventEntity> = withTransaction {
+    deviceId: String, cutoff: String = "", statements: Map<String, KeyStatement> = emptyMap()): List<SyncMembershipEventEntity> = withTransaction {
     val identity = identityStore.getOrCreate()
     val vaultId = requireNotNull(dao().settings()).vaultId
     val sync = syncDao()
@@ -50,6 +61,9 @@ internal suspend fun VaultDatabase.removeSyncMember(identityStore: AndroidDevice
         MembershipAction.REMOVE, identity.deviceId, deviceId, cutoff, verified.keyEpoch + 1, identityStore::sign)
     val after = SyncMembershipManager.verify(history + added)
     added.forEach { sync.insertMembershipEvent(SyncMembershipEventEntity.from(it)) }
+    // New keys for the new epoch when every survivor sent a signed key statement ([EpochKeyRotation]);
+    // otherwise the epoch is HMAC-derived as before and the removed device could still read new data.
+    EpochKeyRotation.rotate(this, identityStore, after, added.last(), statements)
     after.members.forEach { member ->
         val label = sync.membership(vaultId, member.deviceId)?.displayName
         sync.upsertMembership(member.copy(displayName = label ?: member.displayName))
@@ -77,11 +91,41 @@ internal suspend fun VaultDatabase.prepareLeaveNotice(identityStore: AndroidDevi
     val request = LeaveRequest(vaultId, identity.deviceId, verified.head, verified.keyEpoch, now)
     PendingLeaveNotice(vaultId, identity.deviceId, verified.head, verified.keyEpoch, now,
         java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(identityStore.sign(request.signingBytes())),
-        TransportEpochs.secret(group.transportSecret, vaultId, verified.keyEpoch), addresses.take(8), port)
+        TransportEpochs.secret(group.transportSecret, vaultId, verified.keyEpoch,
+            sync.epochKeys().filter { it.vaultId == vaultId }.associate { it.epoch to it.transportSecret }), addresses.take(8), port)
 }
 
+/**
+ * Starts this device's own group. The new group's genesis is signed by a new device identity
+ * ([AndroidDeviceIdentityStore.prepareNext]), which becomes the identity in use once the vault
+ * transaction committed. The old group keeps the old identity (as a member or as removed) and
+ * never adds it again, so the new identity is what lets this device pair with that group later. A
+ * stop between the commit and [AndroidDeviceIdentityStore.promoteNext] is finished on the next
+ * unlock by [reconcileDeviceIdentity]. [emptyItems] also moves every entry to Recently deleted and
+ * deletes folders and passkeys, so the device can join another group from an empty vault.
+ */
 private suspend fun VaultDatabase.startIndependentSyncGroup(identityStore: AndroidDeviceIdentityStore,
-    onlyPeerDeviceId: String?, removed: Boolean = false): String = withTransaction {
+    onlyPeerDeviceId: String?, removed: Boolean = false, emptyItems: Boolean = false, lostManager: Boolean = false): String {
+    val vaultId = startIndependentSyncGroupInTransaction(identityStore, onlyPeerDeviceId, removed, emptyItems, lostManager)
+    identityStore.promoteNext()
+    return vaultId
+}
+
+/**
+ * Finishes an identity change that stopped after [startIndependentSyncGroup] committed: when the
+ * vault's group was started by the prepared next identity, that identity becomes the one in use.
+ * Call it on unlock, before anything signs. True when it changed the identity.
+ */
+internal suspend fun VaultDatabase.reconcileDeviceIdentity(identityStore: AndroidDeviceIdentityStore): Boolean {
+    val next = identityStore.next() ?: return false
+    val vaultId = dao().settings()?.vaultId ?: return false
+    if (syncDao().membership(vaultId, next.deviceId) == null) return false
+    identityStore.promoteNext()
+    return true
+}
+
+private suspend fun VaultDatabase.startIndependentSyncGroupInTransaction(identityStore: AndroidDeviceIdentityStore,
+    onlyPeerDeviceId: String?, removed: Boolean, emptyItems: Boolean, lostManager: Boolean): String = withTransaction {
     val identity = identityStore.getOrCreate()
     val settings = requireNotNull(dao().settings())
     val oldVaultId = settings.vaultId
@@ -104,9 +148,13 @@ private suspend fun VaultDatabase.startIndependentSyncGroup(identityStore: Andro
     require(onlyPeerDeviceId == null || verified.pendingTransferDeviceId == null) {
         "Finish or cancel the authority transfer before removing a device"
     }
-    require(removed || sync.conflicts().none { it.resolvedAtUtc.isEmpty() }) {
+    require(!lostManager || sync.lostManager(oldVaultId) != null) { "Mark the managing device as lost first" }
+    require(removed || lostManager || sync.conflicts().none { it.resolvedAtUtc.isEmpty() }) {
         "Resolve sync conflicts before removing the device"
     }
+    // What this device keeps of the old group: each item's version, for a later merge join.
+    val lineage = if (emptyItems) emptyList() else MergeJoin.lineageRows(oldVaultId, sync.recordStates(), sync.tombstones(),
+        MergeJoin.contentDigests(this@startIndependentSyncGroupInTransaction))
     val old = requireNotNull(sync.vaultState())
     require(old.vaultId == oldVaultId && old.transportSecret.isNotBlank())
     val newVaultId = UUID.randomUUID().toString()
@@ -125,14 +173,30 @@ private suspend fun VaultDatabase.startIndependentSyncGroup(identityStore: Andro
         dao().clearSyncVaultState()
         dao().clearSyncPeers()
         dao().clearSyncLegacyOperations()
+        dao().clearSyncEpochKeys()
+        dao().clearSyncKeyPackages()
+        sync.clearLostManager()
+        sync.clearLineage()
+        if (lineage.isNotEmpty()) sync.insertLineage(lineage)
         dao().saveSettings(settings.copy(vaultId = newVaultId, watchSyncEnabled = false))
+        if (emptyItems) {
+            // Entries stay recoverable in Recently deleted on this device for its usual 30 days.
+            // Photos and folder links go with their entries (foreign keys); the unlock sweep
+            // deletes the photo files. Passkeys and folders have no Recently deleted.
+            val now = System.currentTimeMillis()
+            dao().allEntries().forEach { dao().keepDeleted(it.entry.id, elsewhere = false, now = now) }
+            dao().clearEntries()
+            dao().clearGroups()
+            dao().clearPasskeys()
+        }
+        val next = identityStore.prepareNext()
         val genesis = SyncMembershipEvent.sign(newVaultId, 1, GENESIS_HASH,
-            MembershipAction.GENESIS, identity.deviceId, identity.deviceId,
-            identity.publicKeyBase64Url, 1, identityStore::sign)
+            MembershipAction.GENESIS, next.deviceId, next.deviceId,
+            next.publicKeyBase64Url, 1, identityStore::signWithNext)
         sync.insertMembershipEvent(SyncMembershipEventEntity.from(genesis))
         sync.upsertMembership(SyncMembershipEntity.from(DeviceMembership(newVaultId,
-            identity.deviceId, "This device", identity.publicKeyBase64Url,
-            MemberStatus.ACTIVE, identity.deviceId, 1, 1)))
+            next.deviceId, "This device", next.publicKeyBase64Url,
+            MemberStatus.ACTIVE, next.deviceId, 1, 1)))
         val encoder = Base64.getUrlEncoder().withoutPadding()
         sync.saveVaultState(SyncVaultStateEntity(vaultId = newVaultId,
             contentKey = encoder.encodeToString(contentKey),

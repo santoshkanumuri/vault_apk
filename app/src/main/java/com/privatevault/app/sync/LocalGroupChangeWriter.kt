@@ -13,10 +13,6 @@ import java.time.Clock
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
-import javax.crypto.Cipher
-import javax.crypto.Mac
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 class LocalGroupChangeWriter(
     private val database: VaultDatabase,
@@ -47,9 +43,11 @@ class LocalGroupChangeWriter(
             val payload = if (kind == ChangeKind.UPSERT) JSONObject().put("group", JSONObject()
                 .put("id", group.id).put("name", group.name).put("notes", group.notes)
                 .put("folderType", group.folderType?.name ?: "")) else JSONObject().put("deleted", true)
-            val contentKey = database.syncContentKey(vaultKey)
-            val encrypted = try { encrypt(payload.toString().toByteArray(Charsets.UTF_8), contentKey,
-                settings.vaultId, mutationId, group.id) } finally { contentKey.fill(0) }
+            val plaintext = payload.toString().toByteArray(Charsets.UTF_8)
+            val encrypted = try {
+                SyncPayloadCrypto.sealFor(database, vaultKey, "group", settings.vaultId, mutationId, group.id, plaintext)
+                    .let { it.ciphertext to it.nonce }
+            } finally { plaintext.fill(0) }
             val change = SyncChangeRecord.createSigned(settings.vaultId, identity.deviceId, sequence,
                 head?.hash ?: GENESIS_HASH, mutationId, "group", group.id, kind, state?.revision ?: 0L,
                 recordVersion, Instant.now(clock).toString(), encrypted.first, encrypted.second, identityStore::sign)
@@ -64,27 +62,6 @@ class LocalGroupChangeWriter(
             syncDao.upsertDeviceHead(SyncDeviceHeadEntity(settings.vaultId, identity.deviceId, sequence, change.hash))
             syncDao.upsertRecordState(SyncRecordStateEntity("group", group.id, change.baseRevision + 1L,
                 recordVersion.toJson()))
-        }
-    }
-
-    private fun encrypt(plaintext: ByteArray, vaultKey: ByteArray, vaultId: String, mutationId: String,
-        groupId: String): Pair<String, String> {
-        val nonce = ByteArray(12).also(random::nextBytes)
-        val payloadKey = Mac.getInstance("HmacSHA256").run {
-            init(SecretKeySpec(vaultKey, "HmacSHA256"))
-            doFinal("nuvori-sync-payload-key-v1".toByteArray())
-        }
-        return try {
-            val ciphertext = Cipher.getInstance("AES/GCM/NoPadding").run {
-                init(Cipher.ENCRYPT_MODE, SecretKeySpec(payloadKey, "AES"), GCMParameterSpec(128, nonce))
-                updateAAD("nuvori-sync-group-v1:$vaultId:$mutationId:$groupId".toByteArray())
-                doFinal(plaintext)
-            }
-            Base64.getUrlEncoder().withoutPadding().encodeToString(ciphertext) to
-                Base64.getUrlEncoder().withoutPadding().encodeToString(nonce)
-        } finally {
-            payloadKey.fill(0)
-            plaintext.fill(0)
         }
     }
 }

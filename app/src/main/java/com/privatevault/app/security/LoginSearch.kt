@@ -12,11 +12,12 @@ private val titleWordBreak = Regex("[^\\p{L}\\p{N}]+")
  * Picker search over saved logins. Matches [query] (case-insensitive substring) in the title, username, saved
  * website and linked origins. Passwords and notes are never searched. A blank query keeps every entry.
  * Order: exact-authorized, same-site, title/username prefix (or a title word prefix), other matches;
- * then favorites, most recently opened, title, username.
+ * then favorites, most used on this device ([usage]), most recently opened, title, username.
  */
 internal fun rankLoginSearch(
     entries: List<VaultEntry>,
     query: String,
+    usage: UsageSnapshot = UsageSnapshot.EMPTY,
     tier: (VaultEntry) -> LoginMatchTier,
 ): List<VaultEntry> {
     val q = query.trim().lowercase(Locale.ROOT)
@@ -38,6 +39,7 @@ internal fun rankLoginSearch(
         }
         .sortedWith(compareBy<Pair<VaultEntry, Int>> { it.second }
             .thenByDescending { it.first.favorite }
+            .thenByDescending { usage.score(it.first.id) }
             .thenByDescending { it.first.lastOpenedAt }
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.first.title }
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.first.primaryValue }

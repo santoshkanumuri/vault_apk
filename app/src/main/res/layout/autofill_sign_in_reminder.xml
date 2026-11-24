@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A sign-in reminder in the Autofill menu: the provider mark, "Last time: GitHub · octocat" and what a tap does.
+     Smaller than a login row, so it never reads as a login to fill. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/autofill_reminder_root"
+    android:layout_width="wrap_content" android:layout_height="wrap_content"
+    android:orientation="horizontal" android:gravity="center_vertical"
+    android:minHeight="48dp" android:paddingStart="12dp" android:paddingEnd="12dp"
+    android:paddingTop="8dp" android:paddingBottom="8dp"
+    android:background="@drawable/autofill_suggestion_background">
+    <ImageView android:id="@+id/autofill_reminder_mark"
+        android:layout_width="24dp" android:layout_height="24dp"
+        android:importantForAccessibility="no" />
+    <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:orientation="vertical" android:layout_marginStart="12dp">
+        <TextView android:id="@+id/autofill_reminder_title"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:maxLines="1" android:ellipsize="end" android:maxWidth="280dp"
+            android:textColor="@color/autofill_suggestion_title" android:textSize="14sp" />
+        <TextView android:id="@+id/autofill_reminder_subtitle"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:maxLines="1" android:ellipsize="end" android:maxWidth="280dp"
+            android:textColor="@color/autofill_suggestion_subtitle" android:textSize="12sp" />
+    </LinearLayout>
+</LinearLayout>

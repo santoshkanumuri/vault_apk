@@ -66,6 +66,43 @@ data class VaultEntry(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
+/**
+ * A login's earlier password, kept on this phone only (Recently deleted and previous passwords
+ * are not synced; Nuvori for Windows has the same rules in `local_recovery.rs`). Newest first,
+ * up to [PasswordHistoryEntry.LIMIT] per login.
+ */
+@Entity(tableName = "password_history", indices = [Index("entryId")])
+data class PasswordHistoryEntry(
+    @androidx.room.PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val entryId: String,
+    val password: String,
+    val replacedAt: Long,
+) {
+    companion object { const val LIMIT = 10 }
+}
+
+/**
+ * A deleted entry, kept on this phone for [TrashedEntry.DAYS] days. [entryJson] is the sync entry
+ * format (`toSyncJson`). A restore makes a new entry with a new ID, which syncs as a new item.
+ * Photos are not kept.
+ */
+@Entity(tableName = "trash")
+data class TrashedEntry(
+    @androidx.room.PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val entryId: String,
+    val type: EntryType,
+    val title: String,
+    val entryJson: String,
+    /** Folder IDs, one per line. */
+    val groupIds: String,
+    val deletedAt: Long,
+    /** Deleted on a paired device; this phone kept its copy. */
+    val deletedElsewhere: Boolean,
+) {
+    val expiresAt: Long get() = deletedAt + DAYS * 86_400_000L
+    companion object { const val DAYS = 30 }
+}
+
 @Entity(tableName = "vault_groups")
 data class VaultGroup(
     @androidx.room.PrimaryKey val id: String = UUID.randomUUID().toString(),
@@ -197,8 +234,10 @@ interface VaultDao {
     @Query("UPDATE entries SET linkedAuthenticatorId = '' WHERE linkedAuthenticatorId = :id")
     suspend fun clearAuthenticatorLinks(id: String)
 
+    /** Deletes an entry. [elsewhere]: a paired device deleted it. Either way this phone keeps a copy in Recently deleted. */
     @Transaction
-    suspend fun deleteEntryAndLinks(entry: VaultEntry) {
+    suspend fun deleteEntryAndLinks(entry: VaultEntry, elsewhere: Boolean = false) {
+        keepDeleted(entry.id, elsewhere)
         clearAuthenticatorLinks(entry.id)
         deleteEntry(entry)
     }
@@ -211,7 +250,7 @@ interface VaultDao {
         require(selectedIds.all(deletable::containsKey)) {
             "Passwords changed after review. Check for duplicates again."
         }
-        selectedIds.forEach { deleteEntry(requireNotNull(deletable[it]).entry) }
+        selectedIds.forEach { keepDeleted(it, elsewhere = false); deleteEntry(requireNotNull(deletable[it]).entry) }
         return selectedIds.size
     }
 
@@ -220,9 +259,78 @@ interface VaultDao {
     suspend fun entry(id: String): EntryWithDetails?
 
     @androidx.room.Upsert
-    suspend fun insertEntry(entry: VaultEntry)
+    suspend fun upsertEntryRow(entry: VaultEntry)
 
-    @Update suspend fun updateEntry(entry: VaultEntry)
+    @Update suspend fun updateEntryRow(entry: VaultEntry)
+
+    @Query("SELECT * FROM entries WHERE id = :id") suspend fun entryRow(id: String): VaultEntry?
+
+    /** Every entry write: local edits, sync, autofill and imports. A login keeps its replaced password. */
+    @Transaction
+    suspend fun insertEntry(entry: VaultEntry) { keepReplacedPassword(entry); upsertEntryRow(entry) }
+
+    @Transaction
+    suspend fun updateEntry(entry: VaultEntry) { keepReplacedPassword(entry); updateEntryRow(entry) }
+
+    suspend fun keepReplacedPassword(entry: VaultEntry, now: Long = System.currentTimeMillis()) {
+        val old = entryRow(entry.id) ?: return
+        if (old.type != EntryType.PASSWORD || old.secondaryValue.isEmpty() || old.secondaryValue == entry.secondaryValue) return
+        insertPasswordHistory(PasswordHistoryEntry(entryId = entry.id, password = old.secondaryValue, replacedAt = now))
+        trimPasswordHistory(entry.id, PasswordHistoryEntry.LIMIT)
+    }
+
+    @Insert suspend fun insertPasswordHistory(item: PasswordHistoryEntry)
+
+    @Query("DELETE FROM password_history WHERE entryId = :entryId AND id NOT IN (SELECT id FROM password_history WHERE entryId = :entryId ORDER BY replacedAt DESC, id DESC LIMIT :limit)")
+    suspend fun trimPasswordHistory(entryId: String, limit: Int)
+
+    @Query("SELECT * FROM password_history WHERE entryId = :entryId ORDER BY replacedAt DESC, id DESC")
+    suspend fun passwordHistory(entryId: String): List<PasswordHistoryEntry>
+
+    @Query("DELETE FROM password_history WHERE entryId = :entryId") suspend fun clearPasswordHistory(entryId: String)
+
+    @Query("UPDATE password_history SET entryId = :to WHERE entryId = :from") suspend fun moveHistory(from: String, to: String)
+
+    // Recently deleted (TrashedEntry)
+
+    @Query("SELECT groupId FROM entry_group WHERE entryId = :entryId ORDER BY groupId") suspend fun groupIdsOf(entryId: String): List<String>
+
+    @Insert suspend fun insertTrash(item: TrashedEntry)
+
+    /** Before a delete: keeps a copy in Recently deleted. Nothing when the entry is not here. */
+    suspend fun keepDeleted(entryId: String, elsewhere: Boolean, now: Long = System.currentTimeMillis()) {
+        val stored = entryRow(entryId) ?: return
+        insertTrash(TrashedEntry(entryId = stored.id, type = stored.type, title = stored.title,
+            entryJson = with(com.privatevault.app.sync.SyncEntryCodec) { stored.toTrashJson() },
+            groupIds = groupIdsOf(stored.id).joinToString("\n"), deletedAt = now, deletedElsewhere = elsewhere))
+    }
+
+    @Query("SELECT * FROM trash ORDER BY deletedAt DESC") suspend fun trash(): List<TrashedEntry>
+    @Query("SELECT * FROM trash WHERE id = :id") suspend fun trashed(id: String): TrashedEntry?
+    @Query("DELETE FROM trash WHERE id = :id") suspend fun deleteTrashRow(id: String)
+
+    /** Deletes one trashed entry for good, with its previous passwords. */
+    @Transaction
+    suspend fun forgetTrashed(id: String) {
+        if (trashed(id) == null) return
+        deleteTrashRow(id)
+        purgeOrphanHistory()
+    }
+
+    @Transaction
+    suspend fun emptyTrash() { clearTrash(); purgeOrphanHistory() }
+    @Query("DELETE FROM trash") suspend fun clearTrash()
+
+    @Query("DELETE FROM password_history WHERE entryId NOT IN (SELECT id FROM entries) AND entryId NOT IN (SELECT entryId FROM trash)")
+    suspend fun purgeOrphanHistory()
+
+    /** Removes trash older than [TrashedEntry.DAYS] days, and the previous passwords of entries that are gone. */
+    @Transaction
+    suspend fun purgeTrash(now: Long = System.currentTimeMillis()) {
+        deleteTrashBefore(now - TrashedEntry.DAYS * 86_400_000L)
+        purgeOrphanHistory()
+    }
+    @Query("DELETE FROM trash WHERE deletedAt < :before") suspend fun deleteTrashBefore(before: Long)
 
     @Transaction
     suspend fun saveBrowserLogin(origin: String, username: String, password: String, expected: VaultEntry?, title: String? = null) {
@@ -297,6 +405,9 @@ interface VaultDao {
     suspend fun convertCardFoldersToGroups()
 
     @Delete suspend fun deleteGroup(group: VaultGroup)
+    @Query("DELETE FROM vault_groups WHERE id = :id") suspend fun deleteGroupById(id: String)
+    /** Only the row (photos and folder links go with it); no Recently deleted copy. */
+    @Query("DELETE FROM entries WHERE id = :id") suspend fun deleteEntryRow(id: String)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun link(ref: EntryGroupCrossRef)
@@ -355,6 +466,8 @@ interface VaultDao {
     @Delete suspend fun deletePhoto(photo: VaultPhoto)
 
     @Query("DELETE FROM entries") suspend fun clearEntries()
+    @Query("DELETE FROM sync_epoch_keys") suspend fun clearSyncEpochKeys()
+    @Query("DELETE FROM sync_key_packages") suspend fun clearSyncKeyPackages()
     @Query("DELETE FROM vault_groups") suspend fun clearGroups()
     @Query("DELETE FROM sync_operations") suspend fun clearSyncOperations()
     @Query("DELETE FROM sync_device_heads") suspend fun clearSyncDeviceHeads()
@@ -373,6 +486,7 @@ interface VaultDao {
     @Insert suspend fun insertPasskeys(passkeys: List<VaultPasskey>)
     @Query("DELETE FROM passkeys") suspend fun clearPasskeys()
     @Query("DELETE FROM passkeys WHERE id = :id") suspend fun deletePasskey(id: String)
+    @Insert suspend fun insertPasskeyHistory(events: List<PasskeyHistoryEvent>)
 
     @Transaction
     suspend fun importPasskeys(passkeys: List<VaultPasskey>): PasskeyImportResult {
@@ -480,7 +594,10 @@ interface VaultDao {
         links: List<EntryGroupCrossRef>,
         photos: List<VaultPhoto>,
         settings: VaultSettings = VaultSettings(),
-        passkeys: List<VaultPasskey> = emptyList()
+        passkeys: List<VaultPasskey> = emptyList(),
+        /** The passkey ledger line for each passkey this brings in: restored from a backup, or copied from a sync group. */
+        passkeyEvent: PasskeyEventKind = PasskeyEventKind.RESTORED,
+        passkeyEventDetail: String = "",
     ) {
         clearSyncOperations()
         clearSyncDeviceHeads()
@@ -493,10 +610,18 @@ interface VaultDao {
         clearSyncMembershipEvents()
         clearSyncVaultState()
         clearSyncPeers()
+        clearSyncEpochKeys()
+        clearSyncKeyPackages()
         clearEntries()
         clearGroups()
         clearPasskeys()
         insertPasskeys(passkeys)
+        // The ledger stays: it is this device's own history, not part of the vault being replaced.
+        val now = System.currentTimeMillis()
+        insertPasskeyHistory(passkeys.map {
+            PasskeyHistoryEvent(passkeyId = it.id, rpId = it.rpId.take(253), username = it.username.take(256),
+                kind = passkeyEvent.name, at = now, detail = passkeyEventDetail.take(200))
+        })
         insertGroups(groups)
         insertEntries(entries)
         insertLinks(links)
@@ -517,16 +642,82 @@ class EntryTypeConverter {
         SyncOperationEntity::class, SyncDeviceHeadEntity::class, SyncRecordStateEntity::class, SyncTombstoneEntity::class,
         SyncAttachmentManifestEntity::class, SyncConflictEntity::class, SyncPeerAcknowledgementEntity::class,
         SyncMembershipEntity::class, SyncVaultStateEntity::class, SyncPeerEntity::class,
-        SyncLegacyOperationEntity::class, SyncMembershipEventEntity::class],
-    version = 19,
+        SyncLegacyOperationEntity::class, SyncMembershipEventEntity::class, PasswordHistoryEntry::class, TrashedEntry::class,
+        PasskeyHistoryEvent::class, PasskeyOrigin::class, SyncedSiteIcon::class, SyncCheckpointEntity::class,
+        SignInMethod::class, SyncLostManagerEntity::class, SyncLineageEntity::class, SyncEpochKeyEntity::class,
+        SyncKeyPackageEntity::class],
+    version = 27,
     exportSchema = false
 )
 @androidx.room.TypeConverters(EntryTypeConverter::class)
 abstract class VaultDatabase : RoomDatabase() {
     abstract fun dao(): VaultDao
     abstract fun syncDao(): SyncDao
+    abstract fun passkeyHistory(): PasskeyHistoryDao
+    abstract fun syncedSiteIcons(): SyncedSiteIconDao
+    abstract fun signInMethods(): SignInMethodDao
 
     companion object {
+        /** The content digest of each lineage row, so a merge join never drops an item edited after leaving. */
+        internal val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `sync_lineage` ADD COLUMN `contentDigest` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+        /** Keys of later epochs and their signed packages (sync protocol `epoch-keys-v1`). */
+        internal val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `sync_epoch_keys` (`vaultId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `contentKey` TEXT NOT NULL, `transportSecret` TEXT NOT NULL, PRIMARY KEY(`vaultId`, `epoch`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `sync_key_packages` (`vaultId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `setJson` TEXT NOT NULL, PRIMARY KEY(`vaultId`, `epoch`))")
+            }
+        }
+        /** A lost managing device marked on this device, and the lineage of the group it left (sync merge join). */
+        internal val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `sync_lost_manager` (`vaultId` TEXT NOT NULL, `deviceId` TEXT NOT NULL, `membershipCount` INTEGER NOT NULL, `headSequence` INTEGER NOT NULL, `headHash` TEXT NOT NULL, `markedAt` INTEGER NOT NULL, PRIMARY KEY(`vaultId`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `sync_lineage` (`fromVaultId` TEXT NOT NULL, `entityType` TEXT NOT NULL, `entityId` TEXT NOT NULL, `recordVersionJson` TEXT NOT NULL, `deleted` INTEGER NOT NULL, PRIMARY KEY(`entityType`, `entityId`))")
+            }
+        }
+        /** Sign-in methods shared by Nuvori for Windows (sync protocol `sign-in-methods-v1`). */
+        internal val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `sign_in_methods` (`site` TEXT NOT NULL, `provider` TEXT NOT NULL, `accountKey` TEXT NOT NULL, `entityId` TEXT NOT NULL, `account` TEXT NOT NULL, `firstUsedAt` INTEGER NOT NULL, `lastUsedAt` INTEGER NOT NULL, `useCount` INTEGER NOT NULL, `updatedAtUtc` TEXT NOT NULL, `updatedByDevice` TEXT NOT NULL, `pendingDelete` INTEGER NOT NULL, PRIMARY KEY(`site`, `provider`, `accountKey`))")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_sign_in_methods_entityId` ON `sign_in_methods` (`entityId`)")
+            }
+        }
+        /** The enrollment checkpoint this device joined from and its own compaction floor (sync history checkpoints). */
+        internal val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `sync_checkpoints` (`vaultId` TEXT NOT NULL, `checkpointJson` TEXT NOT NULL, `floorJson` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`vaultId`))")
+            }
+        }
+        /** Website icons shared by other devices (sync protocol `site-icons-v1`). */
+        internal val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `synced_site_icons` (`site` TEXT NOT NULL, `png` BLOB NOT NULL, `updatedAtUtc` TEXT NOT NULL, `updatedAtMillis` INTEGER NOT NULL, `updatedByDevice` TEXT NOT NULL, PRIMARY KEY(`site`))")
+            }
+        }
+        /**
+         * The passkey ledger and the app that created each passkey, kept on this device only. Passkeys saved before
+         * get one "already saved" line at their own creation time, so every passkey has a start in its history.
+         */
+        internal val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `passkey_history` (`seq` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `passkeyId` TEXT NOT NULL, `rpId` TEXT NOT NULL, `username` TEXT NOT NULL, `kind` TEXT NOT NULL, `at` INTEGER NOT NULL, `appPackage` TEXT NOT NULL, `appLabel` TEXT NOT NULL, `detail` TEXT NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_passkey_history_passkeyId` ON `passkey_history` (`passkeyId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `passkey_origins` (`passkeyId` TEXT NOT NULL, `appPackage` TEXT NOT NULL, `appLabel` TEXT NOT NULL, `icon` BLOB, PRIMARY KEY(`passkeyId`))")
+                db.execSQL("INSERT INTO passkey_history (passkeyId, rpId, username, kind, at, appPackage, appLabel, detail) " +
+                    "SELECT id, rpId, username, 'ADDED_BEFORE_HISTORY', createdAt, '', '', '' FROM passkeys")
+            }
+        }
+        /** Previous passwords and Recently deleted, kept on this phone only. */
+        internal val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `password_history` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `entryId` TEXT NOT NULL, `password` TEXT NOT NULL, `replacedAt` INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_password_history_entryId` ON `password_history` (`entryId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `trash` (`id` TEXT NOT NULL, `entryId` TEXT NOT NULL, `type` TEXT NOT NULL, `title` TEXT NOT NULL, `entryJson` TEXT NOT NULL, `groupIds` TEXT NOT NULL, `deletedAt` INTEGER NOT NULL, `deletedElsewhere` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+            }
+        }
         internal val MIGRATION_18_19 = object : Migration(18, 19) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE sync_vault_state ADD COLUMN transportSecret TEXT NOT NULL DEFAULT ''")
@@ -649,7 +840,7 @@ abstract class VaultDatabase : RoomDatabase() {
             val factory = SupportOpenHelperFactory(key.copyOf())
             return Room.databaseBuilder(context, VaultDatabase::class.java, "vault.db")
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27)
                 .build()
         }
     }

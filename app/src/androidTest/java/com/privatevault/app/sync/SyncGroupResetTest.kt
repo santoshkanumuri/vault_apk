@@ -55,8 +55,13 @@ class SyncGroupResetTest {
             assertNotEquals("shared-vault", newVaultId)
             assertEquals("Keep me", database.dao().entry("kept")?.entry?.title)
             assertEquals(newVaultId, locked.snapshot()?.vaultId)
-            assertEquals(listOf(local.deviceId), database.syncDao().memberships(newVaultId).map { it.deviceId })
-            assertEquals(local.deviceId, SyncMembershipManager.verify(
+            // The device leaves with a new identity, so the old group can add it again later.
+            val renewed = identities.getOrCreate()
+            assertNotEquals(local.deviceId, renewed.deviceId)
+            assertNull(identities.next())
+            assertEquals(renewed.deviceId, locked.snapshot()?.localDeviceId)
+            assertEquals(listOf(renewed.deviceId), database.syncDao().memberships(newVaultId).map { it.deviceId })
+            assertEquals(renewed.deviceId, SyncMembershipManager.verify(
                 database.syncDao().membershipEvents(newVaultId).map { it.toEvent() }).managerDeviceId)
             database.prepareSyncGroup(identities)
             assertEquals(newVaultId, database.syncDao().vaultState()?.vaultId)

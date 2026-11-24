@@ -123,12 +123,14 @@ internal fun MoreScreen(groupCount: Int, entries: List<EntryWithDetails>, groups
     autofill: () -> Unit, settings: () -> Unit, devices: () -> Unit = {}, passkeys: () -> Unit = {}, help: () -> Unit = {},
     lock: (() -> Unit)? = null, passkeyCount: Int = 0, listState: LazyListState? = null) {
     val state = listState ?: rememberLazyListState()
+    // "1 private note", "2 private notes".
+    fun counted(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
     val vault = listOf(
-        MoreRow("Notes", "${entries.count { it.entry.type == EntryType.NOTE }} private notes", EntryType.NOTE.icon, tint(EntryType.NOTE.tintIndex), notes),
-        MoreRow("Security questions", "${entries.count { it.entry.type == EntryType.QUESTION }} saved questions", EntryType.QUESTION.icon, tint(EntryType.QUESTION.tintIndex), questions),
-        MoreRow("Autofill details", "${entries.count { it.entry.type == EntryType.AUTOFILL }} saved profiles", EntryType.AUTOFILL.icon, tint(EntryType.AUTOFILL.tintIndex), autofill),
+        MoreRow("Notes", counted(entries.count { it.entry.type == EntryType.NOTE }, "private note", "private notes"), EntryType.NOTE.icon, tint(EntryType.NOTE.tintIndex), notes),
+        MoreRow("Security questions", counted(entries.count { it.entry.type == EntryType.QUESTION }, "saved question", "saved questions"), EntryType.QUESTION.icon, tint(EntryType.QUESTION.tintIndex), questions),
+        MoreRow("Autofill details", counted(entries.count { it.entry.type == EntryType.AUTOFILL }, "saved profile", "saved profiles"), EntryType.AUTOFILL.icon, tint(EntryType.AUTOFILL.tintIndex), autofill),
         MoreRow("Passkeys", if (passkeyCount == 0) "Website sign-in without passwords" else "$passkeyCount saved", NuvoriIcons.Passkey, tint(0), passkeys),
-        MoreRow("Groups", "$groupCount groups · linked accounts in one place", NuvoriIcons.Folder, tint(1), groups),
+        MoreRow("Groups", "${counted(groupCount, "group", "groups")} · linked accounts in one place", NuvoriIcons.Folder, tint(1), groups),
     )
     val manage = listOfNotNull(
         MoreRow("Devices & sync", "Pair a phone or PC and check sync", NuvoriIcons.Devices, tint(0), devices),
@@ -201,8 +203,7 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
         if (granted) scanner = true else error = "Camera permission is needed to scan. You can import a QR image or enter the key."
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        viewModel.externalFlowActive = false
-        if (uri != null) scope.launch {
+        if (viewModel.pickerReturned(com.privatevault.app.PickerAction.PHOTO, uri) && uri != null) scope.launch {
             runCatching { readQrImage(context, uri) }
                 .onSuccess { acceptQr(it) }.onFailure { error = "Could not read that QR image. Try scanning it or entering the setup key." }
         }

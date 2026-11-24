@@ -19,6 +19,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -55,6 +56,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -163,16 +165,60 @@ internal val EntryType.itemLabel: String get() = when (this) {
     EntryType.NOTE -> "Note"
 }
 
-/** Letter avatar: a tinted rounded square with the item's initial, or an icon. Decorative. */
+/**
+ * Letter avatar: a tinted rounded square with the item's initial, or an icon. Decorative.
+ * When "Website icons" is on and [site] (a login URL or passkey rpId) has an icon, the icon replaces the letter:
+ * first one captured on Windows and shared through sync, then a built-in brand icon. This app downloads nothing.
+ */
 @Composable
 internal fun NuvoriAvatar(title: String, modifier: Modifier = Modifier, size: Dp = 36.dp,
-    icon: ImageVector? = null, tintOverride: Tint? = null) {
+    icon: ImageVector? = null, tintOverride: Tint? = null, site: String? = null) {
+    val synced = rememberSyncedSiteIcon(site)
+    if (synced != null) {
+        SyncedSiteIconTile(synced, modifier, size)
+        return
+    }
+    val siteIcon = rememberSiteIcon(site)
+    if (siteIcon != null) {
+        SiteIconTile(siteIcon, modifier, size)
+        return
+    }
     val colors = tintOverride ?: tint(avatarTintIndex(title))
     Box(modifier.size(size).clip(RoundedCornerShape(size / 4)).background(colors.container)
         .clearAndSetSemantics { }, contentAlignment = Alignment.Center) {
         if (icon != null) Icon(icon, contentDescription = null, tint = colors.content, modifier = Modifier.size(size / 2))
         else Text(monogram(title), color = colors.content, fontWeight = FontWeight.SemiBold,
             fontSize = (size.value * .42f).sp, maxLines = 1)
+    }
+}
+
+/** Brand-colored tile with the glyph at about 56% of the tile. Same shape and size as the letter avatar. */
+@Composable
+private fun SiteIconTile(icon: SiteIcon, modifier: Modifier, size: Dp) {
+    val shape = RoundedCornerShape(size / 4)
+    val glyph = remember(icon) { SiteIcons.path(icon.pathData) }
+    val fill = icon.glyphColor()
+    var box = modifier.size(size).clip(shape).background(icon.tileColor())
+    if (SiteIconLogic.needsBorder(icon.rgb)) box = box.border(1.dp, MaterialTheme.colorScheme.hairline, shape)
+    Box(box.clearAndSetSemantics { }, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(size * .56f)) {
+            val k = this.size.minDimension / 24f
+            withTransform({ scale(k, k, pivot = Offset.Zero) }) { drawPath(glyph, fill) }
+        }
+    }
+}
+
+/**
+ * A website's own icon on a white tile, in light and dark mode alike: favicons are drawn for a light page, and a
+ * black logo would vanish on a dark tile. Same shape and size as the letter avatar.
+ */
+@Composable
+private fun SyncedSiteIconTile(icon: androidx.compose.ui.graphics.ImageBitmap, modifier: Modifier, size: Dp) {
+    val shape = RoundedCornerShape(size / 4)
+    Box(modifier.size(size).clip(shape).background(Color.White).border(1.dp, MaterialTheme.colorScheme.hairline, shape)
+        .clearAndSetSemantics { }, contentAlignment = Alignment.Center) {
+        androidx.compose.foundation.Image(icon, contentDescription = null, modifier = Modifier.size(size * .62f),
+            filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
     }
 }
 

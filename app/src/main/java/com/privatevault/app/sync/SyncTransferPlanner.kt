@@ -25,10 +25,10 @@ class SyncTransferPlanner(private val database: VaultDatabase) {
             val peerSequence = peerFrontier.counters[head.deviceId] ?: 0L
             if (peerSequence >= head.sequence) continue
             val batch = dao.operationsAfter(vaultId, head.deviceId, peerSequence, limit - pending.size)
-            check(batch.isNotEmpty() && batch.first().sequence == peerSequence + 1L) {
-                "Sync history is incomplete"
-            }
-            pending.addAll(batch)
+            // Below a checkpoint or a compacted floor this device holds gaps on purpose. The peer
+            // gets that author's older changes from the author, the managing device or the drive.
+            val run = batch.withIndex().takeWhile { (index, operation) -> operation.sequence == peerSequence + 1L + index }
+            pending.addAll(run.map { it.value })
             if (pending.size == limit) break
         }
         return pending

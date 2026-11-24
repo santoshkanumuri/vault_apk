@@ -60,5 +60,17 @@ internal fun NuvoriTheme(dark: Boolean, content: @Composable () -> Unit) {
     val scheme = androidx.compose.runtime.remember(stored.appearance, dark) {
         nuvoriColorScheme(stored.appearance.accent, stored.appearance.surface, dark)
     }
+    // The XML theme starts with light icons on black; in light mode they would vanish on the light background.
+    val view = androidx.compose.ui.platform.LocalView.current
+    if (!view.isInEditMode) androidx.compose.runtime.SideEffect {
+        var host = view.context
+        while (host is android.content.ContextWrapper && host !is android.app.Activity) host = host.baseContext
+        (host as? android.app.Activity)?.window?.let { window ->
+            androidx.core.view.WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !dark
+                isAppearanceLightNavigationBars = !dark
+            }
+        }
+    }
     MaterialTheme(colorScheme = scheme, content = content)
 }

@@ -1,5 +1,6 @@
 package com.privatevault.app.backup
 
+import com.privatevault.app.security.KdfParams
 import com.privatevault.app.sync.CloudError
 import com.privatevault.app.sync.CloudException
 import com.privatevault.app.sync.CloudFile
@@ -26,6 +27,8 @@ class DriveBackupTest {
     @get:Rule val folder = TemporaryFolder()
 
     private val password = "correct horse battery".toCharArray()
+    /** More passes than 2.3.1 used, as a timed phone would choose; small, so the tests stay fast. */
+    private val kdf = KdfParams.LEGACY.copy(iterations = 4)
     private val phone = "0123456789abcdef"
     private val otherPhone = "fedcba9876543210"
 
@@ -37,7 +40,7 @@ class DriveBackupTest {
         BackupCipher.decrypt(ByteArrayInputStream(bytes), password).use { it.readBytes().toString(Charsets.UTF_8) }
 
     @Test fun oneKeyMakesManyBackupsThatEachOpenWithThePassword() {
-        BackupCipher.create(password).use { key ->
+        BackupCipher.create(password, kdf).use { key ->
             val first = body("vault on Monday", key)
             val second = body("vault on Tuesday", key)
             // Same header (no password needed for later backups), different encrypted bodies.
@@ -49,7 +52,7 @@ class DriveBackupTest {
     }
 
     @Test fun aWrongPasswordOrAChangedFileDoesNotOpen() {
-        val bytes = BackupCipher.create(password).use { body("secret", it) }
+        val bytes = BackupCipher.create(password, kdf).use { body("secret", it) }
         try { open(bytes, "wrong password!!".toCharArray()); fail("opened with a wrong password") }
         catch (_: AEADBadTagException) { }
         val changed = bytes.copyOf().also { it[it.size - 3] = (it[it.size - 3].toInt() xor 1).toByte() }
@@ -79,8 +82,65 @@ class DriveBackupTest {
         assertEquals("made by 2.2.4", open(output.toByteArray(), password))
     }
 
+    @Test fun newFilesRecordTheirArgon2idSettingsInTheHeader() {
+        BackupCipher.create(password, kdf).use { key ->
+            val bytes = body("timed", key)
+            assertEquals("PVLT0002", String(bytes.copyOf(8), Charsets.US_ASCII))
+            val settings = java.nio.ByteBuffer.wrap(bytes, 8, 12)
+            assertEquals(listOf(65_536, 4, 1), listOf(settings.int, settings.int, settings.int))
+            assertEquals(kdf, BackupCipher.settings(key))
+            assertEquals("timed", open(bytes, password))
+
+            // The settings are associated data: an edit cannot pass as a wrong password.
+            val fewer = bytes.copyOf().also { it[8 + 7] = 3 }
+            try { open(fewer, password); fail("opened with edited settings") } catch (_: AEADBadTagException) { }
+            // Settings outside the limits are refused before Argon2id runs.
+            val huge = bytes.copyOf().also { it[8 + 1] = 0x7f }
+            try { open(huge, password); fail("opened with 2 GiB of memory") } catch (_: IllegalArgumentException) { }
+        }
+    }
+
+    @Test fun anOlderDriveKeyMovesToTheTimedSettingsAndItsFilesKeepOpening() {
+        val file = DriveBackupKeyFile(folder.newFile("old-key.bin").also { it.delete() })
+        val vaultKey = ByteArray(32) { 9 }
+        val old = BackupCipher.create(password, KdfParams.LEGACY)
+        val oldFile = body("before the upgrade", old)
+        file.save(old, vaultKey)
+        old.close()
+
+        val loaded = requireNotNull(file.load(vaultKey))
+        assertEquals(KdfParams.LEGACY, BackupCipher.settings(loaded))
+        assertFalse("a wrong password does not open it", BackupCipher.opens(loaded, "wrong password!!".toCharArray()))
+        assertTrue(BackupCipher.opens(loaded, password))
+        val stronger = BackupCipher.rewrap(loaded, password, kdf)
+        loaded.close()
+        file.save(stronger, vaultKey)
+        val newFile = body("after the upgrade", stronger)
+        stronger.close()
+
+        requireNotNull(file.load(vaultKey)).use { assertEquals(kdf, BackupCipher.settings(it)) }
+        assertEquals("before the upgrade", open(oldFile, password))
+        assertEquals("after the upgrade", open(newFile, password))
+    }
+
+    @Test fun aKeyFileWithAFormat1HeaderStillLoads() {
+        // The Drive backup key file of 2.3.1: its header starts with PVLT0001.
+        val file = DriveBackupKeyFile(folder.newFile("v1-key.bin").also { it.delete() })
+        val vaultKey = ByteArray(32) { 4 }
+        BackupCipher.create(password, KdfParams.LEGACY).use { key ->
+            val header = key.header
+            val v1 = "PVLT0001".toByteArray(Charsets.US_ASCII) + header.copyOfRange(20, header.size)
+            assertEquals("PVLT0002", String(header.copyOf(8), Charsets.US_ASCII))
+            // Rebuild the same keyset as a format 1 header, as the old code wrote it.
+            val rebuilt = BackupCipher.decode(java.nio.ByteBuffer.allocate(4 + v1.size + key.keyset().size)
+                .putInt(v1.size).put(v1).put(key.keyset()).array())
+            file.save(rebuilt, vaultKey)
+        }
+        requireNotNull(file.load(vaultKey)).use { assertEquals(KdfParams.LEGACY, BackupCipher.settings(it)) }
+    }
+
     @Test fun aShortPasswordIsRefused() {
-        try { BackupCipher.create("short".toCharArray()); fail("short password accepted") }
+        try { BackupCipher.create("short".toCharArray(), kdf); fail("short password accepted") }
         catch (_: IllegalArgumentException) { }
     }
 
@@ -88,7 +148,7 @@ class DriveBackupTest {
         val file = DriveBackupKeyFile(folder.newFile("key.bin").also { it.delete() })
         val vaultKey = ByteArray(32) { it.toByte() }
         assertNull(file.load(vaultKey))
-        val bytes = BackupCipher.create(password).use { key ->
+        val bytes = BackupCipher.create(password, kdf).use { key ->
             file.save(key, vaultKey)
             body("saved key", key)
         }

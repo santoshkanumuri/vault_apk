@@ -39,26 +39,14 @@ internal class LocalDeviceNameChangeWriter(private val database: VaultDatabase,
                 this[identity.deviceId] = (this[identity.deviceId] ?: 0L) + 1L
             })
             val mutationId = UUID.randomUUID().toString()
-            val nonce = ByteArray(12).also(SecureRandom()::nextBytes)
             val payload = JSONObject().put("name", name).toString().toByteArray(Charsets.UTF_8)
-            val contentKey = database.syncContentKey(vaultKey)
-            val payloadKey = Mac.getInstance("HmacSHA256").run {
-                init(SecretKeySpec(contentKey, "HmacSHA256"))
-                doFinal("nuvori-sync-payload-key-v1".toByteArray())
-            }
-            val ciphertext = try {
-                Cipher.getInstance("AES/GCM/NoPadding").run {
-                    init(Cipher.ENCRYPT_MODE, SecretKeySpec(payloadKey, "AES"), GCMParameterSpec(128, nonce))
-                    updateAAD("nuvori-sync-device_name-v1:$vaultId:$mutationId:${identity.deviceId}"
-                        .toByteArray(Charsets.UTF_8))
-                    doFinal(payload)
-                }
-            } finally { payload.fill(0); contentKey.fill(0); payloadKey.fill(0) }
+            val sealed = try {
+                SyncPayloadCrypto.sealFor(database, vaultKey, "device_name", vaultId, mutationId, identity.deviceId, payload)
+            } finally { payload.fill(0) }
             val change = SyncChangeRecord.createSigned(vaultId, identity.deviceId, sequence,
                 head?.hash ?: GENESIS_HASH, mutationId, "device_name", identity.deviceId,
                 ChangeKind.UPSERT, state?.revision ?: 0L, version, Instant.now().toString(),
-                Base64.getUrlEncoder().withoutPadding().encodeToString(ciphertext),
-                Base64.getUrlEncoder().withoutPadding().encodeToString(nonce), identityStore::sign)
+                sealed.ciphertext, sealed.nonce, identityStore::sign)
             dao.upsertMembership(member.copy(displayName = name))
             dao.insertOperation(SyncOperationEntity(change.mutationId, change.formatVersion,
                 change.vaultId, change.deviceId, change.sequence, change.previousHash,

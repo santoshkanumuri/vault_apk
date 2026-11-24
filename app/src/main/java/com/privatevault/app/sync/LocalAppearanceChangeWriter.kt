@@ -50,17 +50,15 @@ internal class LocalAppearanceChangeWriter(private val database: VaultDatabase,
                 this[identity.deviceId] = (this[identity.deviceId] ?: 0L) + 1L
             })
             val mutationId = UUID.randomUUID().toString()
-            val nonce = ByteArray(12).also(SecureRandom()::nextBytes)
             val payload = AppearanceSyncRules.encodePayload(stored.appearance)
-            val contentKey = database.syncContentKey(vaultKey)
-            val ciphertext = try {
-                AppearanceSyncRules.encrypt(contentKey, AppearanceSyncRules.aad(vaultId, mutationId), nonce, payload)
-            } finally { payload.fill(0); contentKey.fill(0) }
-            val encoder = Base64.getUrlEncoder().withoutPadding()
+            val sealed = try {
+                SyncPayloadCrypto.sealFor(database, vaultKey, AppearanceSyncRules.ENTITY_TYPE, vaultId, mutationId,
+                    AppearanceSyncRules.ENTITY_ID, payload)
+            } finally { payload.fill(0) }
             val change = SyncChangeRecord.createSigned(vaultId, identity.deviceId, sequence,
                 head?.hash ?: GENESIS_HASH, mutationId, AppearanceSyncRules.ENTITY_TYPE, AppearanceSyncRules.ENTITY_ID,
                 ChangeKind.UPSERT, state?.revision ?: 0L, version, occurredAt,
-                encoder.encodeToString(ciphertext), encoder.encodeToString(nonce), identityStore::sign)
+                sealed.ciphertext, sealed.nonce, identityStore::sign)
             dao.insertOperation(SyncOperationEntity(change.mutationId, change.formatVersion,
                 change.vaultId, change.deviceId, change.sequence, change.previousHash,
                 change.entityType, change.entityId, change.kind.name.lowercase(), change.baseRevision,

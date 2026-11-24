@@ -112,7 +112,7 @@ internal fun MiniCardSwatch(color: Long, modifier: Modifier = Modifier, width: D
 @Composable
 internal fun EntryLeading(entry: VaultEntry, size: Dp = 36.dp) {
     if (entry.type == EntryType.CARD) Box(Modifier.size(size), contentAlignment = Alignment.Center) { MiniCardSwatch(entry.color, width = size) }
-    else NuvoriAvatar(entry.title, size = size)
+    else NuvoriAvatar(entry.title, size = size, site = if (entry.type == EntryType.PASSWORD) entry.tertiaryValue else null)
 }
 
 @Composable

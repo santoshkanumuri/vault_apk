@@ -11,7 +11,7 @@ internal data class ChainLink(val deviceId: String, val sequence: Long, val hash
  * backward while queued operations are being applied, which peers reject.
  */
 internal object IncomingChain {
-    enum class Admission { STORE, ALREADY_STORED }
+    enum class Admission { STORE, ALREADY_STORED, OLD_RESEND }
 
     fun received(applied: Map<String, SyncChainHead>, relayed: Collection<ChainLink>,
         queued: Collection<ChainLink>): Map<String, SyncChainHead> {
@@ -42,10 +42,17 @@ internal object IncomingChain {
     /**
      * Admits [link] only when it extends the durable chain. A resend of an operation this device
      * already holds is acknowledged without storing it again; anything else is a gap or a fork.
+     *
+     * A change below the received head is an old resend ([Admission.OLD_RESEND]). This device may
+     * no longer hold it: it was relayed and dropped, or it lies below a checkpoint or a compacted
+     * floor. It is acknowledged and never stored; it could not apply anyway, because the applier
+     * accepts only head + 1. Another change at the head itself is a fork and is refused.
      */
     fun admit(link: ChainLink, received: Map<String, SyncChainHead>, knownHashes: Set<String>): Admission {
         if (link.hash in knownHashes) return Admission.ALREADY_STORED
         val head = received[link.deviceId] ?: SyncChainHead(0, GENESIS_HASH)
+        if (link.sequence == head.sequence && link.hash == head.hash) return Admission.ALREADY_STORED
+        if (link.sequence in 1 until head.sequence) return Admission.OLD_RESEND
         require(link.sequence == head.sequence + 1 && link.previousHash == head.hash) { "Incomplete change chain" }
         return Admission.STORE
     }

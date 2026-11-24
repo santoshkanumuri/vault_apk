@@ -13,7 +13,8 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-internal data class PhotoBlobRef(val hash: String, val size: Long)
+/** [keyEpoch]: the epoch whose content key sealed the blob ([EpochKeys]); 1 for every photo before epoch-keys-v1. */
+internal data class PhotoBlobRef(val hash: String, val size: Long, val keyEpoch: Long = 1L)
 internal class MissingPhotoBlobException(val hash: String, val photoId: String = "", val entryId: String = "") :
     Exception("Photo data is still transferring")
 internal class PhotoStorageFullException : Exception("Free space is too low to receive this photo")

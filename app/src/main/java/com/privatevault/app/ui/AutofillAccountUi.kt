@@ -40,16 +40,38 @@ internal fun accountAvatarColor(seed: String): Color =
  * account looks the same in autofill, the codes picker, the main app and on Windows.
  */
 @Composable
-internal fun AccountLetterAvatar(title: String, modifier: Modifier = Modifier, size: Dp = 40.dp) =
-    NuvoriAvatar(title, modifier, size)
+internal fun AccountLetterAvatar(title: String, modifier: Modifier = Modifier, size: Dp = 40.dp, site: String? = null) =
+    NuvoriAvatar(title, modifier, size, site = site)
 
 /** The saved login's website without the scheme, or null when it is not a usable HTTPS address. */
 internal fun accountSiteLabel(entry: VaultEntry): String? =
     (httpsOrigin(entry.tertiaryValue) ?: httpsOrigin("https://${entry.tertiaryValue.trim()}"))?.removePrefix("https://")
 
+/** Spoken after an item's name when it carries the [MostUsedBadge]. */
+internal const val MOST_USED_SPOKEN = "most used"
+
+/**
+ * "Most used": the one item for a site that this device used most. Small and quiet, so it never competes with the
+ * account name. [decorative]: a row whose own description already says [MOST_USED_SPOKEN] hides the badge text
+ * from accessibility services; elsewhere the text is read.
+ */
+@Composable
+internal fun MostUsedBadge(modifier: Modifier = Modifier, decorative: Boolean = true) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(if (decorative) modifier.clearAndSetSemantics { } else modifier, color = scheme.secondaryContainer, contentColor = scheme.onSecondaryContainer,
+        shape = NuvoriShapes.Chip) {
+        Row(Modifier.padding(horizontal = 6.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Icon(NuvoriIcons.Activity, contentDescription = null, modifier = Modifier.size(12.dp))
+            Text("Most used", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+    }
+}
+
 /**
  * One saved login in the account picker. The password is never shown, spoken or measured.
  * [moreAction] adds an overflow menu with one more choice, such as "Fill and link…".
+ * [mostUsed] adds the [MostUsedBadge].
  */
 @Composable
 internal fun AutofillAccountRow(
@@ -58,6 +80,7 @@ internal fun AutofillAccountRow(
     codeLinked: Boolean = false,
     moreAction: String? = null,
     onMore: () -> Unit = {},
+    mostUsed: Boolean = false,
     onClick: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -67,14 +90,16 @@ internal fun AutofillAccountRow(
     val description = buildString {
         append(action).append(": ").append(account)
         if (showTitle) append(", ").append(entry.title)
+        if (mostUsed) append(", ").append(MOST_USED_SPOKEN)
         if (codeLinked) append(", authenticator code linked")
     }
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth().semantics { role = Role.Button; contentDescription = description }) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            AccountLetterAvatar(entry.title)
+            AccountLetterAvatar(entry.title, site = entry.tertiaryValue)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(account, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (mostUsed) MostUsedBadge()
                 if (showTitle) Text(entry.title, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (site != null) Text(site, style = MaterialTheme.typography.labelSmall,

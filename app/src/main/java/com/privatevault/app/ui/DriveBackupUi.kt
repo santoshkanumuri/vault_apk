@@ -59,7 +59,8 @@ private fun rememberDriveSignIn(viewModel: VaultViewModel, onSignedIn: suspend (
     val googleScreen = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         viewModel.externalFlowActive = false
         // Google also closes its screen with RESULT_CANCELED when sign-in fails, with the reason in the answer.
-        scope.launch {
+        if (!viewModel.externalScreenReturned()) waiting = false
+        else scope.launch {
             try { viewModel.signInForDriveBackup(result.data, fromGoogle = true) { latest() } } finally { waiting = false }
         }
     }

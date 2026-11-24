@@ -211,12 +211,14 @@ class MembershipNoticesTest {
         assertTrue(second != TransportEpochs.secret(V.rootSecret, "other-vault", 2))
     }
 
-    @Test fun onlyTheLastFourEpochsWithinNinetyDaysAreRetained() {
+    @Test fun theLastFourEpochsAreRetainedAndOnlyTheServiceRuleUsesNinetyDays() {
         val day = 24L * 60 * 60 * 1000
         val retired = mapOf(1L to 0L, 2L to 0L, 3L to 100 * day, 4L to 100 * day, 5L to 100 * day)
-        assertEquals(listOf(5L, 4L, 3L), TransportEpochs.retained(6, retired, 150 * day))
-        assertEquals(emptyList<Long>(), TransportEpochs.retained(1, emptyMap(), 0))
-        assertEquals(listOf(1L), TransportEpochs.retained(2, emptyMap(), 0))
+        assertEquals(listOf(5L, 4L, 3L, 2L), TransportEpochs.retained(6))
+        assertEquals(emptyList<Long>(), TransportEpochs.retained(1))
+        assertEquals(listOf(1L), TransportEpochs.retained(2))
+        assertEquals(listOf(5L, 4L, 3L), TransportEpochs.keepServiceFor(6, retired, 150 * day))
+        assertEquals(listOf(1L), TransportEpochs.keepServiceFor(2, emptyMap(), 0))
     }
 
     @Test fun removalNoticesAreRateLimited() {

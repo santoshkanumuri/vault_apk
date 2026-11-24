@@ -120,7 +120,7 @@ internal class GoogleDrive(private val access: DriveAccess) : CloudDrive {
     }
 
     /** Deletes a file in the app folder (Drive backups only; sync never deletes). A file already gone counts as deleted. */
-    fun delete(id: String) {
+    override fun delete(id: String) {
         try { send { bearer -> call("DELETE", "$FILES_URL/${percent(id)}", bearer).disconnect() } }
         catch (failure: CloudException) { if (failure.error != CloudError.NOT_FOUND) throw failure }
     }

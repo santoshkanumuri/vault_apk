@@ -76,6 +76,8 @@ import com.privatevault.app.security.LoginMatchTier
 import com.privatevault.app.security.PickerFillGrant
 import com.privatevault.app.security.pickerFillAllowed
 import com.privatevault.app.security.rankLoginSearch
+import com.privatevault.app.security.sortedByUse
+import com.privatevault.app.data.logPasskeyEvents
 import com.privatevault.app.security.registrableDomain
 import com.privatevault.app.security.sameSiteSavedOrigin
 import com.privatevault.app.autofill.AutofillPreferences
@@ -126,11 +128,16 @@ import kotlin.coroutines.resumeWithException
  */
 private class PickerDestination(val name: String, val detail: String?, val packageName: String?, val claim: String? = null)
 
+/** The picker's hold on the synced website icons in memory. */
+private const val SITE_ICON_CACHE_OWNER = "picker"
+
 /** A separate authenticated session. Never borrows the main activity's unlocked state. */
 class VaultCodesActivity : FragmentActivity() {
     private val gate by lazy { BiometricGate(this) }
     private val keyManager by lazy { VaultKeyManager(this) }
     private var entries by mutableStateOf<List<VaultEntry>>(emptyList())
+    /** "Last time: GitHub · octocat" for this login's site (SignInReminders). Null when none or the notice is off. */
+    private var signInReminder by mutableStateOf<com.privatevault.app.data.SignInMethod?>(null)
     private var unlocked by mutableStateOf(false)
     private var pickerVisible by mutableStateOf(true)
     private var busy by mutableStateOf(false)
@@ -159,6 +166,8 @@ class VaultCodesActivity : FragmentActivity() {
     private var passkeys by mutableStateOf<List<com.privatevault.app.data.VaultPasskey>>(emptyList())
     /** "passkey_mark": logins with a passkey for the same account, for the keyboard suggestions. */
     private var passkeyLogins: Set<String> = emptySet()
+    /** This device's usage record, read at unlock: orders lists and picks each site's "Most used" item. */
+    private var usage by mutableStateOf(com.privatevault.app.security.UsageSnapshot.EMPTY)
     private var selectedUpdate by mutableStateOf<VaultEntry?>(null)
     private var pendingLoginLink by mutableStateOf<VaultEntry?>(null)
     private var generating by mutableStateOf(false)
@@ -290,13 +299,18 @@ class VaultCodesActivity : FragmentActivity() {
                 }
                 var loadedPasskeys = emptyList<com.privatevault.app.data.VaultPasskey>()
                 var loadedPasskeyLogins = emptySet<String>()
+                var loadedUsage = com.privatevault.app.security.UsageSnapshot.EMPTY
+                var loadedIcons = emptyList<com.privatevault.app.data.SyncedSiteIcon>()
+                var loadedReminder: com.privatevault.app.data.SignInMethod? = null
                 var masterInterval = 86_400_000L
                 val website = loginFill?.origin
                 val loaded = withContext(Dispatchers.IO) {
                     // Read the bundled Public Suffix List off the main thread before the picker groups same-site logins.
                     website?.let(::registrableDomain)
+                    loadedUsage = com.privatevault.app.security.ItemUsageStore.snapshot(applicationContext)
                     val database = VaultDatabase.open(applicationContext, requireNotNull(key))
                     try {
+                        loadedIcons = runCatching { database.syncedSiteIcons().all() }.getOrDefault(emptyList())
                         val settings = database.dao().settings()
                         masterInterval = settings?.masterPasswordIntervalMs ?: 86_400_000L
                         inactivityTimeoutMs = settings?.inactivityTimeoutMs ?: 60_000L
@@ -311,6 +325,14 @@ class VaultCodesActivity : FragmentActivity() {
                             // "passkey_mark": reads only RP IDs and usernames, never passkey keys.
                             if (loginFill != null) loadedPasskeyLogins = com.privatevault.app.security.loginsWithPasskeys(
                                 logins, database.dao().passkeySummaries())
+                            // A sign-in reminder reads only site, provider and account rows, never a secret.
+                            val fill = loginFill
+                            if (fill != null && com.privatevault.app.autofill.AutofillPreferences.signInReminders(applicationContext)) {
+                                val sites = com.privatevault.app.autofill.SignInReminders.sites(fill, logins)
+                                if (sites.isNotEmpty()) loadedReminder = runCatching {
+                                    com.privatevault.app.autofill.SignInReminders.pick(database.signInMethods().forSites(sites.toList()), sites)
+                                }.getOrNull()
+                            }
                         }
                     } finally { database.close() }
                 }
@@ -326,6 +348,9 @@ class VaultCodesActivity : FragmentActivity() {
                     unlockedAt = android.os.SystemClock.elapsedRealtime()
                     passkeys = loadedPasskeys
                     passkeyLogins = loadedPasskeyLogins
+                    usage = loadedUsage
+                    signInReminder = loadedReminder
+                    com.privatevault.app.sync.SyncedSiteIconCache.open(SITE_ICON_CACHE_OWNER, loadedIcons)
                     entries = loaded; unlocked = true; onUserInteraction()
                     if (intent.getBooleanExtra("keyboard_suggestions", false)) returnKeyboardSuggestions()
                 }
@@ -359,7 +384,7 @@ class VaultCodesActivity : FragmentActivity() {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra<android.view.inputmethod.InlineSuggestionsRequest>(AutofillManager.EXTRA_INLINE_SUGGESTIONS_REQUEST)
             } else null
-            passwordSuggestions(this, request, entries, inlineRequest, passkeyLogins)
+            passwordSuggestions(this, request, entries, inlineRequest, passkeyLogins, usage, signInReminder)
         }.getOrElse { message = "Could not show keyboard suggestions. Choose a login here."; return }
         setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, response))
         dismissPicker()
@@ -418,6 +443,7 @@ class VaultCodesActivity : FragmentActivity() {
         val value = values[field]?.let { runCatching { it.resolve() }.getOrNull() }
             ?: run { message = "Could not copy this field. Check it in Nuvori."; return }
         copySensitive(field.clipLabel, value)
+        com.privatevault.app.security.ItemUsageStore.record(applicationContext, entry.id)
         val more = QuickCopySession.start(applicationContext, entry.title, values, field)
         toast(if (more) "${field.done}. The other fields are in your notifications." else field.done, long = more)
         dismissPicker()
@@ -453,6 +479,7 @@ class VaultCodesActivity : FragmentActivity() {
         pickerVisible = false
         unlocked = false
         entries = emptyList()
+        signInReminder = null
         suggestedApp = null
         loginFill = null
         profileFill = null
@@ -467,6 +494,8 @@ class VaultCodesActivity : FragmentActivity() {
         generationEntry = null
         generationUsername = ""
         passkeys = emptyList()
+        usage = com.privatevault.app.security.UsageSnapshot.EMPTY
+        com.privatevault.app.sync.SyncedSiteIconCache.close(SITE_ICON_CACHE_OWNER)
         passkeyOperation = null
         passwordCredentialOperation = null
         saving?.cancel()
@@ -483,6 +512,15 @@ class VaultCodesActivity : FragmentActivity() {
         val px = (32 * resources.displayMetrics.density).toInt().coerceAtLeast(1)
         packageManager.getApplicationIcon(packageName).toBitmap(px, px).asImageBitmap()
     }.getOrNull()
+
+    /** The app's icon as a 96 px PNG for the passkeys page, or null when it can't be read or is too large. */
+    private fun appIconPng(packageName: String): ByteArray? = runCatching {
+        val bitmap = packageManager.getApplicationIcon(packageName).toBitmap(96, 96)
+        java.io.ByteArrayOutputStream().use { out ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            out.toByteArray()
+        }
+    }.getOrNull()?.takeIf { it.size <= com.privatevault.app.data.PasskeyOrigins.MAX_ICON_BYTES }
 
     private fun saveDestination(request: LoginSaveRequest): String = request.origin ?: appLabel(request.packageName) ?: request.packageName
 
@@ -629,13 +667,23 @@ class VaultCodesActivity : FragmentActivity() {
                         if (operation.create) {
                             check(db.dao().allPasskeys().none { com.privatevault.app.passkeys.PasskeyCrypto.excluded(it, operation.input) })
                             val (created, response) = com.privatevault.app.passkeys.PasskeyCrypto.create(operation.input, operation.origin, operation.clientHash)
+                            val caller = operation.callerPackage
+                            val origin = com.privatevault.app.data.PasskeyOrigin(created.id, caller,
+                                appLabel(caller) ?: caller, appIconPng(caller))
                             com.privatevault.app.sync.LocalPasskeyChangeWriter(db,
-                                com.privatevault.app.sync.AndroidDeviceIdentityStore(applicationContext)).save(created, key)
+                                com.privatevault.app.sync.AndroidDeviceIdentityStore(applicationContext)).save(created, key, origin)
                             com.privatevault.app.sync.LanSyncService.publishCredentialChanges(applicationContext, db)
                             Intent().also { androidx.credentials.provider.PendingIntentHandler.setCreateCredentialResponse(it, androidx.credentials.CreatePublicKeyCredentialResponse(response)) }
                         } else {
                             val current = db.dao().allPasskeys().single { it.id == requireNotNull(selected).id }
                             val response = com.privatevault.app.passkeys.PasskeyCrypto.sign(current, operation.input, operation.origin, operation.clientHash)
+                            // A ledger line only: a failure here never blocks the sign-in.
+                            runCatching {
+                                val caller = operation.callerPackage
+                                db.logPasskeyEvents(listOf(current), com.privatevault.app.data.PasskeyEventKind.USED,
+                                    appPackage = caller, appLabel = appLabel(caller) ?: caller,
+                                    detail = operation.origin.takeIf { it.startsWith("https://") }.orEmpty())
+                            }
                             Intent().also { androidx.credentials.provider.PendingIntentHandler.setGetCredentialResponse(it, androidx.credentials.GetCredentialResponse(androidx.credentials.PublicKeyCredential(response))) }
                         }
                     } finally { db.close() }
@@ -643,6 +691,7 @@ class VaultCodesActivity : FragmentActivity() {
                 if (pickerVisible && unlocked) {
                     setResult(RESULT_OK, result)
                     if (operation.create) toast("Passkey saved to Nuvori")
+                    else selected?.let { com.privatevault.app.security.ItemUsageStore.record(applicationContext, it.id) }
                 }
                 dismissPicker()
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -667,7 +716,8 @@ class VaultCodesActivity : FragmentActivity() {
         if (username.isBlank() || username.length > 1024) return
         val entry = generationEntry
         val key = saveKey?.copyOf() ?: return
-        val generated = com.privatevault.app.security.generateLoginPassword()
+        // The settings last chosen in the password generator on this device.
+        val generated = com.privatevault.app.security.PasswordGenerator.generateWithSavedSettings(applicationContext)
         busy = true
         message = null
         saving = lifecycleScope.launch {
@@ -740,6 +790,7 @@ class VaultCodesActivity : FragmentActivity() {
                 }
             }.getOrElse { message = "Could not return this login to the app."; return }
             setResult(RESULT_OK, result)
+            com.privatevault.app.security.ItemUsageStore.record(applicationContext, selected.id)
             rememberForCodeStep(selected, request)
             dismissPicker()
             return
@@ -779,6 +830,9 @@ class VaultCodesActivity : FragmentActivity() {
                 }
             })
             .putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT_EPHEMERAL_DATASET, true))
+        // A login fill counts as a use of that login. A code fill and a generated password do not.
+        if (entry != null && request.otp == null && generated == null)
+            com.privatevault.app.security.ItemUsageStore.record(applicationContext, entry.id)
         if (request.otp != null) {
             // Single use: this sign-in's code step is done.
             entry?.let { RecentLoginFills.consume(it.id) }
@@ -925,6 +979,7 @@ class VaultCodesActivity : FragmentActivity() {
     }
 
     override fun onDestroy() {
+        com.privatevault.app.sync.SyncedSiteIconCache.close(SITE_ICON_CACHE_OWNER)
         authentication?.cancel()
         entries = emptyList()
         saving?.cancel()
@@ -973,7 +1028,7 @@ class VaultCodesActivity : FragmentActivity() {
                         FillContent()
                     } else if (unlocked) {
                         val notificationsOn = remember { QuickCopySession.canNotify(applicationContext) }
-                        VaultQuickAccessContent(entries, suggestedApp, notificationsOn, ::copy)
+                        VaultQuickAccessContent(entries, suggestedApp, notificationsOn, usage, ::copy)
                     } else {
                         UnlockContent(password, { password = it }, submit) { password = ""; authenticate(null) }
                     }
@@ -1190,8 +1245,10 @@ class VaultCodesActivity : FragmentActivity() {
                 codeAfterLoginMatches(it, request.packageName, request.identity, request.origin, request.embeddedWebView, now)
             }?.let { remembered -> eligible.firstOrNull { it.id == remembered.entryId } }
         }
+        // Favorites first, then the logins this device fills most.
         val matches = eligible.filter { entry -> authorized(entry) &&
             (!otp || search.isBlank() || listOf(entry.title, entry.primaryValue).any { it.contains(search, true) }) }
+            .sortedWith(compareByDescending<VaultEntry> { it.favorite }.thenByDescending { usage.score(it.id) })
         val noMatches = matches.isEmpty()
         val suggested = matches.filter { it.id != justSignedIn?.id }
         // Entry id to the saved origin on the same site. Verified browsers only; filled once, by an explicit tap here.
@@ -1205,20 +1262,22 @@ class VaultCodesActivity : FragmentActivity() {
             entry.id in sameSite -> LoginMatchTier.SAME_SITE
             else -> LoginMatchTier.OTHER
         }
-        val sameSiteLogins = remember(entries) { rankLoginSearch(eligible.filter { it.id in sameSite }, "") { LoginMatchTier.SAME_SITE } }
+        val sameSiteLogins = remember(entries, usage) { rankLoginSearch(eligible.filter { it.id in sameSite }, "", usage) { LoginMatchTier.SAME_SITE } }
+        // One "Most used" badge for this app or site: among its linked logins, or else its same-site ones.
+        val mostUsedId = usage.mostUsed(suggested.map { it.id }) ?: usage.mostUsed(sameSiteLogins.map { it.id })
         // Heuristic hints only: every one still goes through the confirmation dialog.
-        val possible = remember(entries, noMatches) {
+        val possible = remember(entries, noMatches, usage) {
             // An embedded WebView's claimed site ranks logins saved for that site first. Ordering only: still confirmed.
             if (searchable && noMatches) possibleLoginMatches(eligible, request.packageName, appLabel(request.packageName), request.origin,
-                embeddedSite = request.embeddedSite.takeIf { claimedHost(request) != null }) {
+                embeddedSite = request.embeddedSite.takeIf { claimedHost(request) != null }, usage = usage) {
                 authorized(it) || it.id in sameSite
             } else emptyList()
         }
         val searching = searchable && search.isNotBlank()
-        val results = if (searching) rankLoginSearch(eligible, search, ::tier) else emptyList()
+        val results = if (searching) rankLoginSearch(eligible, search, usage, ::tier) else emptyList()
         // Nothing is linked yet: list the rest too, so any login is one scroll away before typing.
-        val others = remember(entries, noMatches, possible) {
-            if (searchable && noMatches) rankLoginSearch(eligible.filter { entry -> entry.id !in sameSite && possible.none { it.id == entry.id } }, "", ::tier)
+        val others = remember(entries, noMatches, possible, usage) {
+            if (searchable && noMatches) rankLoginSearch(eligible.filter { entry -> entry.id !in sameSite && possible.none { it.id == entry.id } }, "", usage, ::tier)
             else emptyList()
         }
         // Open the keyboard only when there is nothing better than searching. Exact or same-site logins stay one tap away.
@@ -1230,9 +1289,9 @@ class VaultCodesActivity : FragmentActivity() {
         }
         @Composable
         fun LoginRow(entry: VaultEntry, matched: LoginMatchTier, action: String = "Fill") = when (matched) {
-            LoginMatchTier.EXACT -> AutofillAccountRow(entry, action, codeLinked(entry)) { fillLogin(entry) }
+            LoginMatchTier.EXACT -> AutofillAccountRow(entry, action, codeLinked(entry), mostUsed = entry.id == mostUsedId) { fillLogin(entry) }
             LoginMatchTier.SAME_SITE -> AutofillAccountRow(entry, "Fill", codeLinked(entry), moreAction = "Fill and link…",
-                onMore = { pendingLoginLink = entry }) { fillLogin(entry, grant = PickerFillGrant.SAME_SITE_ONCE) }
+                onMore = { pendingLoginLink = entry }, mostUsed = entry.id == mostUsedId) { fillLogin(entry, grant = PickerFillGrant.SAME_SITE_ONCE) }
             LoginMatchTier.OTHER -> AutofillAccountRow(entry, if (request.unverified) "Fill…" else "Fill and link", codeLinked(entry)) { pendingLoginLink = entry }
         }
         if (searchable) OutlinedTextField(
@@ -1251,6 +1310,9 @@ class VaultCodesActivity : FragmentActivity() {
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (request.unverified) item(key = "unverified") { UnverifiedWarning(request) }
             else if (request.embeddedWebView) item(key = "embedded-browser") { EmbeddedBrowserWarning(request) }
+            signInReminder?.takeIf { !otp && !generation }?.let { reminder ->
+                item(key = "sign-in-reminder") { SignInReminderNote(reminder) }
+            }
             if (otp) item(key = "code-search") {
                 OutlinedTextField(search, { search = it }, label = { Text("Search linked codes") },
                     singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -1342,7 +1404,7 @@ class VaultCodesActivity : FragmentActivity() {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    AccountLetterAvatar(entry.title)
+                    AccountLetterAvatar(entry.title, site = entry.tertiaryValue)
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(entry.primaryValue.ifBlank { entry.title }, style = MaterialTheme.typography.titleMedium,
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -1463,11 +1525,17 @@ class VaultCodesActivity : FragmentActivity() {
                 }
             }
         } else {
-            val matches = remember(passkeys, operation) { passkeys.filter { com.privatevault.app.passkeys.PasskeyCrypto.matches(it, operation.input) } }
+            // Several accounts on one site: the one this device signs in with most comes first and carries the badge.
+            val matches = remember(passkeys, operation, usage) {
+                passkeys.filter { com.privatevault.app.passkeys.PasskeyCrypto.matches(it, operation.input) }.sortedByUse(usage) { it.id }
+            }
+            val mostUsedId = remember(matches, usage) { usage.mostUsed(matches.map { it.id }) }
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item { PickerHint(source) }
                 if (matches.isEmpty()) item { Text("No matching passkeys in this vault.") }
-                items(matches, key = { it.id }) { passkey -> PickerPasskeyRow(passkey, !busy) { usePasskey(passkey) } }
+                items(matches, key = { it.id }) { passkey ->
+                    PickerPasskeyRow(passkey, !busy, mostUsed = passkey.id == mostUsedId) { usePasskey(passkey) }
+                }
                 if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             }
         }
@@ -1483,15 +1551,17 @@ private fun PickerKeyBadge() {
 }
 
 @Composable
-private fun PickerPasskeyRow(passkey: VaultPasskey, enabled: Boolean, onClick: () -> Unit) {
+private fun PickerPasskeyRow(passkey: VaultPasskey, enabled: Boolean, mostUsed: Boolean = false, onClick: () -> Unit) {
     val account = passkey.username.ifBlank { passkey.displayName.ifBlank { passkey.rpId } }
+    val description = "Sign in as $account on ${passkey.rpId}" + if (mostUsed) ", $MOST_USED_SPOKEN" else ""
     Card(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()
-        .semantics { role = Role.Button; contentDescription = "Sign in as $account on ${passkey.rpId}" }) {
+        .semantics { role = Role.Button; contentDescription = description }) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             PickerKeyBadge()
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(account, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (mostUsed) MostUsedBadge()
                 Text(passkey.rpId, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }

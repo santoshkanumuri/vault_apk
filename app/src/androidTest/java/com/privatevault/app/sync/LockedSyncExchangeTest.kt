@@ -286,6 +286,12 @@ class LockedSyncExchangeTest {
             stores[1].publish(databases[1])
             assertEquals("192.168.1.20", stores[1].snapshot()?.peerAddresses?.get(devices[0].deviceId))
             assertTrue((stores[1].snapshot()?.lastExchangeAt?.get(devices[0].deviceId) ?: 0L) >= contact)
+            // A drive report moves both times forward, and an older one moves neither back.
+            val driveSeen = System.currentTimeMillis() + 60_000
+            stores[1].recordPeerSeen(devices[0].deviceId, driveSeen)
+            stores[1].recordPeerSeen(devices[0].deviceId, contact - 1)
+            assertEquals(driveSeen, stores[1].snapshot()?.lastContactAt?.get(devices[0].deviceId))
+            assertEquals(driveSeen, stores[1].snapshot()?.lastExchangeAt?.get(devices[0].deviceId))
             fun exchange(first: Int, second: Int) {
                 ServerSocket(0).use { listener ->
                     val server = pool.submit {

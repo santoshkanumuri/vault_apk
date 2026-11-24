@@ -22,7 +22,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.privatevault.app.data.EntryType
 import com.privatevault.app.data.VaultEntry
+import com.privatevault.app.security.UsageSnapshot
 import com.privatevault.app.security.matchingCodeEntries
+import com.privatevault.app.security.mostUsedPerSite
+import com.privatevault.app.security.sortedByUse
 
 /**
  * Remembers which category the Quick copy picker was left on. Only that screen provides one, so
@@ -35,14 +38,19 @@ internal val LocalQuickAccessTabStore = staticCompositionLocalOf<QuickAccessTabS
 /** The Quick copy categories. The ordinal is the saved tab index: 0 and 1 keep their meaning from older versions. */
 internal enum class QuickCategory(val label: String, val type: EntryType, val searchLabel: String, val empty: String) {
     PASSWORDS("Passwords", EntryType.PASSWORD, "Search passwords", "No passwords saved yet. Add one in Nuvori."),
-    CODES("TOTP", EntryType.AUTHENTICATOR, "Search TOTP accounts", "No TOTP accounts yet. Add one in Nuvori."),
+    CODES("Codes", EntryType.AUTHENTICATOR, "Search codes", "No codes yet. Add one in Nuvori."),
     CARDS("Cards", EntryType.CARD, "Search cards", "No cards saved yet. Add one in Nuvori."),
     QUESTIONS("Questions", EntryType.QUESTION, "Search questions", "No security questions saved yet. Add one in Nuvori."),
 }
 
-/** Items of [category] that match [search]. Secrets (passwords, answers, card numbers beyond the last four) are never searched. */
-internal fun quickCopyMatches(entries: List<VaultEntry>, category: QuickCategory, search: String): List<VaultEntry> {
-    val items = entries.filter { it.type == category.type }
+/**
+ * Items of [category] that match [search]. Secrets (passwords, answers, card numbers beyond the last four) are never
+ * searched. Passwords this device uses most ([usage]) come first; the rest keep their name order.
+ */
+internal fun quickCopyMatches(entries: List<VaultEntry>, category: QuickCategory, search: String,
+    usage: UsageSnapshot = UsageSnapshot.EMPTY): List<VaultEntry> {
+    val filtered = entries.filter { it.type == category.type }
+    val items = if (category == QuickCategory.PASSWORDS) filtered.sortedByUse(usage) { it.id } else filtered
     if (category == QuickCategory.CARDS) {
         return filterCards(items.sortedWith(compareByDescending<VaultEntry> { it.favorite }.thenByDescending { it.lastOpenedAt }), search)
     }
@@ -60,6 +68,7 @@ internal fun quickCopyMatches(entries: List<VaultEntry>, category: QuickCategory
 @Composable
 internal fun ColumnScope.VaultQuickAccessContent(
     entries: List<VaultEntry>, suggestedApp: String?, notificationsOn: Boolean = false,
+    usage: UsageSnapshot = UsageSnapshot.EMPTY,
     copy: (VaultEntry, QuickField) -> Unit,
 ) {
     val tabStore = LocalQuickAccessTabStore.current
@@ -72,7 +81,9 @@ internal fun ColumnScope.VaultQuickAccessContent(
     val accounts = entries.filter { it.type == category.type }
     val suggested = if (category == QuickCategory.CODES) matchingCodeEntries(accounts, suggestedApp) else emptyList()
     val pool = if (search.isBlank() && !showAll && suggested.isNotEmpty()) suggested else entries
-    val matches = quickCopyMatches(pool, category, search)
+    val matches = quickCopyMatches(pool, category, search, usage)
+    // One badge per site, chosen from every saved password so a search never moves it.
+    val mostUsed = remember(entries, usage) { mostUsedPerSite(entries.filter { it.type == EntryType.PASSWORD }, usage) }
     CategoryButtons(category, entries) { selected ->
         category = selected; search = ""
         tabStore?.save?.invoke(selected.ordinal)
@@ -95,7 +106,7 @@ internal fun ColumnScope.VaultQuickAccessContent(
         if (suggested.isNotEmpty() && search.isBlank()) item(key = "suggested") {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 StatusChip(if (showAll) StatusKind.NEUTRAL else StatusKind.INFO,
-                    if (showAll) "All TOTP accounts" else "Suggested for your last app")
+                    if (showAll) "All codes" else "Suggested for your last app")
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = { showAll = !showAll }) { Text(if (showAll) "Show suggested" else "Show all") }
             }
@@ -105,7 +116,7 @@ internal fun ColumnScope.VaultQuickAccessContent(
         }
         items(matches, key = { it.id }) { entry ->
             when (category) {
-                QuickCategory.PASSWORDS -> PasswordCopyCard(entry, entries, copy)
+                QuickCategory.PASSWORDS -> PasswordCopyCard(entry, entries, entry.id in mostUsed, copy)
                 QuickCategory.CODES -> TotpTile(entry, { _, _ -> copy(entry, QuickField.CODE) }, {}, initiallyMasked = true)
                 QuickCategory.CARDS -> CardCopyCard(entry, copy)
                 QuickCategory.QUESTIONS -> QuestionCopyCard(entry, copy)
@@ -174,15 +185,16 @@ private fun CopyButtons(entry: VaultEntry, fields: List<QuickField>, copy: (Vaul
 }
 
 @Composable
-private fun PasswordCopyCard(entry: VaultEntry, all: List<VaultEntry>, copy: (VaultEntry, QuickField) -> Unit) {
+private fun PasswordCopyCard(entry: VaultEntry, all: List<VaultEntry>, mostUsed: Boolean, copy: (VaultEntry, QuickField) -> Unit) {
     val site = accountSiteLabel(entry)?.takeIf { it != entry.title }
     val fields = remember(entry, all) { quickCopyValues(entry, all).keys.toList() }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                AccountLetterAvatar(entry.title)
+                AccountLetterAvatar(entry.title, site = entry.tertiaryValue)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(entry.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (mostUsed) MostUsedBadge(decorative = false)
                     if (entry.primaryValue.isNotEmpty()) Text(entry.primaryValue,
                         style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     if (site != null) Text(site, style = MaterialTheme.typography.labelSmall,

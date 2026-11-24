@@ -14,6 +14,7 @@ import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.Role
@@ -27,14 +28,16 @@ import com.privatevault.app.data.VaultEntry
 import com.privatevault.app.security.*
 
 @Composable
-internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
+internal fun AutofillPreference(refreshCopy: () -> Unit = {}, onUsageCleared: () -> Unit = {}) {
     val context = LocalContext.current
+    val usageScope = rememberCoroutineScope()
     val preferences = remember { context.getSharedPreferences("vault_preferences", android.content.Context.MODE_PRIVATE) }
     var keyboardSuggestions by remember { mutableStateOf(AutofillPreferences.keyboardSuggestions(context)) }
     var unlockedProfiles by remember { mutableStateOf(preferences.getBoolean("autofill_unlocked_profiles", false)) }
     var copyLinkedCode by remember { mutableStateOf(AutofillPreferences.copyLinkedCode(context)) }
     var offerLockedProfiles by remember { mutableStateOf(AutofillPreferences.offerLockedProfiles(context)) }
     var offerCards by remember { mutableStateOf(AutofillPreferences.offerCards(context)) }
+    var signInReminders by remember { mutableStateOf(AutofillPreferences.signInReminders(context)) }
     val autofillEnabled = rememberAutofillServiceEnabled()
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         SettingsSection("Autofill service") {
@@ -81,6 +84,24 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
                 copyLinkedCode = enabled
                 AutofillPreferences.setCopyLinkedCode(context, enabled)
             }, description = "Off by default. After you pick a login, Nuvori fills its linked authenticator code on the next screen when the app or site has a code field Nuvori recognizes. Turn this on as a fallback to also put the code on the clipboard for 30 seconds. Your keyboard and the app in front can read the clipboard.")
+            HorizontalDivider()
+            // The "Most used" mark comes from this phone's own fill counts (ItemUsageStore). They never sync.
+            Text("Logins you fill most on this phone come first, and one per site is marked Most used. The counts stay on this phone.",
+                style = MaterialTheme.typography.bodySmall)
+            SettingsSecondaryButton("Clear Most used", icon = NuvoriIcons.History, onClick = {
+                usageScope.launch {
+                    val cleared = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        runCatching { com.privatevault.app.security.ItemUsageStore.clear(context) }.isSuccess
+                    }
+                    if (cleared) onUsageCleared()
+                }
+            })
+        }
+        SettingsSection("Notices") {
+            SettingsSwitchRow("Remind me how I signed in", signInReminders, { enabled ->
+                signInReminders = enabled
+                AutofillPreferences.setSignInReminders(context, enabled)
+            }, description = "On by default. When Nuvori for Windows remembered that you used \"Continue with Google\" or another provider on a site, Autofill there shows \"Last time: Google · your account\". It never fills a password. Tapping it fills only that account, into an empty account field you are in.")
         }
         SettingsSection("Everyday details") {
             SettingsSwitchRow("Offer to fill cards", offerCards, { enabled ->
@@ -117,14 +138,14 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}) {
 
 @Composable
 internal fun LoginOptions(apps: String, signatures: String, authenticatorId: String, codes: List<VaultEntry>,
-    onApps: (String, String) -> Unit, onCode: (String) -> Unit, generate: () -> Unit) {
+    onApps: (String, String) -> Unit, onCode: (String) -> Unit, onGenerated: (String) -> Unit) {
     val context = LocalContext.current
     var showApps by remember { mutableStateOf(false) }
     var showCodes by remember { mutableStateOf(false) }
-    var confirmGenerate by remember { mutableStateOf(false) }
+    var showGenerator by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = { confirmGenerate = true }, modifier = Modifier.fillMaxWidth()) { Text("Generate 24-character password") }
+        OutlinedButton(onClick = { showGenerator = true }, modifier = Modifier.fillMaxWidth()) { Text("Generate password") }
         OutlinedButton(onClick = { showApps = true }, modifier = Modifier.fillMaxWidth()) { Text("Autofill apps (${linkedAppPackages(apps).size})") }
         Text("Only authorize apps you trust. Selecting Done approves the installed apps' current signing identities. Suggestions based on recent app usage do not authorize autofill.", style = MaterialTheme.typography.bodySmall)
         OutlinedButton(onClick = { showCodes = true }, modifier = Modifier.fillMaxWidth()) {
@@ -132,10 +153,7 @@ internal fun LoginOptions(apps: String, signatures: String, authenticatorId: Str
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
-    if (confirmGenerate) AlertDialog(onDismissRequest = { confirmGenerate = false }, title = { Text("Generate a new password?") },
-        text = { Text("This replaces the password in this form. It does not change the password at the service. Nothing is saved until you save the login.") },
-        confirmButton = { TextButton(onClick = { generate(); confirmGenerate = false }) { Text("Generate") } },
-        dismissButton = { TextButton(onClick = { confirmGenerate = false }) { Text("Cancel") } })
+    if (showGenerator) PasswordGeneratorDialog(onDismiss = { showGenerator = false }) { onGenerated(it); showGenerator = false }
     if (showApps) CodeAppLinksPicker(apps, { showApps = false }) { selected ->
         val old = signatures.lineSequence().filter { it.contains('=') }.associate { it.substringBefore('=') to it.substringAfter('=') }
         val identities = linkedAppPackages(selected).map { name -> name to (appSigningIdentity(context, name) ?: old[name]) }

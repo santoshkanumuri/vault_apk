@@ -49,7 +49,7 @@ internal object ConflictVersions {
 internal class SyncConflictResolver(private val database: VaultDatabase, private val identity: AndroidDeviceIdentityStore,
     private val photoBlobs: PhotoSyncBlobs? = null, private val context: Context? = null) {
     suspend fun reviews(localKey: ByteArray): List<SyncConflictReview> {
-        val key = database.syncContentKey(localKey)
+        val key = database.syncKeyring(localKey)
         return try {
             database.syncDao().conflicts().filter { it.resolvedAtUtc.isEmpty() }.map { conflict ->
                 val operations = database.syncDao().operationsForEntity(conflict.entityType, conflict.entityId)
@@ -66,7 +66,7 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
                     side(incoming, current),
                     currentVersion.recordVersionJson)
             }
-        } finally { key.fill(0) }
+        } finally { key.wipe() }
     }
 
     suspend fun resolve(id: String, useIncoming: Boolean, localKey: ByteArray,
@@ -91,36 +91,24 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
         val resolution = ConflictVersions.resolution(local, remote, device.deviceId)
         val head = dao.deviceHead(selected.vaultId, device.deviceId)
         val mutation = UUID.randomUUID().toString()
-        val key = database.syncContentKey(localKey)
-        val nonce = ByteArray(12).also(SecureRandom()::nextBytes)
+        val key = database.syncKeyring(localKey)
         val encrypted = try {
             val plaintext = IncomingEntryChangeApplier(database).decrypt(selected.toSyncChange(), key)
                 .toString().toByteArray(Charsets.UTF_8)
-            val payloadKey = Mac.getInstance("HmacSHA256").run {
-                init(SecretKeySpec(key, "HmacSHA256"))
-                doFinal("nuvori-sync-payload-key-v1".toByteArray(Charsets.UTF_8))
-            }
-            try {
-                Cipher.getInstance("AES/GCM/NoPadding").run {
-                    init(Cipher.ENCRYPT_MODE, SecretKeySpec(payloadKey, "AES"), GCMParameterSpec(128, nonce))
-                    updateAAD("nuvori-sync-${selected.entityType}-v1:${selected.vaultId}:$mutation:${selected.entityId}".toByteArray(Charsets.UTF_8))
-                    doFinal(plaintext)
-                }
-            } finally { plaintext.fill(0); payloadKey.fill(0) }
-        } finally { key.fill(0) }
-        val encoder = Base64.getUrlEncoder().withoutPadding()
+            try { SyncPayloadCrypto.encrypt(key.writing(), selected.entityType, selected.vaultId, mutation, selected.entityId, plaintext) }
+            finally { plaintext.fill(0) }
+        } finally { key.wipe() }
         val change = SyncChangeRecord.createSigned(selected.vaultId, device.deviceId,
             Math.addExact(head?.sequence ?: 0L, 1L), head?.hash ?: GENESIS_HASH, mutation,
             selected.entityType, selected.entityId, if (selected.kind == "delete") ChangeKind.DELETE else ChangeKind.UPSERT,
-            state.revision, resolution, Instant.now().toString(), encoder.encodeToString(encrypted),
-            encoder.encodeToString(nonce), identity::sign)
+            state.revision, resolution, Instant.now().toString(), encrypted.ciphertext, encrypted.nonce, identity::sign)
         check(IncomingEntryChangeApplier(database, photoBlobs, context, announceRemoteChanges = false).apply(SyncOperationEntity(change.mutationId, change.formatVersion,
             change.vaultId, change.deviceId, change.sequence, change.previousHash, change.entityType, change.entityId,
             change.kind.name.lowercase(), change.baseRevision, change.recordVersion.toJson(), change.occurredAtUtc,
             change.payloadCiphertext, change.payloadNonce, change.deviceSignature, change.hash), localKey) == IncomingResult.APPLIED)
     }
 
-    private fun describe(operation: SyncOperationEntity, other: SyncOperationEntity, key: ByteArray): String {
+    private fun describe(operation: SyncOperationEntity, other: SyncOperationEntity, key: SyncKeyring): String {
         if (operation.kind == "delete") return "Deleted"
         val payload = IncomingEntryChangeApplier(database).decrypt(operation.toSyncChange(), key)
         return when (operation.entityType) {

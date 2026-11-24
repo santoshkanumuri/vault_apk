@@ -59,11 +59,20 @@ internal data class KeyboardSuggestionStamp(val packageName: String, val identit
  */
 internal fun keyboardSignIn(datasetId: String?, stamp: KeyboardSuggestionStamp, packageName: String, identity: String,
     now: Long): RecentLoginFill? {
-    if (datasetId.isNullOrBlank() || datasetId == PICKER_DATASET_ID || stamp.process != PROCESS_STAMP ||
+    if (datasetId.isNullOrBlank() || datasetId == PICKER_DATASET_ID || datasetId == SIGN_IN_REMINDER_DATASET_ID ||
+        stamp.process != PROCESS_STAMP ||
         now < stamp.at || now - stamp.at > CODE_AFTER_LOGIN_MS || identity.isBlank() ||
         stamp.packageName != packageName || stamp.identity != identity) return null
     return RecentLoginFill(datasetId, packageName, identity, stamp.origin, stamp.embeddedWebView, now + CODE_AFTER_LOGIN_MS)
 }
+
+/**
+ * Names one pick of a login from one keyboard strip, so the usage record counts it once even when Android reports the
+ * same fill event again. Null for the picker entry and for a dataset without a login id.
+ */
+internal fun keyboardPickKey(datasetId: String?, stamp: KeyboardSuggestionStamp): String? =
+    if (datasetId.isNullOrBlank() || datasetId == PICKER_DATASET_ID || datasetId == SIGN_IN_REMINDER_DATASET_ID) null
+    else "${stamp.process}:${stamp.at}:$datasetId"
 
 /** Dataset id of the "Choose another login" entry in a keyboard strip. */
 internal const val PICKER_DATASET_ID = "nuvori-picker"

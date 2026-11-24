@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.animateContentSize
@@ -140,7 +141,7 @@ internal fun DeviceSyncState(status: DeviceSyncStatus, connected: Int, paired: I
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = colors.accent,
                 trackColor = colors.accent.copy(alpha = .24f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(waiting to "Waiting", connected to "Syncing", paired to "Devices").forEach { (count, label) ->
+                listOf(waiting to "Waiting", connected to "Connected", paired to "Devices").forEach { (count, label) ->
                     Column(Modifier.weight(1f)) {
                         Text("$count", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text(label, style = MaterialTheme.typography.labelSmall)
@@ -453,8 +454,10 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     val nearbyCount by viewModel.nearbySyncServices.collectAsStateWithLifecycle()
     val conflicts by viewModel.syncConflicts.collectAsStateWithLifecycle()
     val rejected by viewModel.rejectedSyncChanges.collectAsStateWithLifecycle()
+    val lostManager by viewModel.lostManager.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val devices = memberships.filter { it.status == MemberStatus.ACTIVE.name }
+    val roleCandidates = viewModel.managingRoleCandidates(devices)
     val activeDeviceCount = 1 + devices.size
     val connectedCount = devices.count { peerStatuses[it.deviceId]?.phase == DeviceSyncPhase.TRANSFERRING }
     val counts = devices.associate { it.deviceId to viewModel.deviceSyncCounts(it.deviceId) }
@@ -483,6 +486,8 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             PackageManager.PERMISSION_GRANTED) }
     var removeDeviceId by remember { mutableStateOf<String?>(null) }
     var leaveGroup by remember { mutableStateOf(false) }
+    var markLost by remember { mutableStateOf(false) }
+    var startNewGroup by remember { mutableStateOf(false) }
     var transferTargetId by remember { mutableStateOf<String?>(null) }
     var acceptTransfer by remember { mutableStateOf(false) }
     var verifyPairing by remember { mutableStateOf(false) }
@@ -534,12 +539,12 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         SettingsSection("Add a device") {
             if (devices.isEmpty() && (state.stage == "idle" || state.stage == "failed")) {
                 Text(if (joiningExisting) "Scan the QR code from the device that manages your vault."
-                    else "Connect another Android device to sync over Wi-Fi.",
+                    else "Connect another Android device or a Windows PC to sync over Wi-Fi.",
                     style = MaterialTheme.typography.bodyMedium)
-                PairingStep(1, "Create a QR on the managing device", "Open Android devices there and tap Create QR.")
+                PairingStep(1, "Create a QR on the managing device", "Open Devices & sync there and tap Create QR.")
                 PairingStep(2, "Scan it here", "On the empty device, tap Scan QR and point the camera at the code.")
                 PairingStep(3, "Compare the codes", "Confirm the same code appears on both devices before the vault copy starts.")
-                Text("Keep both devices unlocked during setup. The joining device needs an empty vault.",
+                Text("Keep both devices unlocked during setup. A device that already has items keeps them. Items that differ show up for review.",
                     style = MaterialTheme.typography.bodySmall)
             }
             if (state.message.isNotBlank()) StatusBanner(kind = when (state.stage) {
@@ -606,12 +611,14 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                         Text("Start a new pairing invitation from the managing device. You can still scan its QR code here.",
                             style = MaterialTheme.typography.bodySmall)
                     val canCreate = canHostPairing && !joiningExisting
-                    if (canCreate || devices.isEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // After "Mark as lost", this device can also join the new group.
+                    val canScan = devices.isEmpty() || lostManager != null
+                    if (canCreate || canScan) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (canCreate) SettingsPrimaryButton(
                             if (activeDeviceCount < MAX_ACTIVE_SYNC_DEVICES) "Create QR" else "Reconnect",
                             onClick = { reverseLink = null; passwordError = null; verifyPairing = true },
                             modifier = Modifier.weight(1f), icon = Icons.Outlined.QrCode, fill = false)
-                        if (devices.isEmpty()) SettingsSecondaryButton("Scan QR", onClick = {
+                        if (canScan) SettingsSecondaryButton("Scan QR", onClick = {
                             scanWindowsQr = false
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                                 PackageManager.PERMISSION_GRANTED) scanner = true
@@ -661,6 +668,17 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         lastChecked, onSyncNow = { SyncRequests.request(); viewModel.syncDevicesNow() })
 
     // 2. Problems next.
+    // A device silent for months holds back the cleanup of old sync history: a suggestion only.
+    viewModel.syncCleanupSuggestion()?.let { (deviceId, text) ->
+        val removable = isManager && devices.any { it.deviceId == deviceId }
+        StatusBanner(kind = StatusKind.INFO, message = text,
+            actionLabel = if (removable) "Remove it" else null,
+            onAction = if (removable) ({ removeDeviceId = deviceId }) else null)
+    }
+    // A removal changed the sync keys, and this device's package has not arrived yet (epoch-keys-v1).
+    if (viewModel.waitingForSyncKeys()) StatusBanner(kind = StatusKind.INFO,
+        message = "Waiting for new sync keys from $managerName. Changes made here stay on this device until they arrive. " +
+            "Open Nuvori on $managerName, or put both devices on the same Wi-Fi.")
     if (rejected > 0) StatusBanner(kind = StatusKind.ERROR, title = "Changes need attention",
         message = "$rejected incoming ${if (rejected == 1) "change" else "changes"} could not be applied. Update both devices, then retry.",
         actionLabel = "Retry changes", onAction = { viewModel.retryRejectedSyncChanges() })
@@ -805,7 +823,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             transfer == null -> {
                 Text("Choose the device that should take over. It accepts, then this device completes the handoff. Keep both devices syncing.",
                     style = MaterialTheme.typography.bodyMedium)
-                devices.forEach { device ->
+                if (roleCandidates.size < devices.size) Text("Only an Android phone or tablet can manage the group. A Windows PC can't take this role.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                roleCandidates.forEach { device ->
                     SettingsSecondaryButton("Offer to ${device.displayName}", icon = devicePlatformIcon(device),
                         onClick = { transferTargetId = device.deviceId })
                 }
@@ -851,7 +871,8 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                 SettingsDangerButton("Remove this device from the group", onClick = {}, enabled = false,
                     icon = Icons.Outlined.LinkOff)
                 if (transfer == null) SettingsSecondaryButton("Transfer managing role", onClick = {
-                    if (devices.size == 1) transferTargetId = devices.first().deviceId
+                    if (roleCandidates.size == 1) transferTargetId = roleCandidates.first().deviceId
+                    else if (roleCandidates.isEmpty()) viewModel.notify("Only an Android phone or tablet can manage the group. Pair one first.", StatusKind.INFO)
                     else viewModel.notify("Choose a device under Managing role.", StatusKind.INFO)
                 }, icon = NuvoriIcons.Shield)
                 TextButton(onClick = { leaveGroup = true }, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -862,8 +883,21 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     style = MaterialTheme.typography.bodyMedium)
                 SettingsDangerButton("Remove this device from the group", onClick = { leaveGroup = true },
                     icon = Icons.Outlined.LinkOff)
-                Text("Lost the managing device? Leaving here keeps this vault copy; you can pair a new empty device from this one later.",
-                    style = MaterialTheme.typography.bodySmall)
+                // A lost managing device: freeze the old group here, then start a new one or join one.
+                if (lostManager == null) {
+                    Text("Lost $managerName? Mark it as lost. This device then stops taking changes from it.",
+                        style = MaterialTheme.typography.bodySmall)
+                    SettingsSecondaryButton("Mark $managerName as lost", onClick = { markLost = true },
+                        icon = NuvoriIcons.Shield)
+                } else {
+                    StatusBanner(StatusKind.WARNING, title = "$managerName is marked as lost",
+                        message = "This device no longer takes changes from it. Make this device the manager of a new group. Or scan the QR of a device that already did.")
+                    SettingsPrimaryButton("Make this device the manager", onClick = { startNewGroup = true },
+                        icon = NuvoriIcons.Shield)
+                    TextButton(onClick = viewModel::undoSyncManagerLost, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("$managerName is back")
+                    }
+                }
             }
         }
     }
@@ -963,10 +997,20 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         val behind by produceState(emptyList<String>(), deviceId) {
             value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { viewModel.devicesMissingChangesFrom(deviceId) }
         }
+        val outdated by produceState<List<String>?>(null, deviceId) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { viewModel.devicesNeedingUpdateForRemoval(deviceId) }
+        }
         AlertDialog(onDismissRequest = { removeDeviceId = null },
             title = { Text("Remove $name?") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("$name doesn't need to approve. It keeps its own copy of the vault but stops syncing with this group, and sees a notice the next time it reaches any of your devices. The group gets new sync keys.")
+                Text("$name doesn't need to approve. It keeps its own copy of the vault. Your devices stop accepting its changes, and it sees a notice the next time it reaches any of your devices.")
+                // New sync keys only when every other device sent its signed key statement.
+                if (outdated?.isEmpty() == true) Text("$name can't read anything you add from now on.",
+                    style = MaterialTheme.typography.bodyMedium)
+                else if (outdated != null) Text("${outdated!!.joinToString()} ${if (outdated!!.size == 1) "needs" else "need"} an update before Nuvori can change the sync keys. $name can't send changes, but it could still read new ones.",
+                    color = MaterialTheme.colorScheme.error)
+                Text("If $name was connected to Google Drive sync, also remove Nuvori's access in your Google account.",
+                    style = MaterialTheme.typography.bodySmall)
                 if (behind.isNotEmpty()) Text("${behind.joinToString()} ${if (behind.size == 1) "has" else "have"} not received every change from $name yet. Sync ${if (behind.size == 1) "that device" else "those devices"} first, or ${if (behind.size == 1) "it" else "they"} will not get those changes.",
                     color = MaterialTheme.colorScheme.error)
             } },
@@ -975,22 +1019,59 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     removeDeviceId = null
                     viewModel.notify("Removing $name…", StatusKind.PROGRESS)
                     viewModel.removeSyncDevice(deviceId)
-                }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+                }) { Text(if (outdated.isNullOrEmpty()) "Remove" else "Remove anyway", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { removeDeviceId = null }) { Text("Cancel") } })
     }
-    if (leaveGroup) AlertDialog(onDismissRequest = { leaveGroup = false },
+    if (markLost) AlertDialog(onDismissRequest = { markLost = false },
+        title = { Text("Mark $managerName as lost?") },
+        text = { Text("This device stops taking changes from $managerName. Your items stay. You can undo this.") },
+        confirmButton = { TextButton(onClick = { markLost = false; viewModel.markSyncManagerLost() }) {
+            Text("Mark as lost", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = { markLost = false }) { Text("Cancel") } })
+    if (startNewGroup) AlertDialog(onDismissRequest = { startNewGroup = false },
+        title = { Text("Start a new group here?") },
+        text = { Text("This device keeps its items and manages a new group. Then pair your other devices with it. They keep their items too, with no duplicates. $managerName can't read anything you add after that.") },
+        confirmButton = { TextButton(onClick = { startNewGroup = false; viewModel.startGroupAfterLostManager() }) {
+            Text("Start new group") } },
+        dismissButton = { TextButton(onClick = { startNewGroup = false }) { Text("Cancel") } })
+    if (leaveGroup) {
+        // "Leave and empty this phone" (as Windows "Start with an empty vault"): ready to join another group.
+        var emptyOnLeave by remember { mutableStateOf(false) }
+        val canEmpty = remember { viewModel.changesHeldElsewhere() }
+        AlertDialog(onDismissRequest = { leaveGroup = false },
         title = { Text(if (isManager) "Start a separate group?" else "Remove this device from the group?") },
-        text = { Text(if (isManager)
-            "This device keeps its vault and starts a separate sync group with new keys. The other devices keep their copies, but nobody can add or remove members in the old group until it has a managing device again. Pair the watch again for codes."
-            else "This device keeps its current vault and stops syncing with the group. $managerName removes it the next time they connect; no approval is needed. Changes waiting to arrive here must finish first. Pair the watch again for codes.") },
+        text = { if (isManager) Text(
+            "This device keeps its vault and starts a separate sync group with new keys. The other devices keep their copies, but nobody can add or remove members in the old group until it has a managing device again. Pair the watch again for codes.")
+            else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("This device stops syncing with the group. $managerName removes it the next time they connect; no approval is needed. Changes waiting to arrive here must finish first. Pair the watch again for codes.")
+                listOf(false to ("Keep this device's items" to "Everything stays here as a separate vault. You can pair this device again later; its items are added as new copies."),
+                    true to ("Leave and empty this device" to "Ready to join a sync group again. Items move to Recently deleted on this device for 30 days. Passkeys and folders are deleted here. Your other devices keep their copies."))
+                    .forEach { (empty, labels) ->
+                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .selectable(selected = emptyOnLeave == empty, enabled = !empty || canEmpty,
+                                role = androidx.compose.ui.semantics.Role.RadioButton) { emptyOnLeave = empty },
+                            verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = emptyOnLeave == empty, onClick = null, enabled = !empty || canEmpty)
+                            Column(Modifier.padding(start = 8.dp)) {
+                                Text(labels.first, style = MaterialTheme.typography.bodyLarge)
+                                Text(labels.second, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                if (!canEmpty) Text("To empty this device, sync first: some changes from it have not reached another device yet.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            } },
         confirmButton = { TextButton(onClick = {
             leaveGroup = false
             MembershipNoticeStore.leaveRequestedAt = System.currentTimeMillis()
             // For a member this also queues the signed leave request for the managing device.
-            viewModel.leaveSyncGroup()
-        }) { Text(if (isManager) "Start separate group" else "Leave group", color = MaterialTheme.colorScheme.error) } },
+            viewModel.leaveSyncGroup(emptyItems = !isManager && emptyOnLeave)
+        }) { Text(if (isManager) "Start separate group" else if (emptyOnLeave) "Leave and empty" else "Leave group",
+            color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton(onClick = { leaveGroup = false }) { Text("Cancel") } })
+    }
     transferTargetId?.let { targetId ->
         val name = devices.firstOrNull { it.deviceId == targetId }?.displayName ?: "the other device"
         AlertDialog(onDismissRequest = { transferTargetId = null },

@@ -139,6 +139,7 @@ internal data class HomeSync(
     val transferOfferedHere: Boolean = false,
     val transferReadyToComplete: Boolean = false,
     val managerName: String = "",
+    val driveConnected: Boolean = false,
 )
 
 /** Collects what Home needs to know about sync. Disk reads for timestamps happen off the main thread. */
@@ -151,9 +152,11 @@ internal fun rememberHomeSync(viewModel: VaultViewModel): HomeSync {
     val transfer by viewModel.authorityTransfer.collectAsStateWithLifecycle()
     val managerId by viewModel.syncManagerDeviceId.collectAsStateWithLifecycle()
     val local by viewModel.localSyncDevice.collectAsStateWithLifecycle()
+    val cloud by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
     val active = members.filter { it.status == MemberStatus.ACTIVE.name }
     val ids = active.map { it.deviceId }
-    val details by produceState(0L to (null as String?), status.phase, ids) {
+    // A Drive pass records contact times too, so its finish time is a key next to the Wi-Fi phase.
+    val details by produceState(0L to (null as String?), status.phase, ids, cloud.lastSyncAt) {
         value = withContext(Dispatchers.IO) {
             val last = runCatching { ids.maxOfOrNull { viewModel.deviceSyncContact(it).second } ?: 0L }.getOrDefault(0L)
             val waiting = if (ids.isEmpty()) null else runCatching { viewModel.deviceSyncQueueStatus() }.getOrNull()
@@ -167,6 +170,7 @@ internal fun rememberHomeSync(viewModel: VaultViewModel): HomeSync {
         transferOfferedHere = transfer?.let { it.targetDeviceId == me && !it.accepted } == true,
         transferReadyToComplete = transfer?.accepted == true && managerId != null && managerId == me,
         managerName = (members + listOfNotNull(local)).firstOrNull { it.deviceId == managerId }?.displayName.orEmpty(),
+        driveConnected = cloud.connected,
     )
 }
 
@@ -191,12 +195,13 @@ private fun syncAttention(sync: HomeSync, now: Long, openDevices: () -> Unit): L
         sync.waiting != null && sync.phase == DeviceSyncPhase.CHECKED -> add(AttentionItem(StatusKind.WARNING, sync.waiting, null, openDevices))
         sync.lastChecked > 0 && now - sync.lastChecked > 3L * 24 * 60 * 60 * 1000 ->
             add(AttentionItem(StatusKind.WARNING, "Devices haven't synced in ${(now - sync.lastChecked) / 86_400_000} days",
-                "Open Nuvori on your other device on the same Wi-Fi", openDevices))
+                if (sync.driveConnected) "Open Nuvori on your other device so it syncs with Google Drive"
+                else "Open Nuvori on your other device on the same Wi-Fi", openDevices))
     }
 }
 
 private fun calmLine(sync: HomeSync, itemCount: Int, now: Long): CalmLine = when {
-    sync.pairedDevices == 0 -> CalmLine(StatusKind.SUCCESS, "Unlocked · $itemCount ${if (itemCount == 1) "item" else "items"} on this phone")
+    sync.pairedDevices == 0 -> CalmLine(StatusKind.SUCCESS, "Unlocked · Stored on this phone only")
     sync.phase == DeviceSyncPhase.TRANSFERRING || sync.phase == DeviceSyncPhase.CONNECTING ->
         CalmLine(StatusKind.PROGRESS, "Syncing with your devices…")
     sync.phase == DeviceSyncPhase.SEARCHING || sync.phase == DeviceSyncPhase.FOUND ->
@@ -275,6 +280,8 @@ internal fun HomeScreen(
     openPasskeys: () -> Unit = {},
     groupCount: Int = 0,
     openGroups: () -> Unit = {},
+    signInCount: Int = 0,
+    openSignIns: () -> Unit = {},
     sync: HomeSync = HomeSync(),
     membershipNotice: MembershipNotice? = null,
     dismissMembershipNotice: () -> Unit = {},
@@ -354,6 +361,9 @@ internal fun HomeScreen(
                         CategoryTile("Autofill", counts[EntryType.AUTOFILL] ?: 0, EntryType.AUTOFILL.icon, tint(EntryType.AUTOFILL.tintIndex)) { openCategory(EntryType.AUTOFILL) },
                         CategoryTile("Passkeys", passkeyCount, NuvoriIcons.Passkey, neutralTint(), openPasskeys),
                         CategoryTile("Groups", groupCount, NuvoriIcons.Folder, neutralTint(), openGroups),
+                    ) + listOfNotNull(
+                        // Sign-in methods from Nuvori for Windows; Settings > Sign-ins reaches them when there are none.
+                        CategoryTile("Sign-ins", signInCount, NuvoriIcons.LogIn, neutralTint(), openSignIns).takeIf { signInCount > 0 },
                     ))
                 }
             }

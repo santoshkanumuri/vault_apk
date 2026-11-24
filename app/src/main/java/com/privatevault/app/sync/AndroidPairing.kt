@@ -153,7 +153,8 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                                     val admission = try {
                                         SyncSnapshot(context, database, EncryptedPhotoStore(context))
                                             .export(output, key, result.key, member,
-                                                windowsPeer = result.peerPlatform == "windows")
+                                                windowsPeer = result.peerPlatform == "windows",
+                                                joinerFeatures = result.peerFeatures)
                                     } catch (cancelled: CancellationException) { throw cancelled }
                                     catch (failure: Exception) {
                                         // Without this the receiver sees a clean, empty copy and reports a read error.
@@ -217,9 +218,12 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
             try {
                 previous?.join()
                 val invitation = PairingInvitation.decode(link.trim())
-                require(database.dao().allEntries().isEmpty() && database.dao().allPasskeys().isEmpty() &&
-                    database.dao().allGroupsWithEntries().isEmpty()) { "Join from an empty vault" }
-                require(database.syncDao().memberships(requireNotNull(database.dao().settings()).vaultId)
+                val populated = !(database.dao().allEntries().isEmpty() && database.dao().allPasskeys().isEmpty() &&
+                    database.dao().allGroupsWithEntries().isEmpty())
+                val currentVault = requireNotNull(database.dao().settings()).vaultId
+                // A device still in a group whose managing device it marked as lost may join another group.
+                val frozen = database.syncDao().lostManager(currentVault) != null
+                require(frozen || database.syncDao().memberships(currentVault)
                     .none { it.deviceId != AndroidDeviceIdentityStore(context).getOrCreate().deviceId &&
                         it.status == MemberStatus.ACTIVE.name }) { "This vault is already paired" }
                 val identity = AndroidDeviceIdentityStore(context).getOrCreate()
@@ -233,6 +237,9 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                     socket.soTimeout = 30_000
                     val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
                     val result = pairingHandshake(frames, identity, invitation.code.toCharArray(), invitation.session, invitation.vault, false)
+                    // Items stay only with a host that merges by ID; an older host needs an empty vault.
+                    val merge = populated && MergeJoinRules.FEATURE in result.peerFeatures
+                    if (populated && !merge) { result.key.fill(0); throw IllegalArgumentException("Join from an empty vault") }
                     try {
                         verifyMasterPassword(frames, identity, password, invitation.session,
                             invitation.vault, false, result.peer)
@@ -242,21 +249,32 @@ class AndroidPairing(private val context: Context) : AutoCloseable {
                             socket.soTimeout = 300_000
                             mutableState.value = PairingUiState("transferring", message = "Receiving the encrypted vault copy…")
                             val snapshot = SyncSnapshot(context, database, EncryptedPhotoStore(context))
+                            var merged: Pair<MergeJoin.Summary, List<com.privatevault.app.data.VaultPhoto>>? = null
                             snapshot.prepare(SyncChannelInput(channel), key, result.key, invitation.vault, identity.deviceId,
-                                result.peer).use { prepared ->
+                                result.peer, result.peerFeatures).use { prepared ->
+                                // A merge writes into a populated vault: a local backup comes first.
+                                if (merge) {
+                                    mutableState.value = PairingUiState("transferring", message = "Saving a backup of this device's items…")
+                                    MergeJoin.backupBeforeJoin(context, database, password, key)
+                                }
                                 channel.send("ready".toByteArray())
                                 require(channel.receive().contentEquals("commit".toByteArray()))
                                 ensureActive()
-                                snapshot.commit(prepared)
+                                merged = snapshot.commit(prepared, merge)
                                 committedJoin = true
                                 channel.send("committed".toByteArray())
                             }
+                            merged?.let { (_, photos) -> runCatching { MergeJoin.publishPhotos(context, database, photos, key) } }
+                            // A leave request this same identity signed must not remove it again later.
+                            runCatching { LanSyncService.store(context).clearPendingLeaveOf(identity.deviceId) }
                             runCatching {
                                 LanSyncService.store(context).publish(database)
                                 LanSyncService.store(context).recordPeerAddress(result.peer.deviceId,
                                     invitation.address)
                             }
-                            mutableState.value = PairingUiState("paired", message = "Vault received. Both devices use the same master password.")
+                            mutableState.value = PairingUiState("paired", message = listOfNotNull(
+                                "Vault received. Both devices use the same master password.", merged?.first?.describe())
+                                .joinToString(" "))
                         }
                     } finally { result.key.fill(0) }
                 }
@@ -354,10 +372,11 @@ private fun connectPairingSocket(socket: Socket, address: InetSocketAddress, tim
 }
 
 internal fun pairingFailure(failure: Exception, stage: String): String = when {
+    failure is ExportFailure && failure.cause is JoinerUpdateNeeded -> failure.cause.message!!
     failure is ExportFailure -> "This phone could not send the vault copy: ${exportFailureReason(failure.cause)}"
     failure is PeerSnapshotFailure -> "The other phone could not send the vault copy: ${failure.message}"
     failure.message == "Join from an empty vault" ->
-        "This phone already has vault items. Pairing needs an empty vault; use Sync now if these phones are already paired."
+        "This phone already has items. To keep them, update Nuvori on the other device first. Or join from an empty vault."
     failure.message == "This vault is already paired" ->
         "This vault is already paired. Use Sync now instead of scanning the QR again."
     failure.message == "Connect to Wi-Fi to pair" -> "Connect this phone to Wi-Fi and try again."

@@ -50,7 +50,8 @@ class DeviceSyncUiTest {
         compose.onNodeWithText("Syncing changes").assertExists()
         compose.onNodeWithText("Devices").assertExists()
         compose.onNodeWithText("Living room tablet").assertExists()
-        compose.onAllNodesWithText("Syncing", useUnmergedTree = true).assertCountEquals(2)
+        compose.onAllNodesWithText("Syncing", useUnmergedTree = true).assertCountEquals(1)
+        compose.onNodeWithText("Connected").assertExists()
         val screenshot = File(InstrumentationRegistry.getInstrumentation().targetContext
             .getExternalFilesDir(null), "sync-ui-review.png")
         screenshot.outputStream().use {

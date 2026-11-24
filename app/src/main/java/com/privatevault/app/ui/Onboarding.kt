@@ -134,7 +134,7 @@ internal fun OnboardingScreen(
                             ChoiceRow(FirstRunChoice.JOIN, choice, NuvoriIcons.Devices,
                                 "Join an existing vault", "Scan the managing device's QR after setup") { choice = it }
                             ChoiceRow(FirstRunChoice.RESTORE, choice, NuvoriIcons.History, "Restore a backup", "From Google Drive or a .pvault file") { choice = it }
-                            ChoiceRow(FirstRunChoice.BROWSER_IMPORT, choice, NuvoriIcons.Password, "Import browser passwords", "Choose a Chrome or Brave CSV") { choice = it }
+                            ChoiceRow(FirstRunChoice.BROWSER_IMPORT, choice, NuvoriIcons.Import, "Import browser passwords", "A CSV from a browser, or a Bitwarden JSON") { choice = it }
                         }
                         TextButton(onClick = onPrivacy) { Text("Privacy policy") }
                     }

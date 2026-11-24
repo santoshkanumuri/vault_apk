@@ -4,6 +4,7 @@ import com.privatevault.app.data.SyncMembershipEventEntity
 import com.privatevault.app.data.SyncOperationEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -23,6 +24,47 @@ import com.privatevault.app.sync.MembershipVectors as V
 class CloudSyncPassTest {
     @get:Rule val folder = TemporaryFolder()
     private val keys = requireNotNull(CloudKeys.derive(Base64.getUrlDecoder().decode(V.rootSecret), V.VAULT_ID))
+
+    @Test fun driveCleanupWaitsForEveryActiveMemberAndNothingIsUploadedAgain() {
+        val drive = MemoryDrive()
+        val history = chain(V.MANAGER_ID, V.managerSeed, 300)
+        val a = device(V.MANAGER_ID).apply { own(history) }
+        assertEquals(300, a.pass(drive).sent)
+        fun operationFiles() = drive.files.map { it.first.name }.filter { keys.parse(it) is CloudName.Operations }
+        assertEquals(2, operationFiles().size)
+        val all = SyncProgress(mapOf(V.MANAGER_ID to SyncChainHead(300, history.last().hash)),
+            mapOf(V.MANAGER_ID to SyncChainHead(300, history.last().hash)))
+        val both = listOf(DriveCompaction.FEATURE)
+        // Every member announced the feature; the client applied everything, the third device nothing (offline): nothing goes.
+        a.mirror = a.mirror.copy(peerFeatures = mapOf(V.CLIENT_ID to both, V.OTHER_ID to both), peerProgress = mapOf(V.CLIENT_ID to all))
+        a.pass(drive)
+        assertEquals(2, operationFiles().size)
+        // An older build anywhere (it would count coverage from 1): still nothing.
+        a.state = a.state.copy(driveCompactedAt = 0)
+        a.mirror = a.mirror.copy(peerFeatures = mapOf(V.CLIENT_ID to both),
+            peerProgress = mapOf(V.CLIENT_ID to all, V.OTHER_ID to all))
+        a.pass(drive)
+        assertEquals(2, operationFiles().size)
+        // The offline device is removed: a removed member pins nothing, so the files go, after the floor marker.
+        a.state = a.state.copy(driveCompactedAt = 0)
+        fun withoutOther(mirror: TransportMirror) = mirror.copy(members = mirror.members.map {
+            if (it.deviceId == V.OTHER_ID) it.copy(status = MemberStatus.REVOKED.name) else it })
+        a.mirror = withoutOther(a.mirror).copy(peerFeatures = mapOf(V.CLIENT_ID to both), peerProgress = mapOf(V.CLIENT_ID to all))
+        a.pass(drive)
+        assertEquals(emptyList<String>(), operationFiles())
+        val markerName = keys.floorName(V.MANAGER_ID)
+        val marker = com.google.gson.Gson().fromJson(String(requireNotNull(keys.open(markerName,
+            drive.files.single { it.first.name == markerName }.second))), DriveCompaction.Marker::class.java)
+        assertEquals(listOf(300L, V.MANAGER_ID), listOf(marker.floor, marker.author))
+        // A member that counts the marker does not upload the deleted range again.
+        val b = device(V.CLIENT_ID).apply { own(history) }
+        b.mirror = withoutOther(b.mirror).copy(peerProgress = mapOf(V.MANAGER_ID to all))
+        assertEquals(0, b.pass(drive).sent)
+        assertEquals(emptyList<String>(), operationFiles())
+        // A member whose own floor is lower ignores the marker and uploads again: never a gap.
+        val c = device(V.CLIENT_ID).apply { own(history) }
+        assertEquals(300, c.pass(drive).sent)
+    }
 
     @Test fun twoDevicesExchangeChangesAndPhotosThroughTheDrive() {
         val drive = MemoryDrive()
@@ -75,6 +117,70 @@ class CloudSyncPassTest {
         b.own(chain(V.CLIENT_ID, V.clientSeed, 3).drop(2))
         assertEquals(1, b.pass(drive).sent)
         assertEquals(1, a.pass(drive).received)
+    }
+
+    @Test fun anIdleDeviceRewritesItsProgressAsAHeartbeat() {
+        val drive = MemoryDrive()
+        var clock = 1_790_000_000_000L
+        val a = device(V.MANAGER_ID).apply { now = { clock } }
+        val b = device(V.CLIENT_ID).apply { now = { clock } }
+        val progressOfB = keys.progressName(V.CLIENT_ID)
+        fun modifiedOfB() = drive.files.single { it.first.name == progressOfB }.first.modified
+        b.pass(drive); a.pass(drive)
+        val first = modifiedOfB()
+        assertEquals(clock, a.seen[V.CLIENT_ID])
+        assertEquals(clock, b.state.progressWrittenAt)
+
+        // Within the heartbeat an unchanged report is not uploaded again.
+        val start = clock
+        clock += CloudSyncPass.PROGRESS_HEARTBEAT_MS - 1
+        b.pass(drive); a.pass(drive)
+        assertEquals(first, modifiedOfB())
+        assertEquals(start, a.seen[V.CLIENT_ID])
+
+        // After it, the same report is rewritten and the other device sees a new contact time.
+        clock += 1
+        b.pass(drive); a.pass(drive)
+        assertNotEquals(first, modifiedOfB())
+        assertEquals(clock, a.seen[V.CLIENT_ID])
+        assertEquals(clock, b.state.progressWrittenAt)
+
+        // A clock that moved backward also rewrites, so a wrong future time cannot stop the heartbeat.
+        val beforeRollback = modifiedOfB()
+        clock -= 10_000
+        b.pass(drive)
+        assertNotEquals(beforeRollback, modifiedOfB())
+        assertEquals(clock, b.state.progressWrittenAt)
+    }
+
+    @Test fun aDriveOnlyPeerLearnsTheOtherDevicesFeatures() {
+        val drive = MemoryDrive()
+        val a = device(V.MANAGER_ID)
+        val b = device(V.CLIENT_ID)
+        b.pass(drive); a.pass(drive)
+        assertEquals(SyncFeatures.ANNOUNCED.toSet(), a.features[V.CLIENT_ID])
+        assertTrue(SyncFeatures.SITE_ICONS in a.features.getValue(V.CLIENT_ID))
+        // The sealed report lists them sorted, next to the fields older builds read.
+        val name = keys.progressName(V.CLIENT_ID)
+        val body = com.google.gson.JsonParser.parseString(requireNotNull(keys.open(name,
+            drive.files.single { it.first.name == name }.second)).toString(Charsets.UTF_8)).asJsonObject
+        // keyEpoch (epoch-keys-v1): the newest epoch whose keys this device holds; 1 before any rotation.
+        // The report is signed by the device ([DriveProgress]); older builds read deviceId, updatedAt and progress.
+        assertEquals(setOf("deviceId", "updatedAt", "keyEpoch", "prefixEpoch", "progress", "progressText", "features", "signature"),
+            body.keySet())
+        assertEquals(1L, body.get("keyEpoch").asLong)
+        assertEquals(1L, body.get("prefixEpoch").asLong)
+        assertEquals(SyncFeatures.ANNOUNCED.sorted(), body.getAsJsonArray("features").map { it.asString })
+    }
+
+    @Test fun aRefusedProgressReportStillRecordsTheContactTime() {
+        val drive = MemoryDrive()
+        val clock = 1_790_000_000_000L
+        val a = device(V.MANAGER_ID).apply { now = { clock }; refuseProgress = true }
+        val b = device(V.CLIENT_ID).apply { now = { clock } }
+        b.pass(drive); a.pass(drive)
+        assertNull(a.peerProgress[V.CLIENT_ID])
+        assertEquals(clock, a.seen[V.CLIENT_ID])
     }
 
     @Test fun forgedRenamedForeignAndGappedFilesChangeNothing() {
@@ -172,10 +278,22 @@ class CloudSyncPassTest {
         assertEquals(3, other.mirror.membershipEvents.size)
         manager.pass(drive)
         assertEquals(4, manager.mirror.membershipEvents.size)
-        assertEquals(MembershipAction.REMOVE, manager.mirror.membershipEvents.last().toEvent().action)
-        // The new history went to the drive in the same pass; the other device adopts it.
+        val remove = manager.mirror.membershipEvents.last().toEvent()
+        assertEquals(MembershipAction.REMOVE, remove.action)
+        // M2: a REMOVE answered from a leave request (signed while locked) gets keys when the managing
+        // device unlocks. Until then the manager holds what it would send, the new history included.
+        assertTrue(manager.mirror.stranded())
+        assertNull(other.pass(drive, full = true).removed)
+        assertEquals(3, other.mirror.membershipEvents.size)
+        // Unlocked: EpochKeyRotation.coverRemovals; here the gate is closed (no statements), so a signed marker.
+        manager.mirror = manager.mirror.copy(keyPackages = mapOf("2" to PackageSet.sign(V.VAULT_ID, 2, remove.hash, emptyMap()) {
+            DeviceIdentityCrypto.sign(V.managerSeed, it) }))
+        assertFalse(manager.mirror.stranded())
+        manager.pass(drive)
+        // The new history is on the drive now; the other device adopts it and, with the marker, waits for nothing.
         assertNull(other.pass(drive, full = true).removed)
         assertEquals(4, other.mirror.membershipEvents.size)
+        assertFalse(other.mirror.stranded())
     }
 
     @Test fun leaveFilesHaveOneExactShape() {
@@ -191,6 +309,201 @@ class CloudSyncPassTest {
         assertEquals(CloudName.Leave(keys.deviceTag(V.CLIENT_ID)), keys.parse(keys.leaveName(V.CLIENT_ID)))
     }
 
+    @Test fun driveProgressMatchesTheSharedVector() {
+        val vectors = com.google.gson.JsonParser.parseString(requireNotNull(javaClass.classLoader?.getResource(
+            "sync-vectors/epoch-keys-v1.json")).readText()).asJsonObject
+        val file = vectors.getAsJsonObject("progressFile")
+        val vault = vectors.get("vaultId").asString
+        val text = file.get("progressText").asString
+        val features = file.getAsJsonArray("features").map { it.asString }
+        val bytes = DriveProgress.signingBytes(vault, "dev-pc", 2, file.get("updatedAt").asLong, 2, text, features)
+        assertEquals(file.get("signingHex").asString, bytes.joinToString("") { "%02x".format(it) })
+        val seed = vectors.getAsJsonObject("devices").getAsJsonObject("dev-pc").get("ed25519Seed").asString
+            .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        val body = DriveProgress.body(vault, "dev-pc", 2, file.get("updatedAt").asLong, 2, text, features) { DeviceIdentityCrypto.sign(seed, it) }
+        assertEquals(file.get("signature").asString, body.get("signature").asString)
+        val public = file.get("devicePublic").asString
+        assertEquals(3L, DriveProgress.verify(body, vault, "dev-pc", public, 2)?.progress?.applied?.get("dev-pc")?.sequence)
+        // Another prefix, device, vault or a changed report: not counted.
+        assertNull(DriveProgress.verify(body, vault, "dev-pc", public, 1))
+        assertNull(DriveProgress.verify(body, vault, "dev-tablet", public, 2))
+        assertNull(DriveProgress.verify(body, "other", "dev-pc", public, 2))
+        assertNull(DriveProgress.verify(body.deepCopy().apply { addProperty("progressText", text.replace("[1,", "[3,")) },
+            vault, "dev-pc", public, 2))
+        assertNull(DriveProgress.verify(body.deepCopy().apply { remove("signature") }, vault, "dev-pc", public, 2))
+    }
+
+    /**
+     * H2: a removed device holds the root cloud key, so it can write a progress file for an active
+     * member under the root prefix. Unsigned or forged, it is unknown progress: it never raises a
+     * floor (which would let compaction delete history the member still needs) nor opens a gate.
+     */
+    @Test fun forgedAndUnsignedProgressNeverCountsButTheContactTimeDoes() {
+        val drive = MemoryDrive()
+        val a = device(V.MANAGER_ID)
+        val inflated = SyncProgress(mapOf(V.CLIENT_ID to SyncChainHead(900, "ab".repeat(32))),
+            mapOf(V.CLIENT_ID to SyncChainHead(900, "ab".repeat(32))))
+        val name = keys.progressName(V.CLIENT_ID)
+        val at = System.currentTimeMillis() - 1000
+        // Unsigned, as an older build (or the removed device) writes it.
+        val unsigned = com.google.gson.JsonObject().apply {
+            addProperty("deviceId", V.CLIENT_ID); addProperty("updatedAt", at)
+            add("progress", com.google.gson.JsonParser.parseString(inflated.encode().toString(Charsets.UTF_8)))
+            add("features", com.google.gson.JsonArray().apply { add(DriveCompaction.FEATURE) })
+        }
+        drive.put(name, keys.seal(name, unsigned.toString().toByteArray()))
+        a.pass(drive)
+        assertNull(a.peerProgress[V.CLIENT_ID])
+        assertNull(a.features[V.CLIENT_ID])
+        assertEquals(at, a.seen[V.CLIENT_ID])
+        // Signed by another member's key: refused too.
+        val forged = DriveProgress.body(V.VAULT_ID, V.CLIENT_ID, 1, at + 1, 1, inflated.encode().toString(Charsets.UTF_8),
+            listOf(DriveCompaction.FEATURE)) { DeviceIdentityCrypto.sign(V.otherSeed, it) }
+        drive.put(name, keys.seal(name, forged.toString().toByteArray()))
+        a.pass(drive)
+        assertNull(a.peerProgress[V.CLIENT_ID])
+        // The member's own signed report counts.
+        val b = device(V.CLIENT_ID)
+        b.pass(drive); a.pass(drive)
+        assertEquals(0L, a.peerProgress[V.CLIENT_ID]?.applied?.get(V.CLIENT_ID)?.sequence ?: 0L)
+        assertEquals(SyncFeatures.ANNOUNCED.toSet(), a.features[V.CLIENT_ID])
+    }
+
+    /**
+     * End to end on a drive in memory: the manager removes OTHER with new keys; OTHER (which keeps the
+     * root key and a Google sign-in) deletes and tampers with the survivor's `e.` file and forges a
+     * progress file. The survivor learns the REMOVE, holds everything it would send (H1), the manager
+     * finds its package missing on the drive and uploads it again, and from then on the survivor writes
+     * only under the new prefix (M1). OTHER can open nothing the survivor wrote after the REMOVE.
+     */
+    @Test fun aRemovedDeviceThatTampersWithPackagesAndProgressCantKeepASurvivorStrandedOrReadIt() {
+        val drive = MemoryDrive()
+        val manager = device(V.MANAGER_ID)
+        val survivor = device(V.CLIENT_ID).apply { own(chain(V.CLIENT_ID, V.clientSeed, 2)) }
+        // Statements travel first: both publish theirs, and read the other's.
+        survivor.pass(drive); manager.pass(drive); survivor.pass(drive)
+        assertTrue(manager.mirror.keyStatements.containsKey(V.CLIENT_ID))
+        assertTrue(survivor.mirror.keyStatements.containsKey(V.MANAGER_ID))
+        val beforeRemoval = drive.files.size
+        val rotation = rotate(manager)
+        val newKeys = requireNotNull(CloudKeys.derive(rotation.secret, V.VAULT_ID))
+        manager.pass(drive)
+        val packageName = keys.packageName(2, V.CLIENT_ID)
+        assertTrue(drive.files.any { it.first.name == packageName })
+        // Only the REMOVE goes under the old prefix: the history there ends with it.
+        val oldHistory = drive.files.filter { (file, _) -> (keys.parse(file.name) as? CloudName.Membership)?.count == 4L }
+        assertEquals(1, oldHistory.size)
+        assertTrue(drive.files.any { newKeys.parse(it.first.name) is CloudName.Membership })
+
+        // OTHER, removed: deletes the package, plants a changed copy (non-canonical base64url, the
+        // same bytes) and a forged progress report for the survivor under the old prefix.
+        drive.files.removeAll { it.first.name == packageName }
+        val lenient = rotation.set.copy(packages = rotation.set.packages.mapValues { (_, text) ->
+            val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+            text.dropLast(1) + alphabet[alphabet.indexOf(text.last()) or 1] })
+        assertNotEquals(rotation.set.packages, lenient.packages)
+        drive.put(packageName, keys.seal(packageName, com.google.gson.Gson().toJson(lenient).toByteArray()))
+
+        // The survivor learns the REMOVE but has no valid package: it reads, and sends nothing.
+        val stranded = survivor.pass(drive, full = true)
+        assertTrue(stranded.stranded)
+        assertEquals(4, survivor.mirror.membershipEvents.size)
+        assertEquals(0, stranded.sent)
+        survivor.own(chain(V.CLIENT_ID, V.clientSeed, 3).drop(2))
+        assertEquals(0, survivor.pass(drive).sent)
+        assertFalse(survivor.mirror.transportSecrets.containsKey("2"))
+
+        // The manager checks the drive itself (its cached list still names the deleted file) and uploads it again.
+        manager.pass(drive)
+        assertEquals(1, drive.files.count { (file, bytes) -> file.name == packageName &&
+            keys.open(packageName, bytes)?.let { com.google.gson.Gson().fromJson(String(it), PackageSet::class.java) } == rotation.set })
+        // The pass that opens the package already uploads under the new prefix (M1).
+        val learned = survivor.pass(drive)
+        assertFalse(learned.complete)
+        assertFalse(learned.stranded)
+        assertTrue(survivor.mirror.transportSecrets.containsKey("2"))
+        assertEquals(1, learned.sent)
+        assertEquals(0, survivor.pass(drive).sent)
+
+        // Nothing the survivor wrote after it learned of the REMOVE is under a prefix OTHER can open.
+        val survivorTag = keys.deviceTag(V.CLIENT_ID)
+        val oldPrefixAfter = drive.files.drop(beforeRemoval).map { it.first.name }.filter { name ->
+            when (val parsed = keys.parse(name)) {
+                is CloudName.Operations -> parsed.device == survivorTag && parsed.last >= 3
+                else -> false
+            }
+        }
+        assertEquals(emptyList<String>(), oldPrefixAfter)
+        assertTrue(drive.files.any { (file, _) -> (newKeys.parse(file.name) as? CloudName.Operations)?.let {
+            it.device == newKeys.deviceTag(V.CLIENT_ID) && it.last == 3L } == true })
+        // OTHER's forged report under the old prefix never counts; the survivor's signed one under the new prefix does.
+        val forged = DriveProgress.body(V.VAULT_ID, V.CLIENT_ID, 1, System.currentTimeMillis(), 2,
+            SyncProgress(mapOf(V.CLIENT_ID to SyncChainHead(99, "ab".repeat(32))), mapOf(V.CLIENT_ID to SyncChainHead(99, "ab".repeat(32))))
+                .encode().toString(Charsets.UTF_8), emptyList()) { DeviceIdentityCrypto.sign(V.otherSeed, it) }
+        val oldProgress = keys.progressName(V.CLIENT_ID)
+        drive.put(oldProgress, keys.seal(oldProgress, forged.toString().toByteArray()))
+        manager.pass(drive)
+        assertEquals(3L, manager.peerProgress[V.CLIENT_ID]?.applied?.get(V.CLIENT_ID)?.sequence)
+    }
+
+    /** A photo blob under a rotated prefix is sealed: a blob of an older epoch's key is not readable from the drive. */
+    @Test fun blobsUnderARotatedPrefixAreSealedAndReadBack() {
+        val vectors = com.google.gson.JsonParser.parseString(requireNotNull(javaClass.classLoader?.getResource(
+            "sync-vectors/epoch-keys-v1.json")).readText()).asJsonObject
+        val blob = vectors.getAsJsonObject("blobFile")
+        fun hex(text: String) = text.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        val epoch2 = requireNotNull(CloudKeys.derive(hex(vectors.get("transportSecretHex").asString), vectors.get("vaultId").asString))
+        assertEquals(blob.get("sealedHex").asString, epoch2.sealWithNonce(blob.get("name").asString, hex(blob.get("blobHex").asString),
+            hex(blob.get("envelopeNonceHex").asString)).joinToString("") { "%02x".format(it) })
+
+        val drive = MemoryDrive()
+        val manager = device(V.MANAGER_ID)
+        val survivor = device(V.CLIENT_ID)
+        survivor.pass(drive); manager.pass(drive); survivor.pass(drive)
+        val rotation = rotate(manager)
+        val image = ByteArray(50_000) { (it * 3).toByte() }
+        val hash = sha256(image)
+        File(manager.blobs, hash).apply { parentFile!!.mkdirs(); writeBytes(image) }
+        manager.mirror = manager.mirror.copy(attachmentHashes = setOf(hash))
+        assertEquals(1, manager.pass(drive).photosSent)
+        val newKeys = requireNotNull(CloudKeys.derive(rotation.secret, V.VAULT_ID))
+        val (file, bytes) = drive.files.single { (file, _) -> newKeys.parse(file.name) is CloudName.Blob }
+        assertFalse(bytes.contentEquals(image))
+        assertTrue(newKeys.open(file.name, bytes)!!.contentEquals(image))
+        survivor.wanted += hash
+        survivor.pass(drive, full = true); survivor.pass(drive)
+        assertTrue(survivor.photoBlobs.file(hash)!!.readBytes().contentEquals(image))
+    }
+
+    /** L1: after "Mark as lost", a REMOVE the lost manager signs later (found on the drive) is not adopted. */
+    @Test fun aFrozenSurvivorIgnoresARemovalSignedByTheLostManager() {
+        val drive = MemoryDrive()
+        val b = device(V.CLIENT_ID)
+        b.mirror = b.mirror.copy(lostManager = LostManagerFreeze.Freeze(V.MANAGER_ID, 3, 0, GENESIS_HASH))
+        val removed = V.removedHistory()
+        val name = keys.membershipName(removed.size.toLong(), removed.last().hash)
+        drive.put(name, keys.seal(name, membershipJson(removed)))
+        assertNull(b.pass(drive, full = true).removed)
+        assertEquals(3, b.mirror.membershipEvents.size)
+    }
+
+    private class Rotation(val set: PackageSet, val secret: ByteArray, val remove: SyncMembershipEvent)
+
+    /** The manager removes OTHER at epoch 2 with a random S(2) and a package for the client, as [EpochKeyRotation.rotate]. */
+    private fun rotate(manager: MemoryCloudStore): Rotation {
+        val history = manager.mirror.membershipEvents.map { it.toEvent() }
+        val remove = SyncMembershipEvent.sign(V.VAULT_ID, history.size + 1L, history.last().hash, MembershipAction.REMOVE,
+            V.MANAGER_ID, V.OTHER_ID, "", 2) { DeviceIdentityCrypto.sign(V.managerSeed, it) }
+        val secret = ByteArray(32) { 0x5C }
+        val statement = manager.mirror.keyStatements.getValue(V.CLIENT_ID)
+        val sealed = EpochKeys.seal(V.VAULT_ID, 2, V.CLIENT_ID, requireNotNull(statement.publicKey()), secret, ByteArray(32) { 0x6D })
+        val set = PackageSet.sign(V.VAULT_ID, 2, remove.hash, mapOf(V.CLIENT_ID to sealed)) { DeviceIdentityCrypto.sign(V.managerSeed, it) }
+        manager.acceptMembershipEvents(manager.mirror.membershipEvents + SyncMembershipEventEntity.from(remove))
+        manager.mirror = manager.mirror.copy(transportSecrets = mapOf("2" to Base64.getUrlEncoder().withoutPadding().encodeToString(secret)),
+            keyPackages = mapOf("2" to set))
+        return Rotation(set, secret, remove)
+    }
+
     private fun membershipJson(events: List<SyncMembershipEvent>) =
         com.google.gson.Gson().toJson(events.map { SyncMembershipEventEntity.from(it) }).toByteArray(Charsets.UTF_8)
 
@@ -202,7 +515,9 @@ class CloudSyncPassTest {
         val verified = SyncMembershipManager.verify(events.map { it.toEvent() })
         val publicKey = verified.members.single { it.deviceId == deviceId }.identityPublicKey
         return MemoryCloudStore(File(folder.root, deviceId), TransportMirror(V.VAULT_ID, deviceId, publicKey,
-            V.rootSecret, verified.keyEpoch, emptyList(), verified.members, events, emptyList()))
+            V.rootSecret, verified.keyEpoch, emptyList(), verified.members, events, emptyList())).apply {
+            seed = when (deviceId) { V.MANAGER_ID -> V.managerSeed; V.CLIENT_ID -> V.clientSeed; else -> V.otherSeed }
+        }
     }
 
     private fun chain(device: String, seed: ByteArray, count: Int): List<SyncOperationEntity> {
@@ -256,6 +571,9 @@ class CloudSyncPassTest {
             files[index] = file to content
             return file
         }
+        override fun delete(id: String) {
+            if (!files.removeAll { it.first.id == id }) throw CloudException(CloudError.NOT_FOUND)
+        }
     }
 
     /**
@@ -268,15 +586,21 @@ class CloudSyncPassTest {
         val wanted = sortedSetOf<String>()
         val peerProgress = mutableMapOf<String, SyncProgress>()
         val seen = mutableMapOf<String, Long>()
+        val features = mutableMapOf<String, Set<String>>()
         var state = CloudSyncState(enabled = true, account = "person@example.com")
         private var cached = emptyList<CloudFile>()
         val blobs = File(directory, "blobs")
         override val photoBlobs = PhotoSyncBlobs(blobs)
+        var now: () -> Long = System::currentTimeMillis
+        /** Refuses every peer progress report, as a report older than one received over Wi-Fi is. */
+        var refuseProgress = false
+        /** This device's Ed25519 seed: it signs progress reports and key statements. */
+        var seed: ByteArray? = null
 
         fun own(operations: List<SyncOperationEntity>) = operations.forEach { held[it.hash] = it }
         /** What the unlocked app does with queued changes. */
         fun apply() { held.putAll(queued); queued.clear() }
-        fun pass(drive: CloudDrive, full: Boolean = false) = CloudSyncPass(this, drive).run(full)
+        fun pass(drive: CloudDrive, full: Boolean = false) = CloudSyncPass(this, drive, now).run(full)
 
         private fun links(operations: Collection<SyncOperationEntity>) =
             operations.map { ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) }
@@ -290,6 +614,7 @@ class CloudSyncPassTest {
             return SyncProgress(IncomingChain.received(applied, emptyList(), links(queued.values)), applied)
         }
         override fun recordPeerProgress(deviceId: String, progress: SyncProgress) {
+            check(!refuseProgress) { "Older than the Wi-Fi report" }
             progress.validate()
             require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })
             peerProgress[deviceId] = progress
@@ -307,10 +632,38 @@ class CloudSyncPassTest {
         override fun heldOperations(author: String, after: Long, limit: Int) =
             held.values.filter { it.deviceId == author && it.sequence > after }.sortedBy { it.sequence }.take(limit)
         override fun recordPeerSeen(deviceId: String, at: Long) { seen[deviceId] = maxOf(seen[deviceId] ?: 0L, at) }
+        override fun recordPeerFeatures(deviceId: String, features: Set<String>) { this.features[deviceId] = features }
         override fun cloudState() = state
         override fun updateCloudState(transform: (CloudSyncState) -> CloudSyncState) { state = transform(state) }
         override fun cloudFiles() = cached
         override fun saveCloudFiles(files: List<CloudFile>) { cached = files }
+        override fun signProgress(bytes: ByteArray): ByteArray? = seed?.let { DeviceIdentityCrypto.sign(it, bytes) }
+        override fun ownKeyStatement(): KeyStatement? = seed?.let { own ->
+            KeyStatement.create(mirror.vaultId, mirror.localDeviceId, EpochKeys.x25519Public(EpochKeys.x25519Private(own))) {
+                DeviceIdentityCrypto.sign(own, it) }
+        }?.also { mirror = mirror.copy(keyStatements = mirror.keyStatements + (mirror.localDeviceId to it)) }
+        override fun acceptKeyStatement(statement: KeyStatement): Boolean {
+            val member = mirror.members.firstOrNull { it.deviceId == statement.deviceId && it.status == MemberStatus.ACTIVE.name } ?: return false
+            if (!statement.valid(mirror.vaultId, member.identityPublicKey)) return false
+            mirror = mirror.copy(keyStatements = mirror.keyStatements + (statement.deviceId to statement))
+            return true
+        }
+        /** As [LockedSyncStore.acceptKeyPackages]: keeps valid sets, never replaces one, opens its own package. */
+        override fun acceptKeyPackages(sets: List<PackageSet>): Boolean {
+            val verified = SyncMembershipManager.verify(mirror.membershipEvents.map { it.toEvent() })
+            var learned = false
+            for (set in sets) {
+                if (!EpochKeyRotation.validSet(set, mirror.vaultId, verified) || mirror.keyPackages.containsKey(set.epoch.toString())) continue
+                mirror = mirror.copy(keyPackages = mirror.keyPackages + (set.epoch.toString() to set))
+                val sealed = set.packages[mirror.localDeviceId]?.let(EpochKeys::strictDecode) ?: continue
+                val opened = EpochKeys.open(mirror.vaultId, set.epoch, mirror.localDeviceId, EpochKeys.x25519Private(seed!!), sealed) ?: continue
+                mirror = mirror.copy(transportSecrets = mirror.transportSecrets + (set.epoch.toString() to
+                    Base64.getUrlEncoder().withoutPadding().encodeToString(opened.first)))
+                learned = true
+            }
+            return learned
+        }
+        override fun keyPackages() = mirror.keyPackages.values.sortedBy { it.epoch }
         override fun answerDriveLeave(request: LeaveRequest, signature: ByteArray): Boolean {
             val decision = LeaveRequestHandler.handleFromDrive(request, signature, mirror.membershipEvents.map { it.toEvent() },
                 setOf(mirror.keyEpoch), mirror.localDeviceId, V.CREATED_AT + 60_000,

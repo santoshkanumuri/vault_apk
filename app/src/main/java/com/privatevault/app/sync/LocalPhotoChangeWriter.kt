@@ -34,6 +34,14 @@ internal class LocalPhotoChangeWriter(private val database: VaultDatabase,
 
     private suspend fun write(photo: VaultPhoto, vaultKey: ByteArray, kind: ChangeKind,
         coverOnly: Boolean = false, alreadyDeleted: Boolean = false) {
+        // The blob is sealed before the transaction; new keys that arrive meanwhile seal it again (L4).
+        repeat(3) { if (attempt(photo, vaultKey, kind, coverOnly, alreadyDeleted)) return }
+        error("Sync keys changed while saving a photo")
+    }
+
+    /** False when the keys this device writes with changed after the blob was sealed: nothing was stored. */
+    private suspend fun attempt(photo: VaultPhoto, vaultKey: ByteArray, kind: ChangeKind,
+        coverOnly: Boolean, alreadyDeleted: Boolean): Boolean {
         require(vaultKey.size == 32)
         val device = identity.getOrCreate()
         val settings = requireNotNull(database.dao().settings())
@@ -41,16 +49,22 @@ internal class LocalPhotoChangeWriter(private val database: VaultDatabase,
         val ref = if (kind == ChangeKind.UPSERT && !coverOnly) {
             val blobs = requireNotNull(blobs)
             val known = database.syncDao().attachment(photo.id)
-            if (known?.encryptedFileName == photo.encryptedFileName &&
-                blobs.has(PhotoBlobRef(known.ciphertextHash, known.sizeBytes)))
-                PhotoBlobRef(known.ciphertextHash, known.sizeBytes)
-            else {
-                val key = database.syncContentKey(vaultKey)
-                try { blobs.create(requireNotNull(photos), photo.encryptedFileName, vaultKey, key, vaultId, photo.id) }
-                finally { key.fill(0) }
-            }
+            val keyring = database.syncKeyring(vaultKey)
+            try {
+                val writing = keyring.writing()
+                if (known?.encryptedFileName == photo.encryptedFileName && known.keyEpoch == writing.epoch &&
+                    blobs.has(PhotoBlobRef(known.ciphertextHash, known.sizeBytes)))
+                    PhotoBlobRef(known.ciphertextHash, known.sizeBytes, writing.epoch)
+                else blobs.create(requireNotNull(photos), photo.encryptedFileName, vaultKey, writing.key, vaultId, photo.id)
+                    .copy(keyEpoch = writing.epoch)
+            } finally { keyring.wipe() }
         } else null
-        database.withTransaction {
+        return database.withTransaction {
+            if (ref != null) {
+                val keyring = database.syncKeyring(vaultKey)
+                val epoch = try { keyring.writing().epoch } finally { keyring.wipe() }
+                if (epoch != ref.keyEpoch) return@withTransaction false
+            }
             database.requireLocalSyncAuthor(vaultId, device.deviceId)
             val dao = database.syncDao()
             val existing = database.dao().photo(photo.id)
@@ -74,26 +88,16 @@ internal class LocalPhotoChangeWriter(private val database: VaultDatabase,
                 else if (coverOnly) put("coverPhotoId", photo.id)
                 else put("photo", JSONObject().put("id", savedPhoto.id).put("entryId", savedPhoto.entryId)
                     .put("isCover", savedPhoto.isCover).put("addedAt", savedPhoto.addedAt)
-                    .put("blobHash", ref!!.hash).put("blobSize", ref.size))
+                    .put("blobHash", ref!!.hash).put("blobSize", ref.size)
+                    // A blob of epoch N >= 2 is sealed with K(N) ([EpochKeys]); epoch 1 photos say nothing, as before.
+                    .apply { if (ref.keyEpoch > 1L) put("keyEpoch", ref.keyEpoch) })
             }.toString().toByteArray(Charsets.UTF_8)
-            val key = database.syncContentKey(vaultKey)
-            val nonce = ByteArray(12).also(SecureRandom()::nextBytes)
-            val payloadKey = Mac.getInstance("HmacSHA256").run {
-                init(SecretKeySpec(key, "HmacSHA256"))
-                doFinal("nuvori-sync-payload-key-v1".toByteArray(Charsets.UTF_8))
-            }
-            val encrypted = try {
-                Cipher.getInstance("AES/GCM/NoPadding").run {
-                    init(Cipher.ENCRYPT_MODE, SecretKeySpec(payloadKey, "AES"), GCMParameterSpec(128, nonce))
-                    updateAAD("nuvori-sync-$entityType-v1:$vaultId:$mutation:$entityId".toByteArray(Charsets.UTF_8))
-                    doFinal(plain)
-                }
-            } finally { plain.fill(0); key.fill(0); payloadKey.fill(0) }
-            val encoder = Base64.getUrlEncoder().withoutPadding()
+            val sealed = try { SyncPayloadCrypto.sealFor(database, vaultKey, entityType, vaultId, mutation, entityId, plain) }
+                finally { plain.fill(0) }
             val change = SyncChangeRecord.createSigned(vaultId, device.deviceId,
                 Math.addExact(head?.sequence ?: 0L, 1L), head?.hash ?: GENESIS_HASH,
                 mutation, entityType, entityId, kind, state?.revision ?: 0L, version,
-                Instant.now().toString(), encoder.encodeToString(encrypted), encoder.encodeToString(nonce), identity::sign)
+                Instant.now().toString(), sealed.ciphertext, sealed.nonce, identity::sign)
             if (kind == ChangeKind.DELETE) {
                 if (!alreadyDeleted) database.dao().deletePhoto(photo)
                 dao.deleteAttachmentManifest(photo.id)
@@ -104,7 +108,7 @@ internal class LocalPhotoChangeWriter(private val database: VaultDatabase,
                 database.dao().insertPhoto(savedPhoto)
                 if (existing == null && savedPhoto.isCover) database.dao().setPhotoCover(savedPhoto)
                 dao.upsertAttachmentManifest(SyncAttachmentManifestEntity(photo.id, "entry", photo.entryId,
-                    photo.encryptedFileName, ref!!.hash, ref.size, 1))
+                    photo.encryptedFileName, ref!!.hash, ref.size, ref.keyEpoch))
             }
             dao.insertOperation(SyncOperationEntity(change.mutationId, change.formatVersion, change.vaultId,
                 change.deviceId, change.sequence, change.previousHash, change.entityType, change.entityId,
@@ -113,6 +117,7 @@ internal class LocalPhotoChangeWriter(private val database: VaultDatabase,
             dao.upsertDeviceHead(SyncDeviceHeadEntity(vaultId, device.deviceId, change.sequence, change.hash))
             dao.upsertRecordState(SyncRecordStateEntity(entityType, entityId,
                 change.baseRevision + 1L, version.toJson()))
+            true
         }
     }
 }

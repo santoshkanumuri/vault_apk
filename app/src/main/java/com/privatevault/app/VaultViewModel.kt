@@ -1,9 +1,13 @@
 package com.privatevault.app
 
+import com.privatevault.app.sync.markManagerLost
+import com.privatevault.app.sync.clearManagerLost
+import com.privatevault.app.sync.startGroupAfterLostManager
 import com.privatevault.app.sync.removeOnlyPairedDevice
 import com.privatevault.app.sync.leaveSyncGroup
 import com.privatevault.app.sync.leaveRemovedSyncGroup
 import com.privatevault.app.sync.prepareLeaveNotice
+import com.privatevault.app.sync.reconcileDeviceIdentity
 import com.privatevault.app.sync.removeSyncMember
 import com.privatevault.app.sync.offerAuthorityTransfer
 import com.privatevault.app.sync.acceptAuthorityTransfer
@@ -35,6 +39,9 @@ import com.privatevault.app.security.PasswordColumnMappingRequired
 import com.privatevault.app.security.PasswordColumnPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -45,7 +52,7 @@ import kotlinx.coroutines.launch
 import javax.crypto.Cipher
 import java.util.UUID
 
-enum class LockReason { STARTUP, BACKGROUND, INACTIVITY, SCREEN_OFF, MANUAL }
+enum class LockReason { STARTUP, BACKGROUND, INACTIVITY, SCREEN_OFF, MANUAL, RESTORED }
 
 data class AuthorityTransferState(val targetDeviceId: String, val accepted: Boolean)
 
@@ -130,6 +137,8 @@ internal data class PasswordImportMappingRequest(
 private const val DRIVE_BACKUP_FIRST_CHECK_MS = 20_000L
 /** How often an unlocked, visible vault checks whether a Google Drive backup is due. */
 private const val DRIVE_BACKUP_CHECK_MS = 5 * 60_000L
+/** The main screen's hold on the synced website icons in memory. */
+private const val SITE_ICON_CACHE_OWNER = "vault"
 
 class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val keyManager = VaultKeyManager(application)
@@ -164,6 +173,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val localSyncDevice = _localSyncDevice.asStateFlow()
     private val _canRemoveOnlyPeer = MutableStateFlow(false)
     val canRemoveOnlyPeer = _canRemoveOnlyPeer.asStateFlow()
+    /** "Mark as lost" on this device: the managing device it froze the group against, or null. */
+    private val _lostManager = MutableStateFlow<com.privatevault.app.data.SyncLostManagerEntity?>(null)
+    val lostManager = _lostManager.asStateFlow()
     private val _syncManagerDeviceId = MutableStateFlow<String?>(null)
     val syncManagerDeviceId = _syncManagerDeviceId.asStateFlow()
     private val _authorityTransfer = MutableStateFlow<AuthorityTransferState?>(null)
@@ -201,6 +213,33 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             lockedSyncStore.progress().received, mirror.peerProgress).map { it.displayName.ifBlank { "A paired device" } }
     }.getOrDefault(emptyList())
 
+    /**
+     * Devices that block new sync keys at a removal of [deviceId]: they never sent a signed key
+     * statement (an older Nuvori, or not synced since the update). Empty when the keys change.
+     */
+    fun devicesNeedingUpdateForRemoval(deviceId: String): List<String> = runCatching {
+        val mirror = lockedSyncStore.snapshot() ?: return emptyList()
+        val verified = com.privatevault.app.sync.SyncMembershipManager.verify(mirror.membershipEvents.map { it.toEvent() })
+        com.privatevault.app.sync.EpochKeyRotation.missingStatements(verified, deviceId, mirror.localDeviceId, mirror.keyStatements)
+            .map { id -> mirror.members.firstOrNull { it.deviceId == id }?.displayName?.ifBlank { null } ?: "A paired device" }
+    }.getOrDefault(emptyList())
+
+    /**
+     * A device that has not synced for months and holds back the cleanup of old sync history, with
+     * the suggestion text ([com.privatevault.app.sync.HistoryCompaction.blockingSuggestion]). Only a
+     * suggestion: nothing is removed automatically.
+     */
+    fun syncCleanupSuggestion(now: Long = System.currentTimeMillis()): Pair<String, String>? = runCatching {
+        val mirror = lockedSyncStore.snapshot() ?: return null
+        com.privatevault.app.sync.HistoryCompaction.blockingSuggestion(mirror.localDeviceId, mirror.members,
+            lockedSyncStore.progress().applied.mapValues { it.value.sequence },
+            mirror.peerProgress.mapValues { (_, progress) -> progress.applied.mapValues { it.value.sequence } },
+            mirror.members.associate { it.deviceId to deviceSyncContact(it.deviceId).let { (contact, exchange) -> maxOf(contact, exchange) } }, now)
+    }.getOrNull()
+
+    /** True while changes wait for new sync keys from the managing device ([com.privatevault.app.sync.EpochKeys]). */
+    fun waitingForSyncKeys(): Boolean = lockedSyncStore.waitingForKeys()
+
     internal fun deviceSyncCounts(deviceId: String): com.privatevault.app.sync.PeerSyncCounts {
         val mirror = lockedSyncStore.snapshot() ?: return com.privatevault.app.sync.PeerSyncCounts(0, 0, 0, 0)
         return com.privatevault.app.sync.peerSyncCounts(mirror.localDeviceId, deviceId,
@@ -231,6 +270,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private var preparedRestore: com.privatevault.app.backup.PreparedRestore? = null
     private val _restoreSummary = MutableStateFlow<String?>(null)
     val restoreSummary = _restoreSummary.asStateFlow()
+    /** What the reviewed restore does to this device's sync group, shown before "Replace vault". */
+    private val _restoreSyncImpact = MutableStateFlow(com.privatevault.app.backup.RestoreSyncImpact.NONE)
+    internal val restoreSyncImpact = _restoreSyncImpact.asStateFlow()
+    /** True when another Android device can take the managing role before a restore. */
+    private val _restoreCanMoveRole = MutableStateFlow(false)
+    internal val restoreCanMoveRole = _restoreCanMoveRole.asStateFlow()
     private var pendingLoginRequests = emptyList<LoginImportRequest>()
     private var pendingPasswordImportUri: Uri? = null
     private val _importPreview = MutableStateFlow<PasswordImportPreview?>(null)
@@ -332,7 +377,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             val imported = db.dao().importPasskeys(pendingTransferredPasskeys)
             val writer = com.privatevault.app.sync.LocalPasskeyChangeWriter(db, deviceIdentityStore)
             db.dao().allPasskeys().filter { it.id !in before }.forEach {
-                writer.recordSaved(it, requireNotNull(sessionKey))
+                writer.recordSaved(it, requireNotNull(sessionKey), preview.exporter)
             }
             imported
         }
@@ -454,6 +499,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         preparedRestore?.close()
         preparedRestore = null
         _restoreSummary.value = null
+        _restoreSyncImpact.value = com.privatevault.app.backup.RestoreSyncImpact.NONE
+        _restoreCanMoveRole.value = false
     }
     private var pendingCameraFile: java.io.File? = null
     private var pendingCameraUri: Uri? = null
@@ -484,6 +531,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         externalFlowActive = false
         val uri = pendingCameraUri
         try {
+            if (success && _status.value !is VaultStatus.Unlocked) notify(PickerResults.lockedNotice(PickerAction.PHOTO, true), StatusKind.WARNING)
             if (success && uri != null && _status.value is VaultStatus.Unlocked) addPhoto(entryId, uri).join()
         } finally { clearCamera() }
     }
@@ -507,6 +555,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val entries = _entries.asStateFlow()
     private val _passkeys = MutableStateFlow<List<com.privatevault.app.data.PasskeySummary>>(emptyList())
     val passkeys = _passkeys.asStateFlow()
+    /** The passkeys page: public details, creating apps, the ledger and this device's use counts. */
+    private val _passkeyPage = MutableStateFlow(PasskeyPageData())
+    internal val passkeyPage = _passkeyPage.asStateFlow()
     private val _groups = MutableStateFlow<List<VaultGroup>>(emptyList())
     val groups = _groups.asStateFlow()
     private val _notice = MutableStateFlow<UserNotice?>(null)
@@ -520,8 +571,40 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
     private val _requestDailyBiometric = MutableStateFlow(false)
     val requestDailyBiometric = _requestDailyBiometric.asStateFlow()
+    /** True while the master password is being checked (Argon2id, about one second). */
+    private val _checkingPassword = MutableStateFlow(false)
+    val checkingPassword = _checkingPassword.asStateFlow()
 
     var externalFlowActive = false
+
+    /** A file chosen while the vault locked. It waits for the next unlock; see [pickerReturned]. */
+    private val _pendingPick = MutableStateFlow<PendingPick?>(null)
+    internal val pendingPick = _pendingPick.asStateFlow()
+
+    /**
+     * Call first in every picker result. Returns true when the vault is open and [uri] is set, so the
+     * caller continues. When the vault locked while the picker was open, a resumable [action] keeps
+     * only the chosen address for after unlock, and the lock screen says what happened.
+     */
+    internal fun pickerReturned(action: PickerAction, uri: Uri?): Boolean {
+        externalFlowActive = false
+        if (_status.value is VaultStatus.Unlocked) return uri != null
+        if (uri != null && action.resumable) _pendingPick.value = PendingPick(action, uri)
+        if (uri != null || action == PickerAction.OTHER) notify(PickerResults.lockedNotice(action, uri != null), StatusKind.WARNING)
+        return false
+    }
+
+    /** Like [pickerReturned] for a screen that returns no file: false, with a notice, when the vault locked meanwhile. */
+    internal fun externalScreenReturned(): Boolean = _status.value is VaultStatus.Unlocked || pickerReturned(PickerAction.OTHER, null)
+
+    /** Takes the file chosen while the vault was locked, once, when the vault is open again. */
+    internal fun takePendingPick(): PendingPick? {
+        if (_status.value !is VaultStatus.Unlocked) return null
+        val pick = _pendingPick.value ?: return null
+        _pendingPick.value = null
+        _notice.value?.takeIf { it.text == PickerResults.lockedNotice(pick.action, true) }?.let(::clearNotice)
+        return pick
+    }
     private val preferences = application.getSharedPreferences("vault_preferences", Application.MODE_PRIVATE)
     private val _lightMode = MutableStateFlow(preferences.getBoolean("light_mode", false))
     val lightMode = _lightMode.asStateFlow()
@@ -568,6 +651,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 if (database === db && com.privatevault.app.sync.AppearanceSync.flush(getApplication(), db,
                         deviceIdentityStore, lockedSyncStore, key))
+                    com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
+                // Sign-in method deletes that waited for the same kind of gate go out on the same ticks.
+                if (database === db && com.privatevault.app.sync.SignInMethodSync.flush(db, deviceIdentityStore, lockedSyncStore, key))
                     com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             // The value stays pending; the next sync pass or unlock tries again.
@@ -717,7 +803,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun consumeNfcResult() { _nfcResult.value = null }
 
     fun setup(password: CharArray, enableNfc: Boolean = false) = viewModelScope.launch {
-        runCatching { keyManager.create(password) }
+        if (_checkingPassword.value) { password.fill('\u0000'); return@launch }
+        _checkingPassword.value = true
+        // Argon2id takes about a second: keep it off the main thread.
+        runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.create(password) } }
             .onSuccess {
                 open(it)
                 setNfcEnabled(enableNfc)
@@ -725,16 +814,36 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             }
             .onFailure { notify(it.userMessage("Could not create the vault"), StatusKind.ERROR) }
         password.fill('\u0000')
+        _checkingPassword.value = false
     }
 
     fun unlock(password: CharArray) = viewModelScope.launch {
-        runCatching { keyManager.unlock(password) }
+        if (_checkingPassword.value) { password.fill('\u0000'); return@launch }
+        _checkingPassword.value = true
+        runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.unlock(password) } }
             .onSuccess {
+                // An earlier wrong-password error must not stay on screen inside the unlocked vault.
+                _notice.value?.takeIf { n -> n.text == wrongMasterPassword }?.let(::clearNotice)
                 open(it)
                 _requestDailyBiometric.value = _securitySettings.value.masterPasswordIntervalMs > 0
+                strengthenDriveBackupKey(password.copyOf(), it.copyOf())
             }
-            .onFailure { notify("The master password is incorrect.", StatusKind.ERROR) }
+            .onFailure {
+                val newer = it is com.privatevault.app.security.UnsupportedVaultFormatException
+                notify(if (newer) it.message.orEmpty() else wrongMasterPassword, StatusKind.ERROR)
+            }
         password.fill('\u0000')
+        _checkingPassword.value = false
+    }
+
+    private val wrongMasterPassword = "The master password is incorrect."
+
+    /** In the background after an unlock: moves an older Drive backup key to the timed settings. */
+    private fun strengthenDriveBackupKey(password: CharArray, vaultKey: ByteArray) = viewModelScope.launch {
+        try { com.privatevault.app.backup.DriveBackupRunner.strengthenKey(getApplication(), password, vaultKey) }
+        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { /* The old key keeps working; the next unlock tries again. */ }
+        finally { password.fill('\u0000'); vaultKey.fill(0) }
     }
 
     fun requireMasterPasswordForBiometric() {
@@ -756,6 +865,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         sessionKey = key
         database = VaultDatabase.open(getApplication(), key)
         dao().convertCardFoldersToGroups()
+        // Recently deleted keeps items for 30 days on this phone; older copies go now.
+        runCatching { dao().purgeTrash() }
         val storedOptions = dao().settings()
         val options = when {
             storedOptions == null -> com.privatevault.app.data.VaultSettings(vaultId = UUID.randomUUID().toString())
@@ -781,6 +892,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _securitySettings.value = options
         _status.value = VaultStatus.Unlocked
         refresh()
+        // Website icons other devices shared: in memory only while unlocked. Icons of sites without a login or
+        // passkey are deleted first.
+        viewModelScope.launch {
+            val icons = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { com.privatevault.app.data.SiteIconPurge.purge(db) }
+                    .recoverCatching { db.syncedSiteIcons().all() }.getOrDefault(emptyList())
+            }
+            if (database === db && _status.value is VaultStatus.Unlocked)
+                com.privatevault.app.sync.SyncedSiteIconCache.open(SITE_ICON_CACHE_OWNER, icons)
+        }
         val retained = _entries.value.flatMap { it.photos }.flatMap { listOf(it.encryptedFileName, it.encryptedThumbnailFileName) }.toSet()
         photoStore.cleanupAbandonedRestore(retained)
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -789,6 +910,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         touch()
         incomingSyncJob?.cancel()
         incomingSyncJob = viewModelScope.launch {
+            // Finishes a device identity change that a leave started but did not complete.
+            if (runCatching { db.reconcileDeviceIdentity(deviceIdentityStore) }.getOrDefault(false))
+                runCatching { lockedSyncStore.publish(db) }
             completeRemovalIfNeeded(db)
             while (database === db && _status.value is VaultStatus.Unlocked) {
                 kotlinx.coroutines.delay(5_000)
@@ -906,10 +1030,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _entries.value = emptyList()
         lastWatchAccounts = null
         _passkeys.value = emptyList()
+        _passkeyPage.value = PasskeyPageData()
+        com.privatevault.app.sync.SyncedSiteIconCache.close(SITE_ICON_CACHE_OWNER)
         _groups.value = emptyList()
         _pairedDevices.value = emptyList()
         _localSyncDevice.value = null
         _canRemoveOnlyPeer.value = false
+        _lostManager.value = null
         _syncManagerDeviceId.value = null
         _authorityTransfer.value = null
         _canHostDevicePairing.value = false
@@ -958,20 +1085,30 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val now = android.os.SystemClock.elapsedRealtime()
         if (externalFlowActive) externalReturnPending = true
         val deadline = com.privatevault.app.security.backgroundLockDeadline(now, inactivityDeadline, externalFlowActive, _securitySettings.value.backgroundTimeoutMs)
+        // A picker that Nuvori opened counts as time in the app: only [deadline] may lock, not the inactivity timer.
+        if (externalFlowActive) inactivityJob?.cancel()
         externalFlowActive = false
         backgroundDeadline = deadline
         if (deadline <= now) { lock(LockReason.BACKGROUND); return }
         backgroundJob?.cancel()
+        val pickerOpen = externalReturnPending
         backgroundJob = viewModelScope.launch {
             delay((deadline - now).coerceAtLeast(0L))
-            lock(LockReason.BACKGROUND)
+            // The picker limit ended: say "after inactivity", as the person never left Nuvori.
+            lock(if (pickerOpen) LockReason.INACTIVITY else LockReason.BACKGROUND)
         }
     }
 
     fun onAppForegrounded() {
         val now = android.os.SystemClock.elapsedRealtime()
+        // Back from a picker that Nuvori opened, in time: the time in the picker counted as activity.
+        if (_status.value is VaultStatus.Unlocked && externalReturnPending && backgroundDeadline?.let { now < it } == true) {
+            lastActivityElapsed = now
+            inactivityDeadline = now + _securitySettings.value.inactivityTimeoutMs
+            externalReturnPending = false
+        }
         if (_status.value is VaultStatus.Unlocked && now >= inactivityDeadline) lock(LockReason.INACTIVITY)
-        if (backgroundDeadline?.let { now >= it } == true) lock(LockReason.BACKGROUND)
+        if (backgroundDeadline?.let { now >= it } == true) lock(if (externalReturnPending) LockReason.INACTIVITY else LockReason.BACKGROUND)
         backgroundJob?.cancel()
         backgroundDeadline = null
         backgrounded = false
@@ -1051,7 +1188,49 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             })
     }
 
-    fun refreshPasskeys() = securedLaunch { _passkeys.value = dao().passkeySummaries() }
+    fun refreshPasskeys() = securedLaunch {
+        _passkeys.value = dao().passkeySummaries()
+        val history = requireNotNull(database).passkeyHistory()
+        val usage = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.privatevault.app.security.ItemUsageStore.snapshot(getApplication())
+        }
+        _passkeyPage.value = PasskeyPageData(history.passkeyInfos(), history.origins().associateBy { it.passkeyId },
+            history.recent(com.privatevault.app.data.PasskeyOrigins.MAX_EVENTS), usage)
+    }
+
+    /** Empties the passkey ledger on this device. The passkeys and their creating apps stay. */
+    fun clearPasskeyHistory() = securedLaunch("Could not clear the passkey history.") {
+        requireNotNull(database).passkeyHistory().clear()
+        refreshPasskeys()
+        notify("Passkey history cleared", StatusKind.SUCCESS)
+    }
+
+    /**
+     * Sign-in methods that Nuvori for Windows remembered and sync brought here, most recently used first. Empty while
+     * the vault is locked. Collect it only from unlocked screens.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    internal val signInMethods: kotlinx.coroutines.flow.StateFlow<List<com.privatevault.app.data.SignInMethod>> by lazy {
+        _status.flatMapLatest { status ->
+            val db = database
+            if (status !is VaultStatus.Unlocked || db == null) kotlinx.coroutines.flow.flowOf(emptyList())
+            else db.signInMethods().observe().catch { emit(emptyList()) }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), emptyList())
+    }
+
+    /** Forgets one sign-in method here and in the sync group (a delete waits while the group cannot read it yet). */
+    fun deleteSignInMethod(method: com.privatevault.app.data.SignInMethod) = securedLaunch("Could not forget that sign-in method.") {
+        val db = requireNotNull(database) { "Vault is locked" }
+        val key = requireNotNull(sessionKey).copyOf()
+        val written = try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.privatevault.app.sync.SignInMethodSync.delete(db, deviceIdentityStore, lockedSyncStore, key, method)
+            }
+        } finally { key.fill(0) }
+        if (written) com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
+        notify("Sign-in method forgotten", StatusKind.SUCCESS)
+    }
+
     fun deletePasskey(id: String) = securedLaunch("Could not delete that passkey.") {
         val passkey = requireNotNull(dao().allPasskeys().firstOrNull { it.id == id }) { "Passkey is missing" }
         com.privatevault.app.sync.LocalPasskeyChangeWriter(requireNotNull(database), deviceIdentityStore)
@@ -1206,6 +1385,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     internal suspend fun finishDraftCamera(success: Boolean): DraftPhoto? {
         externalFlowActive = false
+        if (success && _status.value !is VaultStatus.Unlocked) notify(PickerResults.lockedNotice(PickerAction.PHOTO, true), StatusKind.WARNING)
         return try {
             if (success && _status.value is VaultStatus.Unlocked) pendingCameraUri?.let { stagePhoto(it) } else null
         } finally { clearCamera() }
@@ -1285,7 +1465,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             require(db.syncDao().activeMembershipCount(vaultId) <= 1) {
                 "Master password changes are unavailable while devices share a vault. Remove paired devices first."
             }
-            keyManager.changePassword(current, replacement)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.changePassword(current, replacement) }
             biometricGate.clearDailySession()
             _requestDailyBiometric.value = true
             val driveBackup = com.privatevault.app.backup.DriveBackupRunner.status.value.enabled
@@ -1306,7 +1486,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun exportBackup(uri: Uri, password: CharArray) = securedLaunch("Could not create the backup. Check your master password and the chosen location.") {
         try {
             // Authenticate before opening/truncating the chosen destination.
-            keyManager.unlock(password).fill(0)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.unlock(password).fill(0) }
             val output = requireNotNull(getApplication<Application>().contentResolver.openOutputStream(uri, "w"))
             output.use { VaultBackupManager(getApplication(), dao(), photoStore).export(it, password, requireNotNull(sessionKey)) }
             notify("Encrypted backup created.", StatusKind.SUCCESS)
@@ -1324,17 +1504,81 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             if (sessionKey !== activeKey || _status.value !is VaultStatus.Unlocked) { prepared.close(); return@securedLaunch }
             preparedRestore = prepared
             val data = prepared.data
-            _restoreSummary.value = "Validated ${data.entries.size} entries, ${data.groups.size} groups, ${data.photos.size} photos, ${data.passkeys.size} passkeys, and ${data.entries.count { it.type == com.privatevault.app.data.EntryType.AUTHENTICATOR }} authenticators. Replace this vault? Restoring creates a separate vault identity. Paired devices will need to be connected again."
+            showRestoreReview(data)
         } finally {
             password.fill('\u0000')
         }
     }
 
+    /** The restore review: what the backup holds and what happens to this device's sync group. */
+    private suspend fun showRestoreReview(data: com.privatevault.app.backup.BackupData) {
+        val impact = currentRestoreSyncImpact()
+        val localId = deviceIdentityStore.getOrCreate().deviceId
+        _restoreSyncImpact.value = impact
+        _restoreCanMoveRole.value = impact.role == com.privatevault.app.backup.RestoreGroupRole.MANAGER &&
+            managingRoleCandidates(_pairedDevices.value).any { it.deviceId != localId }
+        _restoreSummary.value = com.privatevault.app.backup.RestoreReview.contents(data.entries.size,
+            data.entries.count { it.type == com.privatevault.app.data.EntryType.AUTHENTICATOR },
+            data.groups.size, data.photos.size, data.passkeys.size) + " " +
+            com.privatevault.app.backup.RestoreReview.syncNote(impact)
+    }
+
+    private suspend fun currentRestoreSyncImpact(): com.privatevault.app.backup.RestoreSyncImpact {
+        val db = database ?: return com.privatevault.app.backup.RestoreSyncImpact.NONE
+        val vaultId = db.dao().settings()?.vaultId ?: return com.privatevault.app.backup.RestoreSyncImpact.NONE
+        return com.privatevault.app.backup.RestoreReview.syncImpact(
+            db.syncDao().membershipEvents(vaultId).map { it.toEvent() }, deviceIdentityStore.getOrCreate().deviceId)
+    }
+
+    /** What [leaveGroupBeforeRestore] did: a signed leave request saved, and the local split done. */
+    private data class RestoreLeave(val requestSaved: Boolean, val split: Boolean)
+
+    /**
+     * Before a restore replaces the vault, this device leaves its sync group the way "Leave the group"
+     * does: a member first signs a leave request (sent later over Wi-Fi and Google Drive), so the
+     * managing device removes it and the others learn; then the local split gives this device a new
+     * identity, so it can pair with the old group again. The managing device has nobody to ask.
+     */
+    private suspend fun leaveGroupBeforeRestore(): RestoreLeave {
+        val role = currentRestoreSyncImpact().role
+        if (role == com.privatevault.app.backup.RestoreGroupRole.NONE) return RestoreLeave(false, false)
+        val db = requireNotNull(database)
+        var saved = false
+        if (role == com.privatevault.app.backup.RestoreGroupRole.MEMBER) {
+            val vaultId = requireNotNull(db.dao().settings()).vaultId
+            val mirror = lockedSyncStore.snapshot()
+            val addresses = mirror?.peerAddresses?.filterKeys { id -> id !in mirror.clientOnlyPeers }?.values?.toList().orEmpty()
+            val notice = db.prepareLeaveNotice(deviceIdentityStore, addresses, com.privatevault.app.sync.LanSyncService.syncPort(vaultId))
+            // Sealed for Google Drive while this device still holds the group keys.
+            val drive = runCatching { com.privatevault.app.sync.CloudSyncRunner.leaveFile(lockedSyncStore, notice) }.getOrNull()
+            lockedSyncStore.savePendingLeave(if (drive == null) notice else notice.copy(driveName = drive.first,
+                driveFile = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(drive.second)))
+            saved = true
+        }
+        // The restore replaces every sync table anyway; only the new identity matters here. Unresolved
+        // conflicts can refuse the split, and the restore then goes on with the current identity.
+        val split = runCatching { db.leaveSyncGroup(deviceIdentityStore) }.isSuccess
+        return RestoreLeave(saved, split)
+    }
+
     fun confirmRestore() = securedLaunch("Could not restore the backup.") {
         val prepared = preparedRestore ?: return@securedLaunch
-        VaultBackupManager(getApplication(), dao(), photoStore).commitRestore(prepared)
         getApplication<Application>().stopService(android.content.Intent(getApplication(), com.privatevault.app.sync.LanSyncService::class.java))
+        val leave = leaveGroupBeforeRestore()
+        try { VaultBackupManager(getApplication(), dao(), photoStore).commitRestore(prepared) }
+        catch (failure: Exception) {
+            // Without the split, nothing changed: this device stays in its group and asks nobody to remove it.
+            // After the split, it already left: its new group is published.
+            if (leave.requestSaved && !leave.split) lockedSyncStore.clearPendingLeave()
+            if (leave.split) { lockedSyncStore.clear(); runCatching { lockedSyncStore.publish(requireNotNull(database)) } }
+            throw failure
+        }
         lockedSyncStore.clear()
+        if (leave.requestSaved) {
+            // The service and the Drive pass deliver the saved leave request (it survives clear()).
+            runCatching { com.privatevault.app.sync.LanSyncService.start(getApplication()) }
+            com.privatevault.app.sync.CloudSyncRunner.request(getApplication())
+        }
         _lightMode.value = prepared.data.lightMode
         // Backups made before Nuvori 2.2.4 have no colors; the vault then keeps the colors of this device.
         prepared.data.appearanceAccent?.let { accent -> prepared.data.appearanceSurface?.let { surface ->
@@ -1346,7 +1590,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         biometricGate.clearDailySession()
         cancelRestore()
         notify("Backup restored as a separate vault. Use this vault's master password to unlock, then set up fingerprint and reconnect paired devices.", StatusKind.SUCCESS)
-        lock(LockReason.BACKGROUND)
+        lock(LockReason.RESTORED)
     }
 
     /**
@@ -1449,7 +1693,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 _driveBackups.value = null
                 preparedRestore = prepared
                 val data = prepared.data
-                _restoreSummary.value = "Validated ${data.entries.size} entries, ${data.groups.size} groups, ${data.photos.size} photos, ${data.passkeys.size} passkeys, and ${data.entries.count { it.type == com.privatevault.app.data.EntryType.AUTHENTICATOR }} authenticators. Replace this vault? The restored vault gets a new identity and does not join any sync group."
+                showRestoreReview(data)
             } finally {
                 temporary.delete()
                 password.fill('\u0000')
@@ -1485,6 +1729,63 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             .save(entry, groupIds, requireNotNull(sessionKey))
     }
 
+    // Previous passwords and Recently deleted: kept on this phone only (PasswordHistoryEntry, TrashedEntry).
+
+    private val _trash = MutableStateFlow<List<com.privatevault.app.data.TrashedEntry>>(emptyList())
+    val trash = _trash.asStateFlow()
+
+    /** A login's earlier passwords, newest first. Empty while the vault is locked. */
+    suspend fun passwordHistory(entryId: String): List<com.privatevault.app.data.PasswordHistoryEntry> =
+        database?.dao()?.passwordHistory(entryId).orEmpty()
+
+    fun clearPasswordHistory(entryId: String, done: () -> Unit = {}) = securedLaunch("Could not clear the previous passwords.") {
+        dao().clearPasswordHistory(entryId)
+        done()
+        notify("Previous passwords cleared", StatusKind.SUCCESS)
+    }
+
+    fun loadTrash() = securedLaunch("Could not open Recently deleted.") { _trash.value = dao().trash() }
+
+    /**
+     * Restores a deleted entry as a new entry (new ID), through the normal signed change, so it
+     * syncs to paired devices like any new item. It goes back into folders that still exist and
+     * take its type, and keeps its previous passwords. Photos were not kept.
+     */
+    fun restoreTrashed(item: com.privatevault.app.data.TrashedEntry) = securedLaunch("Could not restore that item.") {
+        val db = requireNotNull(database) { "Vault is locked" }
+        val stored = com.privatevault.app.sync.SyncEntryCodec.parseTrash(item.entryJson)
+        val authenticator = stored.linkedAuthenticatorId.takeIf { id ->
+            id.isNotBlank() && stored.type == com.privatevault.app.data.EntryType.PASSWORD &&
+                db.dao().entry(id)?.entry?.type == com.privatevault.app.data.EntryType.AUTHENTICATOR
+        }.orEmpty()
+        val wanted = item.groupIds.lines().filter(String::isNotBlank).toSet()
+        val groups = db.dao().allGroupsWithEntries().map { it.group }
+            .filter { it.id in wanted && (it.folderType == null || it.folderType == stored.type) }
+        // One typed folder at most, as the editor allows.
+        val groupIds = (groups.filter { it.folderType == null } + groups.filter { it.folderType != null }.take(1)).map { it.id }.toSet()
+        val now = System.currentTimeMillis()
+        val restored = stored.copy(id = UUID.randomUUID().toString(), linkedAuthenticatorId = authenticator, updatedAt = now, lastOpenedAt = 0)
+        saveLocalEntry(restored, groupIds)
+        db.withTransaction {
+            db.dao().moveHistory(item.entryId, restored.id)
+            db.dao().deleteTrashRow(item.id)
+        }
+        _trash.value = db.dao().trash()
+        refresh()
+        notify("${restored.type.noticeName()} restored", StatusKind.SUCCESS)
+    }
+
+    fun forgetTrashed(item: com.privatevault.app.data.TrashedEntry) = securedLaunch("Could not delete that item.") {
+        dao().forgetTrashed(item.id)
+        _trash.value = dao().trash()
+    }
+
+    fun emptyTrash() = securedLaunch("Could not empty Recently deleted.") {
+        dao().emptyTrash()
+        _trash.value = emptyList()
+        notify("Recently deleted is empty", StatusKind.SUCCESS)
+    }
+
     private suspend fun saveLocalGroup(group: VaultGroup) {
         com.privatevault.app.sync.LocalGroupChangeWriter(requireNotNull(database), deviceIdentityStore)
             .save(group, requireNotNull(sessionKey))
@@ -1492,6 +1793,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun refresh() {
         val syncDatabase = database ?: return
+        try {
+            refreshFrom(syncDatabase)
+        } catch (closed: IllegalStateException) {
+            // The vault locked while this refresh waited, and lock() closed its database: nothing is left to
+            // show, so stop quietly. An error while the same vault is still open is real and still surfaces.
+            if (database === syncDatabase && _status.value is VaultStatus.Unlocked) throw closed
+        }
+    }
+
+    private suspend fun refreshFrom(syncDatabase: VaultDatabase) {
         val syncDao = syncDatabase.dao()
         val passkeys = syncDao.passkeySummaries()
         val entries = syncDao.allEntries()
@@ -1514,7 +1825,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val conflicts = com.privatevault.app.sync.SyncConflictResolver(syncDatabase, deviceIdentityStore,
             lockedSyncStore.photoBlobs, getApplication())
             .reviews(requireNotNull(sessionKey))
+        val lostManager = syncDatabase.syncDao().lostManager(vaultId)
         if (database !== syncDatabase || _status.value !is VaultStatus.Unlocked) return
+        _lostManager.value = lostManager
         _passkeys.value = passkeys
         _entries.value = entries
         runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -1537,12 +1850,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         if (syncDatabase.syncDao().activeMembershipCount(vaultId) > 1 &&
             syncDatabase.syncDao().vaultState()?.transportSecret?.isNotBlank() == true) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { lockedSyncStore.publish(syncDatabase) }
+            // At most once a day: drop history every active member already applied (HistoryCompaction).
+            runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                lockedSyncStore.snapshot()?.let { com.privatevault.app.sync.HistoryCompaction.run(syncDatabase, it, lockedSyncStore.cloudState()) }
+            } }
             if (database !== syncDatabase || _status.value !is VaultStatus.Unlocked) return
             if (!backgrounded && (android.os.Build.VERSION.SDK_INT < 33 ||
                     androidx.core.content.ContextCompat.checkSelfPermission(getApplication(), android.Manifest.permission.POST_NOTIFICATIONS) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED)) {
                 runCatching { com.privatevault.app.sync.LanSyncService.start(getApplication()) }
-                    .onFailure { notify("Open Android devices settings to resume automatic sync.", StatusKind.WARNING) }
+                    .onFailure { notify("Open Devices & sync to resume automatic sync.", StatusKind.WARNING) }
             }
         }
         val current = _entries.value.map { it.entry }.filter { it.type == com.privatevault.app.data.EntryType.AUTHENTICATOR }
@@ -1766,7 +2083,15 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }) { "Both devices must apply the same changes before transferring management" }
     }
 
+    /** Devices in [devices] that can accept the managing role: Android only, Windows can't sign an acceptance. */
+    internal fun managingRoleCandidates(devices: List<com.privatevault.app.data.SyncMembershipEntity>) =
+        com.privatevault.app.sync.MembershipChoices.managingRoleCandidates(devices,
+            runCatching { lockedSyncStore.snapshot()?.clientOnlyPeers }.getOrNull().orEmpty())
+
     fun offerAuthorityTransfer(deviceId: String) = securedLaunch {
+        require(managingRoleCandidates(_pairedDevices.value).any { it.deviceId == deviceId }) {
+            "Only an Android phone or tablet can manage the group"
+        }
         requireAuthorityTransferReady(deviceId)
         val db = requireNotNull(database)
         db.offerAuthorityTransfer(deviceIdentityStore, deviceId)
@@ -1805,9 +2130,23 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun removeOnlyPairedDevice(deviceId: String) = resetSyncGroup(deviceId)
 
-    fun leaveSyncGroup() = resetSyncGroup(null)
+    /**
+     * Leaves the group. With [emptyItems] ("Leave and empty this phone") the vault starts empty,
+     * ready to join another group; entries stay in Recently deleted for 30 days.
+     */
+    fun leaveSyncGroup(emptyItems: Boolean = false) = resetSyncGroup(null, emptyItems)
 
-    private fun resetSyncGroup(deviceId: String?) = securedLaunch {
+    /**
+     * True when "Leave and empty this phone" can't lose edits: every change this phone made has
+     * reached at least one other device ([com.privatevault.app.sync.MembershipChoices.changesHeldElsewhere]).
+     */
+    fun changesHeldElsewhere(): Boolean = runCatching {
+        val mirror = lockedSyncStore.snapshot() ?: return true
+        com.privatevault.app.sync.MembershipChoices.changesHeldElsewhere(mirror.localDeviceId,
+            lockedSyncStore.progress().applied[mirror.localDeviceId]?.sequence ?: 0L, mirror.members, mirror.peerProgress)
+    }.getOrDefault(false)
+
+    private fun resetSyncGroup(deviceId: String?, emptyItems: Boolean = false) = securedLaunch {
         if (deviceId != null) require(_canRemoveOnlyPeer.value &&
             _syncManagerDeviceId.value == deviceIdentityStore.getOrCreate().deviceId &&
             _pairedDevices.value.any {
@@ -1822,6 +2161,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             "Apply or retry waiting changes and photos before removing this device"
         }
         val wasPaused = com.privatevault.app.sync.LanSyncService.isPaused(getApplication())
+        val wasManager = _syncManagerDeviceId.value == deviceIdentityStore.getOrCreate().deviceId
         com.privatevault.app.sync.LanSyncService.pause(getApplication())
         try {
             require(lockedSyncStore.queuedCount() == 0 && lockedSyncStore.rejectedCount() == 0 &&
@@ -1829,21 +2169,34 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 "A sync was still finishing. Review it, then retry removal"
             }
             requireNotNull(database).let {
-                if (deviceId == null) {
+                val leaveVaultId = requireNotNull(it.dao().settings()).vaultId
+                if (deviceId == null && !com.privatevault.app.sync.MembershipChoices.leaveSendsRequest(
+                        it.syncDao().membershipEvents(leaveVaultId).map { event -> event.toEvent() },
+                        deviceIdentityStore.getOrCreate().deviceId)) {
+                    // The managing device has nobody to ask: it only starts its separate group.
+                    it.leaveSyncGroup(deviceIdentityStore)
+                    lockedSyncStore.clear()
+                }
+                else if (deviceId == null) {
                     // Sign the leave request for the old group before leaving it locally.
                     val mirror = lockedSyncStore.snapshot()
                     val addresses = mirror?.peerAddresses?.filterKeys { id -> id !in mirror.clientOnlyPeers }
                         ?.values?.toList().orEmpty()
-                    val vaultId = requireNotNull(it.dao().settings()).vaultId
                     val notice = it.prepareLeaveNotice(deviceIdentityStore, addresses,
-                        com.privatevault.app.sync.LanSyncService.syncPort(vaultId))
+                        com.privatevault.app.sync.LanSyncService.syncPort(leaveVaultId))
                     // With Google Drive sync on, the request also goes to Drive, sealed while this
                     // device still holds the group keys. The managing device finds it from anywhere.
                     val drive = runCatching { com.privatevault.app.sync.CloudSyncRunner.leaveFile(lockedSyncStore, notice) }.getOrNull()
-                    it.leaveSyncGroup(deviceIdentityStore)
-                    lockedSyncStore.clear()
+                    // Saved before the local split, so a crash after the split still sends it later.
+                    // A split that fails withdraws it.
+                    if (emptyItems) require(changesHeldElsewhere()) {
+                        "Some changes from this device have not reached another device yet. Sync first, then leave and empty this device."
+                    }
                     lockedSyncStore.savePendingLeave(if (drive == null) notice else notice.copy(driveName = drive.first,
                         driveFile = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(drive.second)))
+                    try { it.leaveSyncGroup(deviceIdentityStore, emptyItems) }
+                    catch (failure: Exception) { lockedSyncStore.clearPendingLeave(); throw failure }
+                    lockedSyncStore.clear()
                     if (drive != null) com.privatevault.app.sync.CloudSyncRunner.request(getApplication())
                 }
                 else {
@@ -1858,7 +2211,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         if (deviceId == null && !wasPaused) runCatching { com.privatevault.app.sync.LanSyncService.start(getApplication()) }
         _securitySettings.value = requireNotNull(dao().settings())
         refresh()
-        if (deviceId == null) notify("This device left the sync group and keeps its items. The managing device is told when it can be reached.", StatusKind.SUCCESS)
+        if (deviceId == null && wasManager) notify("This device started a separate sync group and keeps its items. Your other devices stay in the old group until they leave it.", StatusKind.SUCCESS)
+        else if (deviceId == null && emptyItems) notify("This device left the sync group and is empty, ready to pair again. Its items are in Recently deleted for 30 days. The managing device is told when it can be reached.", StatusKind.SUCCESS)
+        else if (deviceId == null) notify("This device left the sync group and keeps its items. The managing device is told when it can be reached.", StatusKind.SUCCESS)
         else notify("This device now has a separate sync group and keeps its vault copy. Pair a new empty device when ready; pair the watch again for codes.", StatusKind.SUCCESS)
     }
 
@@ -1874,17 +2229,76 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 // Bring in membership events the service received while locked, then sign on top of them.
                 lockedSyncStore.applyQueued(db, key)
                 // Peers keep accepting what this device holds from it (see RemovalCutoff).
-                db.removeSyncMember(deviceIdentityStore, deviceId, lockedSyncStore.removalCutoff(deviceId))
+                db.removeSyncMember(deviceIdentityStore, deviceId, lockedSyncStore.removalCutoff(deviceId),
+                    lockedSyncStore.keyStatements())
                 lockedSyncStore.publish(db)
             }
         } finally { key.fill(0) }
         refresh()
         runCatching { com.privatevault.app.sync.LanSyncService.start(getApplication()) }
+        // Also when this device is now alone: the removed device may sync only through Google Drive.
+        com.privatevault.app.sync.CloudSyncRunner.request(getApplication())
         notify("Device removed. It keeps its own copy and will see that it was removed.", StatusKind.SUCCESS)
     }
 
+    /**
+     * "Mark as lost": the managing device is gone. This device stops accepting membership changes and
+     * new changes from it (local only). It keeps syncing with the other devices until it moves.
+     */
+    fun markSyncManagerLost() = securedLaunch("Could not mark that device as lost.") {
+        val db = requireNotNull(database)
+        val key = requireNotNull(sessionKey).copyOf()
+        try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                // Apply what already arrived, so the freeze starts from everything known here.
+                runCatching { lockedSyncStore.applyQueued(db, key) }
+                db.markManagerLost(deviceIdentityStore)
+                lockedSyncStore.publish(db)
+            }
+        } finally { key.fill(0) }
+        refresh()
+        notify("Marked as lost. This device no longer takes changes from it.", StatusKind.SUCCESS)
+    }
+
+    /** The managing device was not lost after all: the freeze ends. */
+    fun undoSyncManagerLost() = securedLaunch {
+        val db = requireNotNull(database)
+        db.clearManagerLost()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { lockedSyncStore.publish(db) }
+        refresh()
+        notify("The managing device is trusted again.", StatusKind.INFO)
+    }
+
+    /**
+     * After "Mark as lost": this device starts a new group that it manages, and keeps its items.
+     * Other devices then pair with it and keep their items too, without duplicates.
+     */
+    fun startGroupAfterLostManager() = securedLaunch("Could not start the new group.") {
+        val db = requireNotNull(database)
+        val key = requireNotNull(sessionKey).copyOf()
+        val wasPaused = com.privatevault.app.sync.LanSyncService.isPaused(getApplication())
+        com.privatevault.app.sync.LanSyncService.pause(getApplication())
+        try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { lockedSyncStore.applyQueued(db, key) }
+                // What could not apply goes to Recently deleted while the old group's key still exists.
+                lockedSyncStore.archiveUnapplied(db, key)
+                db.startGroupAfterLostManager(deviceIdentityStore)
+                lockedSyncStore.clear()
+            }
+        } finally {
+            key.fill(0)
+            if (!wasPaused) com.privatevault.app.sync.LanSyncService.allowFutureSync(getApplication())
+        }
+        _securitySettings.value = requireNotNull(dao().settings())
+        refresh()
+        notify("This device now manages a new group and keeps its items. Pair your other devices with it. They keep their items too.", StatusKind.SUCCESS)
+    }
+
     fun dismissRemovedNotice() {
-        lockedSyncStore.dismissRemovalNotice()
+        // Until the local leave has finished, the notice file is also what makes the next unlock
+        // retry it (completeRemovalIfNeeded). Hide the banner then, but keep the file.
+        if (lockedSyncStore.removalNotice()?.leftLocally != false) lockedSyncStore.dismissRemovalNotice()
         _removedNotice.value = null
     }
 
@@ -1901,14 +2315,20 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 // Apply what already arrived from the old group, then detach. Items are kept.
                 runCatching { lockedSyncStore.applyQueued(db, key) }
+                // What could not apply goes to Recently deleted while the group's key still
+                // exists. If that fails, stay attached and retry on the next unlock.
+                val kept = lockedSyncStore.archiveUnapplied(db, key)
                 db.leaveRemovedSyncGroup(deviceIdentityStore)
                 lockedSyncStore.clear()
                 lockedSyncStore.recordRemoval(notice.copy(leftLocally = true))
                 lockedSyncStore.publish(db)
+                kept
+            }.let { kept ->
+                _securitySettings.value = requireNotNull(db.dao().settings())
+                refresh()
+                notify(listOfNotNull("This device was removed from the sync group. Your items stay on this device.",
+                    kept.message()).joinToString(" "), StatusKind.WARNING)
             }
-            _securitySettings.value = requireNotNull(db.dao().settings())
-            refresh()
-            notify("This device was removed from the sync group. Your items stay on this device.", StatusKind.WARNING)
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (_: Exception) {
             removalLeaveFailedFor = db

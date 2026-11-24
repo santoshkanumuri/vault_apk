@@ -25,12 +25,24 @@ import javax.crypto.spec.SecretKeySpec
  */
 internal object TransportEpochs {
     const val RETAINED_PREVIOUS_EPOCHS = 4
+    /** Only for [keepServiceFor]: how long this phone keeps its sync service running just for notices. */
     const val RETENTION_MILLIS = 90L * 24 * 60 * 60 * 1000
     /** A lagging server accepts a client that already moved this many epochs ahead. */
     const val FUTURE_EPOCHS = 4
 
-    fun secret(rootSecret: String, vaultId: String, epoch: Long): String {
+    /**
+     * [random]: the random secrets of rotated epochs ([EpochKeys], epoch -> base64url). Without them
+     * this is the HMAC derivation from the root, as before; with them, [EpochKeys.transportSecret].
+     */
+    fun secret(rootSecret: String, vaultId: String, epoch: Long, random: Map<Long, String> = emptyMap()): String {
         require(epoch >= 1) { "Invalid key epoch" }
+        if (random.isNotEmpty()) {
+            val decoder = Base64.getUrlDecoder()
+            val root = decoder.decode(rootSecret)
+            val secrets = random.mapValues { decoder.decode(it.value) }
+            return try { Base64.getUrlEncoder().withoutPadding().encodeToString(EpochKeys.transportSecret(root, vaultId, epoch, secrets)) }
+            finally { root.fill(0); secrets.values.forEach { it.fill(0) } }
+        }
         if (epoch == 1L) return rootSecret
         val root = Base64.getUrlDecoder().decode(rootSecret)
         require(root.size == 32) { "Invalid transport credential" }
@@ -43,13 +55,33 @@ internal object TransportEpochs {
     }
 
     /**
-     * Previous epochs still answered with a removal notice. [retiredAt] maps an epoch to the time this
-     * device first saw the next epoch; an epoch with no recorded time counts as retired now.
+     * Previous epochs still answered over Wi-Fi: a proof made with one of their secrets gets the
+     * `removed1` notice, and a leave request signed at one of them is answered. The rule, the same
+     * on Windows (`lan_sync.rs`, `membership_exit::answer_leave`): the last
+     * [RETAINED_PREVIOUS_EPOCHS] epochs, with no time limit.
+     *
+     * This is the safer of the two rules the apps used (Android also stopped after 90 days):
+     * - The notice is not a secret. It holds only the signed history up to the event that ended
+     *   that epoch, and the Google Drive `m.` file shows a removed device the same history with no
+     *   time limit. Authorization never rests on the transport secret (see the class comment).
+     * - A time limit strands devices. An active device that was away longer than the limit while a
+     *   device was removed catches up only through this answer ([RemovalNotice.CatchUp]); without it
+     *   it can never sync over Wi-Fi again. A removed device never learns it was removed and keeps
+     *   failing instead of detaching.
+     * - The epoch count still bounds what an old secret can reach.
      */
-    fun retained(currentEpoch: Long, retiredAt: Map<Long, Long>, now: Long): List<Long> =
-        ((currentEpoch - RETAINED_PREVIOUS_EPOCHS).coerceAtLeast(1) until currentEpoch).filter { epoch ->
-            now - (retiredAt[epoch] ?: now) <= RETENTION_MILLIS
-        }.sortedDescending()
+    fun retained(currentEpoch: Long): List<Long> =
+        ((currentEpoch - RETAINED_PREVIOUS_EPOCHS).coerceAtLeast(1) until currentEpoch).sortedDescending()
+
+    /**
+     * The retained epochs that were retired in the last [RETENTION_MILLIS]: only these keep this
+     * phone's sync service running when nothing else needs it (a local battery rule, not a protocol
+     * rule; peers that connect are always answered by [retained]). [retiredAt] maps an epoch to
+     * the time this device first saw the next epoch; an epoch with no recorded time counts as
+     * retired now.
+     */
+    fun keepServiceFor(currentEpoch: Long, retiredAt: Map<Long, Long>, now: Long): List<Long> =
+        retained(currentEpoch).filter { epoch -> now - (retiredAt[epoch] ?: now) <= RETENTION_MILLIS }
 
     fun probeProof(secret: String, challenge: ByteArray): ByteArray {
         val key = Base64.getUrlDecoder().decode(secret)
@@ -225,12 +257,13 @@ internal object LeaveRequestHandler {
      */
     fun handle(frame: MembershipWire.LeaveFrame, challenge: ByteArray, rootSecret: String,
         history: List<SyncMembershipEvent>, acceptedEpochs: Set<Long>, localDeviceId: String, now: Long,
-        signer: (ByteArray) -> ByteArray, cutoffFor: (String) -> String = { "" }): LeaveDecision {
+        signer: (ByteArray) -> ByteArray, randomSecrets: Map<Long, String> = emptyMap(),
+        cutoffFor: (String) -> String = { "" }): LeaveDecision {
         val verified = runCatching { SyncMembershipManager.verify(history) }.getOrNull() ?: return LeaveDecision.Reject
         val request = frame.request
         val vaultId = verified.events.first().vaultId
         if (request.vaultId != vaultId || request.keyEpoch !in acceptedEpochs) return LeaveDecision.Reject
-        if (!MembershipWire.proofMatches(frame.proof, TransportEpochs.secret(rootSecret, vaultId, request.keyEpoch),
+        if (!MembershipWire.proofMatches(frame.proof, TransportEpochs.secret(rootSecret, vaultId, request.keyEpoch, randomSecrets),
                 challenge)) return LeaveDecision.Reject
         return decide(request, frame.signature, history, verified, localDeviceId, now, signer, cutoffFor)
     }

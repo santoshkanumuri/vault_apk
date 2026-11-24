@@ -95,6 +95,7 @@ internal fun possibleLoginMatches(
     origin: String?,
     limit: Int = 8,
     embeddedSite: String? = null,
+    usage: UsageSnapshot = UsageSnapshot.EMPTY,
     isAuthorized: (VaultEntry) -> Boolean = { false },
 ): List<VaultEntry> {
     val website = origin?.let { registrable(it) ?: return emptyList() }
@@ -107,6 +108,7 @@ internal fun possibleLoginMatches(
         .filter { it.second > 0 }
         .sortedWith(compareByDescending<Pair<VaultEntry, Int>> { it.second }
             .thenByDescending { it.first.favorite }
+            .thenByDescending { usage.score(it.first.id) }
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.first.title }
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.first.primaryValue })
         .take(limit.coerceAtLeast(0))

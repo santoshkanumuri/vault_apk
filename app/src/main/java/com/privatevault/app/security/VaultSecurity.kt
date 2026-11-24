@@ -54,7 +54,7 @@ object PasswordCrypto {
      * device must open them with the same settings.
      */
     fun derive(password: CharArray, salt: ByteArray, kdf: KdfParams = KdfParams.LEGACY): ByteArray {
-        val passwordBytes = password.concatToString().toByteArray(Charsets.UTF_8)
+        val passwordBytes = utf8(password)
         return try {
             val params = Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
                 .withVersion(Argon2Parameters.ARGON2_VERSION_13)
@@ -70,6 +70,20 @@ object PasswordCrypto {
         } finally {
             passwordBytes.fill(0)
         }
+    }
+
+    /**
+     * UTF-8 bytes of [password], the same bytes `String(password).toByteArray(UTF_8)` gives (a lone
+     * surrogate becomes '?'), without making an immutable String that can't be wiped (security
+     * review L-11). Wipe the result after use.
+     */
+    internal fun utf8(password: CharArray): ByteArray {
+        val encoder = Charsets.UTF_8.newEncoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE)
+        val buffer = encoder.encode(java.nio.CharBuffer.wrap(password))
+        return try { ByteArray(buffer.remaining()).also(buffer::get) }
+        finally { if (buffer.hasArray()) buffer.array().fill(0) }
     }
 
     /** Times [KdfParams.LEGACY] (3 passes) here, the same measurement as an unlock of a 2.3.1 vault. */

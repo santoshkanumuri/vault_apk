@@ -29,20 +29,20 @@ internal object RestoreReview {
         return RestoreSyncImpact(role, active.size - 1)
     }
 
-    /** "12 items, including 3 codes": codes are items too, so they are not added on top. */
+    /** "12 items, including 3 authenticators": authenticators are items too, so they are not added on top. */
     fun contents(items: Int, codes: Int, groups: Int, photos: Int, passkeys: Int): String {
-        val main = count(items, "item") + if (codes > 0) ", including ${count(codes, "code")}" else ""
-        return "The backup is valid: $main. It also has ${count(groups, "group")}, ${count(photos, "photo")} and ${count(passkeys, "passkey")}."
+        val main = count(items, "item") + if (codes > 0) ", including ${count(codes, "authenticator")}" else ""
+        return "The backup has $main. It also has ${count(groups, "group")}, ${count(photos, "photo")} and ${count(passkeys, "passkey")}."
     }
 
     /** The sync part of the restore review. */
     fun syncNote(impact: RestoreSyncImpact): String = when (impact.role) {
-        RestoreGroupRole.NONE -> "The restored vault gets a new identity."
+        RestoreGroupRole.NONE -> ""
         RestoreGroupRole.MEMBER -> "This device will leave its sync group. Nuvori tells the managing device, which removes it. " +
-            "The restored items do not sync. To share them, pair your devices again."
+            "The restored items don't sync. To share them, pair your devices again."
         RestoreGroupRole.MANAGER -> "This device manages its sync group. After the restore, " +
             (if (impact.otherDevices == 1) "the other device stays" else "the other ${impact.otherDevices} devices stay") +
-            " in the group without a manager, so nobody can add or remove devices. " +
+            " in the group without a managing device, so nobody can add or remove devices. " +
             "Move the managing role to another phone first, or restore anyway."
     }
 

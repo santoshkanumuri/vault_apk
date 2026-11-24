@@ -54,14 +54,14 @@ internal fun rememberPhotoDraftEditor(viewModel: VaultViewModel): PhotoDraftEdit
         if (!viewModel.pickerReturned(com.privatevault.app.PickerAction.PHOTO, uri) || uri == null) state.busy = false
         else scope.launch {
             try { state.photos.add(viewModel.stagePhoto(uri)) }
-            catch (failure: Exception) { state.error = "Could not add that photo." }
+            catch (failure: Exception) { state.error = "Couldn't add that photo." }
             finally { state.busy = false }
         }
     }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         scope.launch {
             try { viewModel.finishDraftCamera(success)?.let(state.photos::add) }
-            catch (failure: Exception) { state.error = "Could not add that photo." }
+            catch (failure: Exception) { state.error = "Couldn't add that photo." }
             finally { state.busy = false }
         }
     }
@@ -70,7 +70,7 @@ internal fun rememberPhotoDraftEditor(viewModel: VaultViewModel): PhotoDraftEdit
         if (uri == null) { state.busy = false; return }
         runCatching { camera.launch(uri) }.onFailure {
             state.busy = false
-            state.error = "Could not open the camera."
+            state.error = "Couldn't open the camera."
             viewModel.externalFlowActive = false
             viewModel.clearCamera()
         }
@@ -86,7 +86,7 @@ internal fun rememberPhotoDraftEditor(viewModel: VaultViewModel): PhotoDraftEdit
         state.busy = true
         viewModel.externalFlowActive = true
         runCatching { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-            .onFailure { state.busy = false; viewModel.externalFlowActive = false; state.error = "Could not open photos." }
+            .onFailure { state.busy = false; viewModel.externalFlowActive = false; state.error = "Couldn't open photos." }
     }
     state.addFromCamera = {
         state.error = null
@@ -94,7 +94,7 @@ internal fun rememberPhotoDraftEditor(viewModel: VaultViewModel): PhotoDraftEdit
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
             launchCamera()
         else runCatching { permission.launch(Manifest.permission.CAMERA) }
-            .onFailure { state.busy = false; state.error = "Could not request camera permission." }
+            .onFailure { state.busy = false; state.error = "Couldn't request camera permission." }
     }
     DisposableEffect(state) {
         onDispose {

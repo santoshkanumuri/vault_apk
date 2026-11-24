@@ -139,7 +139,7 @@ class MainActivity : FragmentActivity() {
             })
         val info = BiometricPrompt.PromptInfo.Builder()
             .setTitle("Unlock Nuvori")
-            .setSubtitle("Confirm your fingerprint")
+            .setSubtitle("Confirm it's you")
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .setNegativeButtonText("Use master password")
             .build()
@@ -164,12 +164,12 @@ class MainActivity : FragmentActivity() {
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     viewModel.skipDailyBiometric()
                     if (!biometricDismissed(errorCode))
-                        viewModel.notify("Fingerprint unlock was not turned on. Use the master password next time.", StatusKind.INFO)
+                        viewModel.notify("Fingerprint or face unlock wasn't turned on. Use the master password next time.", StatusKind.INFO)
                 }
             })
         val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Enable fingerprint unlock")
-            .setSubtitle("Confirm your fingerprint to protect the vault key")
+            .setTitle("Turn on fingerprint or face unlock")
+            .setSubtitle("Confirm it's you to protect the vault key")
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .setNegativeButtonText("Not now")
             .build()
@@ -178,7 +178,7 @@ class MainActivity : FragmentActivity() {
 
     private fun showBiometricAction(onSuccess: () -> Unit) {
         val cipher = runCatching { BiometricActionGate().encryptionCipher() }.getOrNull() ?: run {
-            viewModel.notify("Fingerprint check is unavailable on this device.", StatusKind.WARNING)
+            viewModel.notify("Fingerprint or face unlock isn't available on this device.", StatusKind.WARNING)
             return
         }
         val prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this),
@@ -189,12 +189,12 @@ class MainActivity : FragmentActivity() {
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     if (!biometricDismissed(errorCode))
-                        viewModel.notify(errString.toString().ifBlank { "Fingerprint check did not complete." }, StatusKind.WARNING)
+                        viewModel.notify(errString.toString().ifBlank { "Fingerprint or face check didn't finish." }, StatusKind.WARNING)
                 }
             })
         val info = BiometricPrompt.PromptInfo.Builder()
             .setTitle("Reveal CVV")
-            .setSubtitle("Confirm your fingerprint")
+            .setSubtitle("Confirm it's you")
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .setNegativeButtonText("Cancel")
             .build()
@@ -210,7 +210,7 @@ class MainActivity : FragmentActivity() {
             putString("vault_clip_token", token)
         }
         if (runCatching { clipboard.setPrimaryClip(clip) }.isFailure) {
-            viewModel.notify("Could not copy $label.", StatusKind.ERROR)
+            viewModel.notify("Couldn't copy $label.", StatusKind.ERROR)
             return
         }
         // Android may deny background clipboard access. Never erase a newer clipboard item.

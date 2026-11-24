@@ -157,7 +157,7 @@ internal fun LoginOptions(apps: String, signatures: String, authenticatorId: Str
     if (showApps) CodeAppLinksPicker(apps, { showApps = false }) { selected ->
         val old = signatures.lineSequence().filter { it.contains('=') }.associate { it.substringBefore('=') to it.substringAfter('=') }
         val identities = linkedAppPackages(selected).map { name -> name to (appSigningIdentity(context, name) ?: old[name]) }
-        if (identities.any { it.second.isNullOrBlank() }) error = "Could not verify one of these apps. Install it before authorizing autofill."
+        if (identities.any { it.second.isNullOrBlank() }) error = "Couldn't verify one of these apps. Install it before authorizing autofill."
         else { onApps(selected, identities.joinToString("\n") { "${it.first}=${it.second}" }); error = null; showApps = false }
     }
     if (showCodes) AlertDialog(onDismissRequest = { showCodes = false }, title = { Text("Link existing authenticator") },

@@ -211,7 +211,7 @@ internal object QuickCopySession {
         }
         val value = field?.let { session.values[it] }?.let { runCatching { it.resolve() }.getOrNull() }
         if (field == null || value == null) {
-            Toast.makeText(app, "Could not copy this field. Open Quick copy again.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(app, "Couldn't copy this field. Open Quick copy again.", Toast.LENGTH_SHORT).show()
             return
         }
         copySensitive(app, field.clipLabel, value)

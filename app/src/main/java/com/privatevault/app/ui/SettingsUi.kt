@@ -122,7 +122,7 @@ internal fun SettingsHub(summary: SettingsHubSummary, open: (String) -> Unit) {
             SettingsHubRow("Autofill and codes", "Fill logins and open codes quickly", NuvoriIcons.Password,
                 listOf(if (autofillEnabled) StatusKind.SUCCESS to "On" else StatusKind.WARNING to "Off")) { open("Autofill and codes") }
             SettingsHubDivider()
-            SettingsHubRow("Passkeys", "Website sign-in and encrypted backups", NuvoriIcons.Passkey,
+            SettingsHubRow("Passkeys", "Sign in without passwords (Android 14 or newer)", NuvoriIcons.Passkey,
                 listOf(StatusKind.NEUTRAL to if (summary.passkeys == 0) "None saved" else "${summary.passkeys} saved")) { open("Passkeys") }
             SettingsHubDivider()
             SettingsHubRow("Sign-ins", "Which “Continue with” account you used on a site", NuvoriIcons.LogIn) { open("Sign-ins") }
@@ -288,7 +288,7 @@ internal fun SettingsDangerButton(text: String, onClick: () -> Unit, modifier: M
     val error = MaterialTheme.colorScheme.error
     OutlinedButton(onClick = onClick, modifier = modifier.settingsButtonSize(fill), enabled = enabled, shape = NuvoriShapes.Control,
         colors = ButtonDefaults.outlinedButtonColors(contentColor = error),
-        border = BorderStroke(1.dp, error.copy(alpha = if (enabled) .7f else .24f))) {
+        border = BorderStroke(1.dp, if (enabled) error else error.copy(alpha = .24f))) {
         SettingsButtonLabel(text, icon)
     }
 }

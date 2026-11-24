@@ -107,10 +107,10 @@ internal fun SyncAcknowledgementEffect(viewModel: VaultViewModel) {
             DeviceSyncPhase.SEARCHING, DeviceSyncPhase.FOUND, DeviceSyncPhase.CONNECTING,
             DeviceSyncPhase.TRANSFERRING -> sawActivity = true
             DeviceSyncPhase.CHECKED -> if (sawActivity) {
-                SyncRequests.clear(); viewModel.notify("Sync complete · everything is up to date", StatusKind.SUCCESS)
+                SyncRequests.clear(); viewModel.notify("Synced. Everything's up to date.", StatusKind.SUCCESS)
             }
             DeviceSyncPhase.RECEIVED -> if (sawActivity) {
-                SyncRequests.clear(); viewModel.notify("Synced · some changes are still waiting to apply", StatusKind.WARNING)
+                SyncRequests.clear(); viewModel.notify("Synced. Some changes are still waiting to apply.", StatusKind.WARNING)
             }
             DeviceSyncPhase.ATTENTION -> {
                 SyncRequests.clear(); viewModel.notify("Sync didn't finish. ${status.detail}".trim(), StatusKind.ERROR)
@@ -201,7 +201,7 @@ private fun syncAttention(sync: HomeSync, now: Long, openDevices: () -> Unit): L
 }
 
 private fun calmLine(sync: HomeSync, itemCount: Int, now: Long): CalmLine = when {
-    sync.pairedDevices == 0 -> CalmLine(StatusKind.SUCCESS, "Unlocked · Stored on this phone only")
+    sync.pairedDevices == 0 -> CalmLine(StatusKind.SUCCESS, "Unlocked. Stored on this device only.")
     sync.phase == DeviceSyncPhase.TRANSFERRING || sync.phase == DeviceSyncPhase.CONNECTING ->
         CalmLine(StatusKind.PROGRESS, "Syncing with your devices…")
     sync.phase == DeviceSyncPhase.SEARCHING || sync.phase == DeviceSyncPhase.FOUND ->

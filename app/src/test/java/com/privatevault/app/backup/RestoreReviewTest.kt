@@ -44,8 +44,8 @@ class RestoreReviewTest {
     @Test fun codesAreCountedInsideTheItemsNotOnTop() {
         // The old text, "Validated 12 entries ... and 3 authenticators", read as 15 items.
         val text = RestoreReview.contents(12, 3, 0, 0, 0)
-        assertEquals("The backup is valid: 12 items, including 3 codes. It also has 0 groups, 0 photos and 0 passkeys.", text)
-        assertEquals("The backup is valid: 1 item. It also has 1 group, 1 photo and 1 passkey.", RestoreReview.contents(1, 0, 1, 1, 1))
+        assertEquals("The backup has 12 items, including 3 authenticators. It also has 0 groups, 0 photos and 0 passkeys.", text)
+        assertEquals("The backup has 1 item. It also has 1 group, 1 photo and 1 passkey.", RestoreReview.contents(1, 0, 1, 1, 1))
     }
 
     @Test fun theReviewNamesTheSyncGroupOnlyWhenTheDeviceIsInOne() {
@@ -53,7 +53,7 @@ class RestoreReviewTest {
         val member = RestoreReview.syncNote(RestoreSyncImpact(RestoreGroupRole.MEMBER, 2))
         assertTrue(member.startsWith("This device will leave its sync group. Nuvori tells the managing device"))
         val manager = RestoreReview.syncNote(RestoreSyncImpact(RestoreGroupRole.MANAGER, 1))
-        assertTrue(manager.contains("the other device stays in the group without a manager"))
+        assertTrue(manager.contains("the other device stays in the group without a managing device"))
         assertTrue(manager.contains("Move the managing role to another phone first"))
         assertTrue(RestoreReview.syncNote(RestoreSyncImpact(RestoreGroupRole.MANAGER, 3)).contains("the other 3 devices stay"))
     }

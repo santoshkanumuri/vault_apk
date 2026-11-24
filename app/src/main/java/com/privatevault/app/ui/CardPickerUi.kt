@@ -80,7 +80,7 @@ internal fun ColumnScope.CardFillContent(cards: List<VaultEntry>, asksForCode: B
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text("Also fill the security code", style = MaterialTheme.typography.bodyLarge)
-                        Text("Asks for your fingerprint if Nuvori was unlocked over a minute ago.",
+                        Text("Asks for your fingerprint or face if Nuvori was unlocked over a minute ago.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(checked = includeCode, onCheckedChange = onIncludeCode, enabled = !busy)

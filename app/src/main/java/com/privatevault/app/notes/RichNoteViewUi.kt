@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import com.privatevault.app.R
 
 /** Returns the document with the check item at [blockIndex] ticked or unticked. */
 internal fun RichNoteDocument.toggleCheck(blockIndex: Int): RichNoteDocument {
@@ -162,10 +164,10 @@ internal fun LinkConfirmDialog(link: String, onDismiss: () -> Unit) {
     val uriHandler = LocalUriHandler.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Open this link?") },
+        title = { Text(stringResource(R.string.open_this_link)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("It opens outside Nuvori. Check the full address first:")
+                Text(stringResource(R.string.it_opens_outside_nuvori_check_the_full_a))
                 Text(link, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.primary)
             }
@@ -174,9 +176,9 @@ internal fun LinkConfirmDialog(link: String, onDismiss: () -> Unit) {
             TextButton(onClick = {
                 RichNotes.sanitizeLink(link)?.let { safe -> runCatching { uriHandler.openUri(safe) } }
                 onDismiss()
-            }) { Text("Open") }
+            }) { Text(stringResource(R.string.open)) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
 }
 

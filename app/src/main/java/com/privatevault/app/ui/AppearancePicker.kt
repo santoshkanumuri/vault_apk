@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.Button
 import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.BorderStroke
@@ -51,7 +52,7 @@ internal fun ColumnScope.AppearanceColorSections(accentId: String, surfaceId: St
     val surface = AppearancePalette.surface(surfaceId)
     SettingsSection("Colors", description = "Pick an accent and a background. The whole app changes at once.") {
         AppearancePreview()
-        Text("Accent color", style = MaterialTheme.typography.titleSmall, modifier = Modifier.semantics { heading() })
+        Text(stringResource(R.string.accent_color), style = MaterialTheme.typography.titleSmall, modifier = Modifier.semantics { heading() })
         FlowRow(Modifier.fillMaxWidth()) {
             AppearancePalette.accents.forEach { option ->
                 SwatchButton(option.name, selected = option.id == accent.id, CircleShape, onClick = { onChange(option.id, surface.id) }) {
@@ -61,7 +62,7 @@ internal fun ColumnScope.AppearanceColorSections(accentId: String, surfaceId: St
                 }
             }
         }
-        Text("Background", style = MaterialTheme.typography.titleSmall, modifier = Modifier.semantics { heading() })
+        Text(stringResource(R.string.background), style = MaterialTheme.typography.titleSmall, modifier = Modifier.semantics { heading() })
         FlowRow(Modifier.fillMaxWidth()) {
             AppearancePalette.surfaces.forEach { option ->
                 SwatchButton("${option.name} background", selected = option.id == surface.id, RoundedCornerShape(14.dp), onClick = { onChange(accent.id, option.id) }) {
@@ -76,10 +77,10 @@ internal fun ColumnScope.AppearanceColorSections(accentId: String, surfaceId: St
         }
         if (accent.id != AppearancePalette.DEFAULT_ACCENT || surface.id != AppearancePalette.DEFAULT_SURFACE)
             TextButton(onClick = { onChange(AppearancePalette.DEFAULT_ACCENT, AppearancePalette.DEFAULT_SURFACE) }) {
-                Text("Reset to Nuvori green")
+                Text(stringResource(R.string.reset_to_nuvori_green))
             }
         if (pendingSyncNote)
-            Text("Saved on this device. Your other devices get it after each has Nuvori 2.2.4 or newer and has synced once on Wi-Fi.",
+            Text(stringResource(R.string.saved_on_this_device_your_other_devices),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -108,12 +109,12 @@ private fun AppearancePreview() {
     Surface(Modifier.fillMaxWidth(), shape = NuvoriShapes.Card, color = MaterialTheme.colorScheme.background,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
         androidx.compose.foundation.layout.Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Preview", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
-            Text("This is how your vault looks.", style = MaterialTheme.typography.bodyMedium,
+            Text(stringResource(R.string.preview), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
+            Text(stringResource(R.string.this_is_how_your_vault_looks), style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = {}, enabled = true, modifier = Modifier.clearAndSetSemantics { }) { Text("Button") }
-                AssistChip(onClick = {}, label = { Text("Chip") }, modifier = Modifier.clearAndSetSemantics { },
+                Button(onClick = {}, enabled = true, modifier = Modifier.clearAndSetSemantics { }) { Text(stringResource(R.string.button)) }
+                AssistChip(onClick = {}, label = { Text(stringResource(R.string.chip)) }, modifier = Modifier.clearAndSetSemantics { },
                     colors = AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.primaryContainer,
                         labelColor = MaterialTheme.colorScheme.onPrimaryContainer),
                     border = null)

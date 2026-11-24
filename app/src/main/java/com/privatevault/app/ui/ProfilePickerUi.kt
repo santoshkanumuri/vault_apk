@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -77,7 +78,7 @@ private fun ProfileChoiceRow(choice: ProfileChoice, enabled: Boolean, onClick: (
                 Text(choice.summary, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text("Fill", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, maxLines = 1)
+            Text(stringResource(R.string.fill), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, maxLines = 1)
         }
     }
 }

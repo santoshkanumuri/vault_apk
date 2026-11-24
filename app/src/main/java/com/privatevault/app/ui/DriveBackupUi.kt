@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -120,7 +121,7 @@ internal fun DriveBackupCard(viewModel: VaultViewModel) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SettingsIconBadge(NuvoriIcons.Cloud)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Google Drive backup", modifier = Modifier.semantics { heading() },
+                    Text(stringResource(R.string.google_drive_backup), modifier = Modifier.semantics { heading() },
                         style = MaterialTheme.typography.titleMedium)
                     Text(if (status.enabled && status.account.isNotEmpty()) status.account
                         else "Restore your vault on a new phone if this one is lost.",
@@ -130,11 +131,11 @@ internal fun DriveBackupCard(viewModel: VaultViewModel) {
                 if (status.enabled) StatusChip(chipKind, chipLabel)
             }
             if (!status.enabled) {
-                Text("Nuvori saves an encrypted backup in a hidden folder of your Google Drive. It works without a sync group. On a new phone, sign in with the same Google account and restore it with your master password.",
+                Text(stringResource(R.string.nuvori_saves_an_encrypted_backup_in_a_hi),
                     style = MaterialTheme.typography.bodyMedium)
-                Text("Back up every", style = MaterialTheme.typography.labelLarge)
+                Text(stringResource(R.string.back_up_every), style = MaterialTheme.typography.labelLarge)
                 IntervalChips(chosenInterval) { chosenInterval = it }
-                Text("Backups run while Nuvori is unlocked. If the phone stays locked, the backup runs at the next unlock. Nuvori keeps this phone's newest backup and the one before it.",
+                Text(stringResource(R.string.backups_run_while_nuvori_is_unlocked_if),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 SettingsPrimaryButton(if (waiting) "Waiting for Google…" else "Turn on Google Drive backup",
                     onClick = signIn, icon = NuvoriIcons.Cloud, enabled = !waiting)
@@ -145,7 +146,7 @@ internal fun DriveBackupCard(viewModel: VaultViewModel) {
                 else status.lastError?.let { StatusBanner(kind = StatusKind.WARNING, title = "Last backup didn't finish", message = it) }
                 Text("Last backup: " + if (status.lastBackupAt > 0) relativeTime(status.lastBackupAt, now) else "not yet",
                     style = MaterialTheme.typography.bodyMedium)
-                Text("Back up every", style = MaterialTheme.typography.labelLarge)
+                Text(stringResource(R.string.back_up_every), style = MaterialTheme.typography.labelLarge)
                 IntervalChips(status.interval, viewModel::setDriveBackupInterval)
                 Text("Backs up ${intervalSentence(status.interval)} while Nuvori is unlocked. A backup opens with your master password.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -159,22 +160,22 @@ internal fun DriveBackupCard(viewModel: VaultViewModel) {
         modifier = backupDialogModifier,
         properties = backupDialogProperties,
         onDismissRequest = { askPassword = false; password = "" },
-        title = { Text("Protect Drive backups") },
+        title = { Text(stringResource(R.string.protect_drive_backups)) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Backups open with your current master password. You need it to restore on a new phone, because Nuvori cannot recover it.")
+            Text(stringResource(R.string.backups_open_with_your_current_master_pa))
             SecretField("Current master password", password) { password = it }
         } },
         confirmButton = { Button(enabled = password.isNotEmpty(), onClick = {
             viewModel.turnOnDriveBackup(password.toCharArray(), chosenInterval)
             password = ""; askPassword = false
-        }) { Text("Turn on") } },
-        dismissButton = { TextButton(onClick = { askPassword = false; password = "" }) { Text("Cancel") } }
+        }) { Text(stringResource(R.string.turn_on)) } },
+        dismissButton = { TextButton(onClick = { askPassword = false; password = "" }) { Text(stringResource(R.string.cancel)) } }
     )
     if (confirmOff) AlertDialog(onDismissRequest = { confirmOff = false },
-        title = { Text("Turn off Google Drive backup?") },
-        text = { Text("This phone stops making backups. The backups already in your Drive stay there, and you can still restore them. To delete them, remove Nuvori's hidden app data in your Google Drive settings.") },
-        confirmButton = { TextButton(onClick = { confirmOff = false; viewModel.turnOffDriveBackup() }) { Text("Turn off") } },
-        dismissButton = { TextButton(onClick = { confirmOff = false }) { Text("Cancel") } })
+        title = { Text(stringResource(R.string.turn_off_google_drive_backup)) },
+        text = { Text(stringResource(R.string.this_phone_stops_making_backups_the_back)) },
+        confirmButton = { TextButton(onClick = { confirmOff = false; viewModel.turnOffDriveBackup() }) { Text(stringResource(R.string.turn_off)) } },
+        dismissButton = { TextButton(onClick = { confirmOff = false }) { Text(stringResource(R.string.cancel)) } })
 }
 
 /**
@@ -204,10 +205,10 @@ internal fun DriveRestoreSection(viewModel: VaultViewModel, primary: Boolean) {
         title = { Text(if (found.isEmpty()) "No backups found" else "Restore a backup") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (found.isEmpty()) {
-                Text("This Google account has no Nuvori backups. Check that you signed in with the account of your old phone, and that Google Drive backup was on there.")
+                Text(stringResource(R.string.this_google_account_has_no_nuvori_backup))
                 return@Column
             }
-            Text("Choose a backup. It replaces this vault after you review it.")
+            Text(stringResource(R.string.choose_a_backup_it_replaces_this_vault_a))
             Column(Modifier.selectableGroup()) {
                 // Several phones can each keep two backups; the newest is first.
                 val phones = found.map { it.backupId }.distinct()
@@ -226,18 +227,18 @@ internal fun DriveRestoreSection(viewModel: VaultViewModel, primary: Boolean) {
                 }
             }
             SecretField("Master password of the backup", password) { password = it }
-            Text("This is the master password of your old phone when the backup was made.",
+            Text(stringResource(R.string.this_is_the_master_password_of_your_old),
                 style = MaterialTheme.typography.bodySmall)
         } },
         confirmButton = {
-            if (found.isEmpty()) TextButton(onClick = { viewModel.closeDriveBackups() }) { Text("Close") }
+            if (found.isEmpty()) TextButton(onClick = { viewModel.closeDriveBackups() }) { Text(stringResource(R.string.close)) }
             else Button(enabled = selected != null && password.isNotEmpty(), onClick = {
                 selected?.let { viewModel.restoreFromDrive(it, password.toCharArray()) }
                 password = ""
-            }) { Text("Check backup") }
+            }) { Text(stringResource(R.string.check_backup)) }
         },
         dismissButton = {
-            if (found.isNotEmpty()) TextButton(onClick = { viewModel.closeDriveBackups(); password = "" }) { Text("Cancel") }
+            if (found.isNotEmpty()) TextButton(onClick = { viewModel.closeDriveBackups(); password = "" }) { Text(stringResource(R.string.cancel)) }
         }
     )
 }

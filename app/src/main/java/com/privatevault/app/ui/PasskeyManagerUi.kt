@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.Button
 import com.privatevault.app.controls.OutlinedButton
 import com.privatevault.app.controls.TextButton
@@ -97,14 +98,14 @@ internal fun SavedPasskeysSection(data: PasskeyPageData, onDelete: (PasskeyInfo)
         data.passkeys.isEmpty() -> null
         else -> "${data.passkeys.size} ${if (data.passkeys.size == 1) "passkey" else "passkeys"} for $sites ${if (sites == 1) "site or app" else "sites and apps"}. Tap one for details."
     }) {
-        if (data.passkeys.isEmpty()) Text("No passkeys saved yet.")
-        if (data.passkeys.size > 4) OutlinedTextField(search, { search = it }, label = { Text("Search passkeys") },
+        if (data.passkeys.isEmpty()) Text(stringResource(R.string.no_passkeys_saved_yet))
+        if (data.passkeys.size > 4) OutlinedTextField(search, { search = it }, label = { Text(stringResource(R.string.search_passkeys)) },
             leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null) },
             trailingIcon = if (search.isEmpty()) null else {
                 { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = "Clear search") } }
             },
             singleLine = true, modifier = Modifier.fillMaxWidth())
-        if (data.passkeys.isNotEmpty() && shown.isEmpty()) Text("No passkeys match this search.",
+        if (data.passkeys.isNotEmpty() && shown.isEmpty()) Text(stringResource(R.string.no_passkeys_match_this_search),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         // Several accounts on one site: the one this device uses most carries the badge.
         val mostUsed = remember(data.passkeys, data.usage) {
@@ -182,10 +183,10 @@ private fun PasskeyDetails(passkey: PasskeyInfo, origin: PasskeyOrigin?, events:
         if (fingerprint != null) DetailLine("Public key fingerprint", fingerprint, mono = true)
         DetailLine("Credential ID", PasskeyLedger.shortId(passkey.id), mono = true)
         DetailLine("User handle", PasskeyLedger.shortId(passkey.userHandle), mono = true)
-        Text("Stored encrypted with your vault. Included in backups and in sync with your devices.",
+        Text(stringResource(R.string.stored_encrypted_with_your_vault_include),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (events.isNotEmpty()) {
-            Text("History on this device", style = MaterialTheme.typography.labelLarge)
+            Text(stringResource(R.string.history_on_this_device), style = MaterialTheme.typography.labelLarge)
             val visible = if (allHistory) events else events.take(5)
             visible.forEach { LedgerLine(it, showPasskey = false) }
             if (events.size > 5) TextButton(onClick = { allHistory = !allHistory }) {
@@ -196,7 +197,7 @@ private fun PasskeyDetails(passkey: PasskeyInfo, origin: PasskeyOrigin?, events:
             modifier = Modifier.heightIn(min = 48.dp)) {
             Icon(NuvoriIcons.Delete, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-            Text("Delete passkey")
+            Text(stringResource(R.string.delete_passkey))
         }
     }
 }
@@ -246,23 +247,23 @@ internal fun PasskeyHistorySection(history: List<PasskeyHistoryEvent>, onClear: 
     SettingsSection("Passkey history",
         description = "When each passkey was added, synced, used or deleted. Kept encrypted on this device only; not synced or backed up.") {
         if (history.isEmpty()) {
-            Text("Nothing yet. New passkeys, sign-ins and deletions appear here.",
+            Text(stringResource(R.string.nothing_yet_new_passkeys_sign_ins_and_de),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             return@SettingsSection
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !changesOnly, onClick = { changesOnly = false }, label = { Text("Everything") })
-            FilterChip(selected = changesOnly, onClick = { changesOnly = true }, label = { Text("Changes only") })
+            FilterChip(selected = !changesOnly, onClick = { changesOnly = false }, label = { Text(stringResource(R.string.everything)) })
+            FilterChip(selected = changesOnly, onClick = { changesOnly = true }, label = { Text(stringResource(R.string.changes_only)) })
         }
         val visible = if (all) filtered else filtered.take(10)
         visible.forEach { LedgerLine(it, showPasskey = true) }
         if (filtered.size > 10) TextButton(onClick = { all = !all }) { Text(if (all) "Show less" else "Show all ${filtered.size}") }
         SettingsSecondaryButton("Clear history", onClick = { confirm = true }, icon = NuvoriIcons.Delete)
     }
-    if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("Clear passkey history?") },
-        text = { Text("This removes the history list on this device. Your passkeys stay saved. This can't be undone.") },
-        confirmButton = { Button(onClick = { confirm = false; onClear() }) { Text("Clear history") } },
-        dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } })
+    if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text(stringResource(R.string.clear_passkey_history)) },
+        text = { Text(stringResource(R.string.this_removes_the_history_list_on_this_de)) },
+        confirmButton = { Button(onClick = { confirm = false; onClear() }) { Text(stringResource(R.string.clear_history)) } },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Text(stringResource(R.string.cancel)) } })
 }
 
 /** The date and time to show for a request: time only today, otherwise the date too. */

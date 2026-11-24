@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
@@ -34,7 +35,7 @@ internal fun PasskeyRequestsSection() {
     SettingsSection("Passkey requests",
         description = "Apps and websites that asked Nuvori, newest first. The last ${PasskeyRequestLog.CAPACITY} stay encrypted on this device; no account or key is kept.") {
         if (records.isEmpty()) {
-            Text("No requests yet. If an app lists other managers but nothing shows here after you try it, either Nuvori is turned off as a provider (use the button above), or the app uses Google's older sign-in method, which offers only Google's own manager.",
+            Text(stringResource(R.string.no_requests_yet_if_an_app_lists_other_ma),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             return@SettingsSection
         }

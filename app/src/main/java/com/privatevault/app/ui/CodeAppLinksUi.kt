@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.TextButton
 import android.content.Intent
 import android.net.Uri
@@ -44,7 +45,7 @@ internal fun CodeAppDetectionPreference() {
         prefs.edit().putBoolean("code_app_detection", it).apply()
     })
     if (enabled) {
-        Text("When Nuvori is your Autofill service, the tile uses the last app that asked Nuvori to fill a login or code in the past 5 minutes. No extra permission is needed. Usage access is only needed when Nuvori is not your Autofill service: it lets the vault inspect recent app activity when you open the tile. No usage history is stored. Browsers do not identify the website.", style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.when_nuvori_is_your_autofill_service_the), style = MaterialTheme.typography.bodySmall)
         if (!granted) {
             StatusBanner(kind = StatusKind.WARNING, message = "If you use another Autofill service, allow Usage access to put codes for your previous app first.")
             SettingsSecondaryButton("Allow Usage access", onClick = {
@@ -75,11 +76,11 @@ internal fun CodeAppLinksPicker(value: String, dismiss: () -> Unit, save: (Strin
     AlertDialog(onDismissRequest = dismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn),
         modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(12.dp),
-        title = { Text("Linked apps") },
+        title = { Text(stringResource(R.string.linked_apps)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Choose the apps that should suggest this account. You can link several accounts to one app.")
-                OutlinedTextField(search, { search = it }, singleLine = true, label = { Text("Search apps") }, modifier = Modifier.fillMaxWidth())
+                Text(stringResource(R.string.choose_the_apps_that_should_suggest_this))
+                OutlinedTextField(search, { search = it }, singleLine = true, label = { Text(stringResource(R.string.search_apps)) }, modifier = Modifier.fillMaxWidth())
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                 LazyColumn(Modifier.heightIn(max = 360.dp)) {
                     items(apps.filter { it.first.contains(search, true) || it.second.contains(search, true) }, key = { it.first }) { (name, label) ->
@@ -96,6 +97,6 @@ internal fun CodeAppLinksPicker(value: String, dismiss: () -> Unit, save: (Strin
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { save(selected.sorted().joinToString("\n")) }) { Text("Done") } },
-        dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
+        confirmButton = { TextButton(onClick = { save(selected.sorted().joinToString("\n")) }) { Text(stringResource(R.string.done)) } },
+        dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
 }

@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -83,7 +84,7 @@ internal fun CardColorPicker(
     val hueColor = Color(hsvToArgb(hsv[0], 1f, 1f))
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Card color", style = MaterialTheme.typography.labelLarge)
+        Text(stringResource(R.string.card_color), style = MaterialTheme.typography.labelLarge)
         CardPreview(Color(color), title, lastDigits)
 
         // Saturation (left to right) and brightness (top to bottom) for the current hue.
@@ -157,7 +158,7 @@ internal fun CardColorPicker(
                         hsv = argbToHsv(exact); report(exact)
                     }
                 },
-                label = { Text("Hex") },
+                label = { Text(stringResource(R.string.hex)) },
                 isError = !typedValid && hexText.length > 1,
                 supportingText = { Text(if (typedValid || hexText.length <= 1) "Any color, for example #2E7034" else "Use 6 hex digits, 0 to 9 and A to F") },
                 singleLine = true,
@@ -168,7 +169,7 @@ internal fun CardColorPicker(
         }
 
         if (used.isNotEmpty()) {
-            Text("On your other cards", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.on_your_other_cards), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             LazyRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(used, key = { it }) { option ->
                     val selected = option == color

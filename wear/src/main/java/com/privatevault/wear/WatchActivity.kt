@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
@@ -330,8 +331,8 @@ private fun WatchBrand() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Image(painterResource(R.drawable.nuvori_logo_transparent), contentDescription = null, modifier = Modifier.size(32.dp))
         Column {
-            Text("Nuvori", style = MaterialTheme.typography.title2, color = MaterialTheme.colors.primary)
-            Text("Authenticator", style = MaterialTheme.typography.caption2,
+            Text(stringResource(R.string.nuvori), style = MaterialTheme.typography.title2, color = MaterialTheme.colors.primary)
+            Text(stringResource(R.string.authenticator), style = MaterialTheme.typography.caption2,
                 color = MaterialTheme.colors.onBackground.copy(alpha = .72f))
         }
     }
@@ -360,7 +361,7 @@ private fun WatchLetterIndex(count: Int, recentCount: Int, letters: List<Pair<St
             item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { WatchBrand() } }
             item {
                 Column(Modifier.fillMaxWidth()) {
-                    Text("Find a code", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                    Text(stringResource(R.string.find_a_code), modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
                         color = MaterialTheme.colors.onBackground.copy(alpha = .72f))
                     WatchSyncedLabel(syncedAt)
                 }
@@ -466,7 +467,7 @@ private fun WatchCodeDetail(account: WatchAccount, copy: (WatchAccount) -> Unit)
                 style = MaterialTheme.typography.caption1, fontFamily = if (next != null) FontFamily.Monospace else null,
                 color = MaterialTheme.colors.onBackground.copy(alpha = .8f))
             Chip(
-                label = { Text("Copy code") },
+                label = { Text(stringResource(R.string.copy_code)) },
                 onClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); copy(account) },
                 colors = ChipDefaults.primaryChipColors(),
                 shape = WatchControlShape,

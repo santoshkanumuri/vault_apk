@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -122,7 +123,7 @@ internal fun MembershipNoticeBanner(notice: MembershipNotice, onDismiss: () -> U
             title = if (removed) "Removed from sync" else "Left the sync group", message = message,
             actionLabel = "Dismiss", onAction = onDismiss)
         if (onOpenDevices != null) TextButton(onClick = onOpenDevices, modifier = Modifier.heightIn(min = 40.dp)) {
-            Text("Open Devices & sync")
+            Text(stringResource(R.string.open_devices_sync))
         }
     }
 }
@@ -222,7 +223,7 @@ internal fun ManagingBadge(modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically) {
         Icon(NuvoriIcons.Shield, contentDescription = null, tint = scheme.onPrimaryContainer, modifier = Modifier.size(13.dp))
         Spacer(Modifier.width(4.dp))
-        Text("Managing device", style = MaterialTheme.typography.labelSmall, color = scheme.onPrimaryContainer,
+        Text(stringResource(R.string.managing_device), style = MaterialTheme.typography.labelSmall, color = scheme.onPrimaryContainer,
             fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }

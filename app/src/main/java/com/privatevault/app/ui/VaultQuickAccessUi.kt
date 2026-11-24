@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.FilledTonalButton
 import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.layout.*
@@ -165,7 +166,7 @@ private val QuickField.spoken: String get() = if (this == QuickField.CVV) "CVV" 
 @Composable
 private fun CopyButtons(entry: VaultEntry, fields: List<QuickField>, copy: (VaultEntry, QuickField) -> Unit) {
     if (fields.isEmpty()) {
-        Text("Nothing to copy. Add details in Nuvori.", style = MaterialTheme.typography.bodySmall,
+        Text(stringResource(R.string.nothing_to_copy_add_details_in_nuvori), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
     }

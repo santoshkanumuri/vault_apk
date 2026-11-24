@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -18,7 +19,7 @@ internal fun PrivacyPolicyDialog(close: () -> Unit) {
     AlertDialog(onDismissRequest = close,
         properties = DialogProperties(usePlatformDefaultWidth = false),
         modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(12.dp),
-        title = { Text("Privacy policy") },
+        title = { Text(stringResource(R.string.privacy_policy)) },
         text = { Text(policy, Modifier.verticalScroll(rememberScrollState())) },
-        confirmButton = { TextButton(onClick = close) { Text("Close") } })
+        confirmButton = { TextButton(onClick = close) { Text(stringResource(R.string.close)) } })
 }

@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.OutlinedButton
 import com.privatevault.app.controls.TextButton
 import android.Manifest
@@ -109,10 +110,10 @@ internal fun rememberPhotoDraftEditor(viewModel: VaultViewModel): PhotoDraftEdit
 @Composable
 internal fun PhotoDraftControls(state: PhotoDraftEditorState, viewModel: VaultViewModel) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Photos", style = MaterialTheme.typography.titleSmall)
+        Text(stringResource(R.string.photos), style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = state.addFromGallery, enabled = !state.busy) { Text("Add photo") }
-            OutlinedButton(onClick = state.addFromCamera, enabled = !state.busy) { Text("Camera") }
+            OutlinedButton(onClick = state.addFromGallery, enabled = !state.busy) { Text(stringResource(R.string.add_photo)) }
+            OutlinedButton(onClick = state.addFromCamera, enabled = !state.busy) { Text(stringResource(R.string.camera)) }
         }
         state.photos.forEachIndexed { index, draft ->
             val bitmap = remember(draft) {
@@ -129,7 +130,7 @@ internal fun PhotoDraftControls(state: PhotoDraftEditorState, viewModel: VaultVi
                 TextButton(onClick = {
                     state.photos.remove(draft)
                     viewModel.discardDraftPhoto(draft)
-                }) { Text("Remove") }
+                }) { Text(stringResource(R.string.remove)) }
             }
         }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }

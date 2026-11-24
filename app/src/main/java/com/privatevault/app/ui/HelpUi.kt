@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -144,7 +145,7 @@ private val helpAnswers = listOf(
 @Composable
 internal fun HelpPage(openPage: (String) -> Unit) {
     var expanded by rememberSaveable { mutableIntStateOf(-1) }
-    Text("Choose a question for steps and a shortcut to the right screen.",
+    Text(stringResource(R.string.choose_a_question_for_steps_and_a_shortc),
         style = MaterialTheme.typography.bodyMedium)
     helpAnswers.forEachIndexed { index, item ->
         item.section?.let { Text(it, style = MaterialTheme.typography.titleMedium,

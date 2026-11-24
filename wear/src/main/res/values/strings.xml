@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nuvori">Nuvori</string>
+    <string name="authenticator">Authenticator</string>
+    <string name="find_a_code">Find a code</string>
+    <string name="copy_code">Copy code</string>
+</resources>

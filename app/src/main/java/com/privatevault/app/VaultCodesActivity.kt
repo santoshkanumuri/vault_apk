@@ -1,5 +1,9 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.Button
+import com.privatevault.app.controls.FilledTonalButton
+import com.privatevault.app.controls.OutlinedButton
+import com.privatevault.app.controls.TextButton
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -1010,7 +1014,7 @@ class VaultCodesActivity : FragmentActivity() {
         }
         Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(8.dp), contentAlignment = Alignment.Center) {
             Surface(Modifier.widthIn(max = 560.dp).fillMaxWidth().then(if (compact) Modifier else Modifier.fillMaxHeight()),
-                shape = RoundedCornerShape(24.dp)) {
+                shape = NuvoriShapes.Dialog) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         NuvoriLogo(Modifier.size(28.dp))

@@ -6,6 +6,10 @@
 
 package com.privatevault.app
 
+import com.privatevault.app.controls.Button
+import com.privatevault.app.controls.FilledTonalButton
+import com.privatevault.app.controls.OutlinedButton
+import com.privatevault.app.controls.TextButton
 import com.privatevault.app.security.decodePhoto
 import com.privatevault.app.security.PasswordColumnMapping
 import android.net.Uri
@@ -80,7 +84,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -91,7 +94,6 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -101,7 +103,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.runtime.key
 import androidx.compose.runtime.movableContentOf
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -110,7 +111,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material.icons.Icons
@@ -402,7 +402,7 @@ private fun CenteredAuthCard(title: String, subtitle: String, onBack: (() -> Uni
     // The bottom padding keeps the card clear of the "Privacy policy" button drawn at the bottom of the screen.
     Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()
         .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 56.dp), contentAlignment = Alignment.Center) {
-        Card(Modifier.widthIn(max = 460.dp).fillMaxWidth(), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Card(Modifier.widthIn(max = 460.dp).fillMaxWidth(), shape = NuvoriShapes.Dialog, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (onBack != null) BackIcon(onBack)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -72,5 +72,5 @@ internal fun NuvoriTheme(dark: Boolean, content: @Composable () -> Unit) {
             }
         }
     }
-    MaterialTheme(colorScheme = scheme, content = content)
+    MaterialTheme(colorScheme = scheme, shapes = NuvoriMaterialShapes, content = content)
 }

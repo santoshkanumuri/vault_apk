@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape

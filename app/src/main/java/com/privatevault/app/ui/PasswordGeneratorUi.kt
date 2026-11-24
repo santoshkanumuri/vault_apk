@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Refresh
@@ -23,7 +23,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -85,7 +84,7 @@ internal fun PasswordGeneratorDialog(onDismiss: () -> Unit, onUse: (String) -> U
                     FilterChip(selected = !passphrase, onClick = { change(settings.copy(mode = GeneratorMode.PASSWORD)) }, label = { Text("Password") })
                     FilterChip(selected = passphrase, onClick = { change(settings.copy(mode = GeneratorMode.PASSPHRASE)) }, label = { Text("Passphrase") })
                 }
-                Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+                Surface(shape = NuvoriShapes.Card, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(start = 14.dp, end = 4.dp).heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(breakable(value, settings).ifEmpty { "…" }, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.weight(1f).padding(vertical = 8.dp).semantics {

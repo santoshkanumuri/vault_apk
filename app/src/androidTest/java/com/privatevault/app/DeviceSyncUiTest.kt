@@ -18,10 +18,15 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.privatevault.app.data.SyncMembershipEntity
 import com.privatevault.app.sync.DevicePeerStatus
 import com.privatevault.app.sync.DeviceSyncPhase
-import com.privatevault.app.sync.DeviceSyncStatus
 import com.privatevault.app.sync.SyncConflictReview
 import com.privatevault.app.sync.SyncConflictSide
+import com.privatevault.app.sync.LanSyncService
+import com.privatevault.app.sync.PeerAck
 import com.privatevault.app.sync.PeerSyncCounts
+import com.privatevault.app.sync.PeerSyncFacts
+import com.privatevault.app.sync.SyncFacts
+import com.privatevault.app.sync.SyncOverviewRules
+import com.privatevault.app.sync.TransportHealth
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -38,8 +43,8 @@ class DeviceSyncUiTest {
             MaterialTheme(colorScheme = VaultColors) {
                 Column(Modifier.requiredWidth(320.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    DeviceSyncState(DeviceSyncStatus(DeviceSyncPhase.TRANSFERRING,
-                        "Connected securely. Sending and receiving encrypted changes."), 1, 1)
+                    DeviceSyncState(SyncOverviewText(StatusKind.PROGRESS, "Syncing changes",
+                        "Connected securely. Sending and receiving encrypted changes."), 1, 1, busy = true)
                     DeviceSyncPeerCard(device, false,
                         DevicePeerStatus(DeviceSyncPhase.TRANSFERRING, "Encrypted changes are being exchanged."),
                         0, 0, "This device's changes: 2 received, 1 applied", "192.168.1.12",
@@ -119,14 +124,44 @@ class DeviceSyncUiTest {
     @Test fun completedExchangeWithPendingChangesStaysVisible() {
         val device = SyncMembershipEntity("vault", "peer-12345678", "Tablet", "key",
             "ACTIVE", "owner", 1, 1)
+        val words = ResourceSyncWords(InstrumentationRegistry.getInstrumentation().targetContext.resources)
+        val peer = PeerSyncFacts(device.deviceId, "Tablet", 2, true, System.currentTimeMillis())
         compose.setContent {
             MaterialTheme(colorScheme = VaultLightColors) {
                 DeviceSyncPeerCard(device, false, DevicePeerStatus(DeviceSyncPhase.CHECKED,
                     "Encrypted exchange completed."), 1, 1, "", "", false, false, {}, {},
-                    PeerSyncCounts(2, 0, 0, 0), advanced = false)
+                    PeerSyncCounts(2, 0, 0, 0), advanced = false,
+                    ack = peerAckText(peer, PeerAck.WAITING, System.currentTimeMillis(), words))
             }
         }
-        compose.onNodeWithText("Changes waiting").assertExists()
-        compose.onNodeWithText("2 changes from this device still need to reach it.").assertExists()
+        compose.onNodeWithText("Waiting").assertExists()
+        compose.onNodeWithText("Waiting for Tablet to confirm 2 changes.").assertExists()
+    }
+
+    /** The owner's case: Wi-Fi failed, Google Drive delivered everything. It reads as synced, with a quiet line. */
+    @Test fun wifiFailureWhileDriveDeliveredReadsAsUpToDate() {
+        val device = SyncMembershipEntity("vault", "peer-12345678", "Tablet", "key",
+            "ACTIVE", "owner", 1, 1)
+        val now = System.currentTimeMillis()
+        val words = ResourceSyncWords(InstrumentationRegistry.getInstrumentation().targetContext.resources)
+        val facts = SyncFacts(now, listOf(PeerSyncFacts(device.deviceId, "Tablet", 0, true, now - 60_000, wifiFailed = true)),
+            wifi = TransportHealth.FAILED, drive = TransportHealth.OK, lastDriveSync = now - 60_000)
+        val overview = SyncOverviewRules.overview(facts)
+        compose.setContent {
+            MaterialTheme(colorScheme = VaultColors) {
+                Column(Modifier.requiredWidth(320.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    DeviceSyncState(syncOverviewText(facts, overview, words), 0, 1, overview.waitingChanges)
+                    DeviceSyncPeerCard(device, false, DevicePeerStatus(DeviceSyncPhase.ATTENTION,
+                        LanSyncService.PEER_CONNECTION_CLOSED), now - 60_000, now - 60_000, "", "", false, false, {}, {},
+                        advanced = false, ack = peerAckText(facts.peers.single(), overview.peers.getValue(device.deviceId), now, words))
+                }
+            }
+        }
+        compose.onAllNodesWithText("Up to date", useUnmergedTree = true).assertCountEquals(2)
+        compose.onNodeWithText("Wi-Fi couldn't reach Tablet. Google Drive kept it in sync.").assertExists()
+        compose.onNodeWithText("Wi-Fi couldn't reach it on the last check.").assertExists()
+        compose.onNodeWithText("Sync needs attention").assertDoesNotExist()
+        compose.onNodeWithText("Needs attention").assertDoesNotExist()
     }
 }

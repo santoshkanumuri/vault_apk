@@ -207,8 +207,7 @@ class LanSyncService : Service() {
                         DeviceSyncPhase.SEARCHING, DeviceSyncPhase.FOUND, DeviceSyncPhase.CONNECTING)
                     if (searching && quietAttempt) {
                         if (isPaused(this@LanSyncService)) setStatus(DeviceSyncPhase.PAUSED, "Tap Resume to check paired devices again.")
-                    } else if (searching) setStatus(DeviceSyncPhase.ATTENTION,
-                        "No paired device answered. Check Wi-Fi on both devices and try again.")
+                    } else if (searching) setStatus(DeviceSyncPhase.ATTENTION, NO_DEVICE_ANSWERED)
                     stopSelf()
                     break
                 }
@@ -514,8 +513,8 @@ class LanSyncService : Service() {
         } catch (_: LanSyncExchange.MembershipMessageServed) {
             return true
         } catch (_: Exception) {
-            setStatus(DeviceSyncPhase.ATTENTION, "The connection closed before the check finished. Retrying on Wi-Fi.")
-            peerId?.let { setPeerStatus(it, DeviceSyncPhase.ATTENTION, "Connection closed before the check finished.") }
+            setStatus(DeviceSyncPhase.ATTENTION, CONNECTION_CLOSED)
+            peerId?.let { setPeerStatus(it, DeviceSyncPhase.ATTENTION, PEER_CONNECTION_CLOSED) }
         }
         finally { deadline.cancel(); connections.remove(socket); locks.release() }
         return false
@@ -710,6 +709,10 @@ class LanSyncService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        /** Wi-Fi could not reach a device. [SyncOverviewRules.isReachFailure] keeps these apart from local problems. */
+        const val NO_DEVICE_ANSWERED = "No paired device answered. Check Wi-Fi on both devices and try again."
+        const val CONNECTION_CLOSED = "The connection closed before the check finished. Retrying on Wi-Fi."
+        const val PEER_CONNECTION_CLOSED = "Connection closed before the check finished."
         internal fun syncPort(vaultId: String): Int = 20_000 + Math.floorMod(vaultId.hashCode(), 30_000)
         private const val PRE_AUTH_TIMEOUT_MS = 15_000
         /** L-06: the whole check before a device proves membership, however slowly it sends. */

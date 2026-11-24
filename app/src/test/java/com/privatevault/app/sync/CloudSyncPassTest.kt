@@ -338,7 +338,7 @@ class CloudSyncPassTest {
      * member under the root prefix. Unsigned or forged, it is unknown progress: it never raises a
      * floor (which would let compaction delete history the member still needs) nor opens a gate.
      */
-    @Test fun forgedAndUnsignedProgressNeverCountsButTheContactTimeDoes() {
+    @Test fun forgedAndUnsignedProgressNeverCountsNorTheContactTime() {
         val drive = MemoryDrive()
         val a = device(V.MANAGER_ID)
         val inflated = SyncProgress(mapOf(V.CLIENT_ID to SyncChainHead(900, "ab".repeat(32))),
@@ -355,7 +355,8 @@ class CloudSyncPassTest {
         a.pass(drive)
         assertNull(a.peerProgress[V.CLIENT_ID])
         assertNull(a.features[V.CLIENT_ID])
-        assertEquals(at, a.seen[V.CLIENT_ID])
+        // It does not make the member look seen either (Devices "Last seen", "Up to date").
+        assertNull(a.seen[V.CLIENT_ID])
         // Signed by another member's key: refused too.
         val forged = DriveProgress.body(V.VAULT_ID, V.CLIENT_ID, 1, at + 1, 1, inflated.encode().toString(Charsets.UTF_8),
             listOf(DriveCompaction.FEATURE)) { DeviceIdentityCrypto.sign(V.otherSeed, it) }

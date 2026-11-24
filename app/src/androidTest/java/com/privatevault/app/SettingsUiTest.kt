@@ -11,7 +11,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import com.privatevault.app.autofill.AutofillPreferences
 import com.privatevault.app.sync.DeviceSyncPhase
-import com.privatevault.app.sync.DeviceSyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
@@ -59,7 +58,8 @@ class SettingsUiTest {
         val phase = mutableStateOf(DeviceSyncPhase.CHECKED)
         compose.setContent {
             MaterialTheme {
-                DeviceSyncState(DeviceSyncStatus(phase.value, "Checked."), 0, 1, 0, 0L) { taps++ }
+                DeviceSyncState(SyncOverviewText(StatusKind.SUCCESS, "Up to date", "Checked."), 0, 1,
+                    busy = phase.value == DeviceSyncPhase.CONNECTING || phase.value == DeviceSyncPhase.TRANSFERRING) { taps++ }
             }
         }
         compose.onNodeWithText("Sync now").performClick()

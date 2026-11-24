@@ -525,6 +525,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         pendingCameraUri = null
         pendingCameraFile?.delete()
         pendingCameraFile = null
+        // Security review L-09: no plaintext capture outlives its flow, including one an earlier flow left behind.
+        java.io.File(getApplication<Application>().cacheDir, "camera").listFiles()?.forEach { it.delete() }
     }
 
     fun finishCamera(entryId: String, success: Boolean) = viewModelScope.launch {

@@ -140,4 +140,12 @@ class AccountMatchingTest {
         assertEquals(8, possibleLoginMatches(entries, "com.android.chrome", null, "https://github.com").size)
         assertEquals(3, possibleLoginMatches(entries, "com.android.chrome", null, "https://github.com", limit = 3).size)
     }
+
+    /** Security review M-01: an unconfirmed page gets no suggestions and no list; a WebView's claim ranks nothing. */
+    @Test fun pickerBrowsingHidesHintsWhereThePageIsUnconfirmed() {
+        assertEquals(PickerBrowsing(suggestions = false, claimedSite = false, everyLogin = false), pickerBrowsing(unverified = true, embeddedWebView = true))
+        assertEquals(PickerBrowsing(suggestions = false, claimedSite = false, everyLogin = false), pickerBrowsing(unverified = true, embeddedWebView = false))
+        assertEquals(PickerBrowsing(suggestions = true, claimedSite = false, everyLogin = true), pickerBrowsing(unverified = false, embeddedWebView = true))
+        assertEquals(PickerBrowsing(suggestions = true, claimedSite = true, everyLogin = true), pickerBrowsing(unverified = false, embeddedWebView = false))
+    }
 }

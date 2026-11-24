@@ -119,3 +119,17 @@ internal fun possibleLoginMatches(
 /** The name for a new saved login: the user's choice when given (trimmed, at most 200 characters), otherwise [default]. */
 internal fun newLoginTitle(requested: String?, default: String): String =
     requested?.trim()?.take(200)?.trimEnd()?.takeIf { it.isNotEmpty() } ?: default
+
+/**
+ * What the login picker may show before the user searches (security review M-01).
+ * - [suggestions]: heuristic "possible matches" (app name keywords, a site an embedded WebView claims).
+ * - [claimedSite]: whether a site an app's WebView claims may rank those suggestions. Any app can claim any site.
+ * - [everyLogin]: the full list of logins under the suggestions.
+ * On the unverified fallback (an unknown browser, a non-https page, a WebView with frames) nothing is listed: the user
+ * searches for the login, then confirms it for this app.
+ */
+internal data class PickerBrowsing(val suggestions: Boolean, val claimedSite: Boolean, val everyLogin: Boolean)
+
+internal fun pickerBrowsing(unverified: Boolean, embeddedWebView: Boolean): PickerBrowsing =
+    if (unverified) PickerBrowsing(suggestions = false, claimedSite = false, everyLogin = false)
+    else PickerBrowsing(suggestions = true, claimedSite = !embeddedWebView, everyLogin = true)

@@ -15,18 +15,25 @@ $randomSource.Dispose()
 $signingPassword = [Convert]::ToBase64String($passwordBytes)
 $passwordBytes.Clear()
 
+# Pass the password through the environment, not the command line, so it never shows in process listings
+# (security review L-14). keytool reads it with -storepass:env / -keypass:env.
+$env:NUVORI_SIGNING_PASSWORD = $signingPassword
 $keytoolArguments = @(
     '-genkeypair', '-v',
     '-keystore', $keyStorePath,
-    '-storepass', $signingPassword,
-    '-keypass', $signingPassword,
+    '-storepass:env', 'NUVORI_SIGNING_PASSWORD',
+    '-keypass:env', 'NUVORI_SIGNING_PASSWORD',
     '-alias', 'private-vault',
     '-keyalg', 'RSA',
     '-keysize', '3072',
     '-validity', '10000',
     '-dname', 'CN=PrivateVault,O=Local,C=US'
 )
-$process = Start-Process -FilePath 'keytool.exe' -ArgumentList $keytoolArguments -Wait -PassThru -NoNewWindow
+try {
+    $process = Start-Process -FilePath 'keytool.exe' -ArgumentList $keytoolArguments -Wait -PassThru -NoNewWindow
+} finally {
+    Remove-Item Env:NUVORI_SIGNING_PASSWORD -ErrorAction SilentlyContinue
+}
 if ($process.ExitCode -ne 0) { throw "keytool failed with exit code $($process.ExitCode)" }
 
 $portablePath = $keyStorePath.Replace('\', '/')

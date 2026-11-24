@@ -50,4 +50,14 @@ class LockTimingTest {
         }
         assertEquals(false, biometricSessionValid(1_001L, 501L, 4, 1_000L, 500L, 4, 1_000L, 0L))
     }
+    @Test fun fingerprintAccessNeverLastsLongerThanAWeek() {
+        assertEquals(listOf(0L, 86_400_000L, 604_800_000L), masterPasswordIntervals)
+        // 2.3.x offered 1 month; old settings and backups get 1 week.
+        assertEquals(604_800_000L, capMasterPasswordInterval(2_592_000_000L))
+        assertEquals(604_800_000L, capMasterPasswordInterval(Long.MAX_VALUE))
+        masterPasswordIntervals.forEach { assertEquals(it, capMasterPasswordInterval(it)) }
+        assertEquals(0L, capMasterPasswordInterval(-5L))
+        assertEquals(86_400_000L, capMasterPasswordInterval(3_600_000L))
+        assertEquals(false, biometricSessionValid(1_001L, 501L, 4, 1_000L, 500L, 4, 1_000L, 2_592_000_000L))
+    }
 }

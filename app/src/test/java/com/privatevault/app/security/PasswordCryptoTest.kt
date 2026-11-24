@@ -78,4 +78,13 @@ class PasswordCryptoTest {
             assertTrue("$tookMillis ms for $target ms", tookMillis in (target / 3)..(target * 3))
         }
     }
+
+    @Test
+    fun passwordBytesMatchTheStringEncodingSoExistingVaultsStillOpen() {
+        // Security review L-11: no String is made, but the bytes must not change.
+        listOf("a long memorable test phrase", "pässwörd-ünïcödé-€", "emoji \uD83D\uDD11 key", "lone \uD83D surrogate",
+            "trailing \uDC00", "").forEach { text ->
+            assertArrayEquals(text, text.toByteArray(Charsets.UTF_8), PasswordCrypto.utf8(text.toCharArray()))
+        }
+    }
 }

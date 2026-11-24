@@ -840,7 +840,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 strengthenDriveBackupKey(password.copyOf(), it.copyOf())
             }
             .onFailure {
-                val newer = it is com.privatevault.app.security.UnsupportedVaultFormatException
+                // A newer format or a Keystore failure is not a wrong password: retrying can't help.
+                val newer = it is com.privatevault.app.security.UnsupportedVaultFormatException ||
+                    it is com.privatevault.app.security.VaultKeyUnavailableException
                 // Security review L-03: wrong passwords in a row slow down later tries, across restarts.
                 if (!newer) preferences.edit().putInt(UNLOCK_FAILURES, (failures + 1).coerceAtMost(1000))
                     .putLong(UNLOCK_FAILED_AT, System.currentTimeMillis()).commit()
@@ -890,7 +892,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             storedOptions == null -> com.privatevault.app.data.VaultSettings(vaultId = UUID.randomUUID().toString())
             storedOptions.vaultId.isBlank() -> storedOptions.copy(vaultId = UUID.randomUUID().toString())
             else -> storedOptions
-        }
+        }.let { it.copy(masterPasswordIntervalMs = com.privatevault.app.security.capMasterPasswordInterval(it.masterPasswordIntervalMs)) }
         if (storedOptions != null) {
             _lightMode.value = options.lightMode
             _nfcEnabled.value = options.nfcEnabled && nfcSupported
@@ -922,8 +924,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
         val retained = _entries.value.flatMap { it.photos }.flatMap { listOf(it.encryptedFileName, it.encryptedThumbnailFileName) }.toSet()
         photoStore.cleanupAbandonedRestore(retained)
+        val photoUpgradeKey = key.copyOf()
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching { com.privatevault.app.sync.PhotoOrphanSweeper(db, photoStore).sweep() }
+            // Security review L-10: photos from 2.3.x move to their own key, until the vault locks.
+            try { runCatching { photoStore.upgradeToPhotoKey(photoUpgradeKey) { database === db && _status.value is VaultStatus.Unlocked } } }
+            finally { photoUpgradeKey.fill(0) }
         }
         touch()
         incomingSyncJob?.cancel()
@@ -1003,7 +1009,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             VaultBackupManager(getApplication(), db.dao(), photoStore), key, force)
     }
 
-    fun dailyBiometricEncryptionCipher(): Cipher? = runCatching { biometricGate.dailyEncryptionCipher() }
+    fun dailyBiometricEncryptionCipher(): Cipher? = runCatching {
+        biometricGate.dailyEncryptionCipher(_securitySettings.value.masterPasswordIntervalMs) }
         .onFailure { notify("Fingerprint or face unlock isn't available. Use the master password next time.", StatusKind.WARNING) }
         .getOrNull()
 

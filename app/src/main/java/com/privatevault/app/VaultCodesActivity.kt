@@ -320,7 +320,7 @@ class VaultCodesActivity : FragmentActivity() {
                     try {
                         loadedIcons = runCatching { database.syncedSiteIcons().all() }.getOrDefault(emptyList())
                         val settings = database.dao().settings()
-                        masterInterval = settings?.masterPasswordIntervalMs ?: 86_400_000L
+                        masterInterval = com.privatevault.app.security.capMasterPasswordInterval(settings?.masterPasswordIntervalMs ?: 86_400_000L)
                         inactivityTimeoutMs = settings?.inactivityTimeoutMs ?: 60_000L
                         if (passkeyOperation != null) { loadedPasskeys = database.dao().allPasskeys(); emptyList() }
                         // Profile mode never reads passwords or authenticator secrets.
@@ -346,7 +346,7 @@ class VaultCodesActivity : FragmentActivity() {
                 }
                 if (password != null && masterInterval > 0 && biometricAvailable()) {
                     try {
-                        val cipher = confirm(gate.dailyEncryptionCipher(), "Enable fingerprint unlock")
+                        val cipher = confirm(gate.dailyEncryptionCipher(masterInterval), "Enable fingerprint unlock")
                         gate.enableDailySession(cipher, requireNotNull(key), masterInterval)
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { /* Password authentication still permits this visit. */ }

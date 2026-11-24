@@ -2592,8 +2592,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 SecurityChoices("Auto-lock after inactivity while open", "The countdown starts after your last interaction. Switching apps never extends it. A file or photo picker that Nuvori opens counts as time in the app, for up to 10 minutes.",
                     security.inactivityTimeoutMs, listOf(60_000L to "1 minute", 300_000L to "5 minutes", 900_000L to "15 minutes", 1_800_000L to "30 minutes"),
                     onSelect = viewModel::setInactivityTimeout)
-                SecurityChoices("Require the master password again", "How often Nuvori asks for your master password. In between, you unlock with fingerprint or face.",
-                    security.masterPasswordIntervalMs, listOf(0L to "Every unlock", 86_400_000L to "After 1 day", 604_800_000L to "After 1 week", 2_592_000_000L to "After 1 month"),
+                SecurityChoices("Require the master password again", "How often Nuvori asks for your master password. In between, you unlock with fingerprint or face, for up to 1 week.",
+                    security.masterPasswordIntervalMs, listOf(0L to "Every unlock", 86_400_000L to "After 1 day", 604_800_000L to "After 1 week"),
                     footnote = "Changing this ends the current fingerprint or face session. Enter your master password after the next lock to start a new one.") { value ->
                     if (value >= 604_800_000L) { pendingInterval = value; page = "Confirm interval" }
                     else viewModel.setMasterPasswordInterval(value)
@@ -2610,8 +2610,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 SettingsSection("Ask for the master password less often?") {
                     StatusBanner(kind = StatusKind.WARNING,
                         message = "You'll type your master password less often, so it's easier to forget. Nuvori can't reset it, and a forgotten password means a lost vault.")
-                    if (pendingInterval == 2_592_000_000L) StatusBanner(kind = StatusKind.WARNING,
-                        message = "For up to 30 days, anyone whose fingerprint or face unlocks this phone can open your vault.")
+                    if (pendingInterval == 604_800_000L) StatusBanner(kind = StatusKind.WARNING,
+                        message = "For up to 7 days, anyone whose fingerprint or face unlocks this phone can open your vault.")
                     SettingsPrimaryButton("Confirm", onClick = { pendingInterval?.let(viewModel::setMasterPasswordInterval); pendingInterval = null; page = "Security" })
                     SettingsSecondaryButton("Cancel", onClick = { pendingInterval = null; page = "Security" })
                 }

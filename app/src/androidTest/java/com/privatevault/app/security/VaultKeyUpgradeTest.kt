@@ -15,17 +15,21 @@ import java.security.SecureRandom
 
 /**
  * The vault key file on a real device: a 2.3.1 vault (format 1) opens with its password and is
- * saved again with timed Argon2id settings (format 2). Uses its own preferences file, never the
- * app's vault.
+ * saved again with timed Argon2id settings and the Keystore layer (format 3). Uses its own
+ * preferences file and Keystore alias, never the app's vault.
  */
 class VaultKeyUpgradeTest {
     private val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
     private val name = "vault_bootstrap_upgrade_test"
     private val password = "synthetic-test-password".toCharArray()
-    private fun manager(targetMillis: Long = 300) = VaultKeyManager(context, targetMillis, name)
+    private val hardware = KeystoreVaultKeyHardware("nuvori_vault_key_wrap_test")
+    private fun manager(targetMillis: Long = 300) = VaultKeyManager(context, targetMillis, name, hardware)
     private val prefs get() = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
-    @Before @After fun clear() { prefs.edit(commit = true) { clear() } }
+    @Before @After fun clear() {
+        prefs.edit(commit = true) { clear() }
+        java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry("nuvori_vault_key_wrap_test")
+    }
 
     /** Writes the vault key exactly as 2.3.1 and earlier did: format 1, no Argon2id settings. */
     private fun writeLegacyVault(): ByteArray {
@@ -50,7 +54,7 @@ class VaultKeyUpgradeTest {
         assertEquals("a wrong password changes nothing", 1, manager().format)
 
         assertArrayEquals(key, manager().unlock(password))
-        assertEquals(2, manager().format)
+        assertEquals(3, manager().format)
         val kdf = manager().kdf
         assertTrue(kdf.toString(), kdf.valid)
         assertNotEquals(oldSalt, prefs.getString("salt", null))
@@ -78,7 +82,31 @@ class VaultKeyUpgradeTest {
         manager().changePassword(password, replacement)
         assertArrayEquals(key, manager().unlock(replacement))
         assertThrows(Exception::class.java) { manager().unlock(password) }
-        assertEquals(2, manager().format)
+        assertEquals(3, manager().format)
+    }
+
+    @Test fun aFormat2VaultGainsTheKeystoreLayerOnItsNextUnlock() {
+        val key = manager().create(password)
+        // Strip the Keystore layer, as a 2.3.3 phone saved it.
+        val noHardware = VaultKeyManager(context, 300, name, hardware = null)
+        noHardware.changePassword(password, password)
+        assertEquals(2, noHardware.format)
+        val salt = prefs.getString("salt", null)
+
+        assertArrayEquals(key, manager().unlock(password))
+        assertEquals(3, manager().format)
+        assertEquals("no extra Argon2id run", salt, prefs.getString("salt", null))
+        // The stored bytes alone no longer open with the password.
+        assertThrows(VaultKeyUnavailableException::class.java) { noHardware.unlock(password) }
+        assertArrayEquals(key, manager().unlock(password))
+    }
+
+    @Test fun aLostKeystoreKeyIsNeverReportedAsAWrongPassword() {
+        manager().create(password)
+        assertEquals(3, manager().format)
+        java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry("nuvori_vault_key_wrap_test")
+        assertThrows(VaultKeyUnavailableException::class.java) { manager().unlock(password) }
+        assertEquals("nothing is rewritten", 3, manager().format)
     }
 
     @Test fun damagedOrNewerSettingsAreRefusedBeforeAnyKeyDerivation() {
@@ -87,7 +115,7 @@ class VaultKeyUpgradeTest {
         assertThrows(IllegalStateException::class.java) { manager().unlock(password) }
         prefs.edit(commit = true) { putInt("kdf_memory_kib", 65_536); putInt("kdf_iterations", 1) }
         assertThrows(IllegalStateException::class.java) { manager().unlock(password) }
-        prefs.edit(commit = true) { putInt("format", 3) }
+        prefs.edit(commit = true) { putInt("format", 4) }
         assertThrows(UnsupportedVaultFormatException::class.java) { manager().unlock(password) }
     }
 }

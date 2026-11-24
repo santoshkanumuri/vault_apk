@@ -204,7 +204,8 @@ class VaultBackupManager(
             appearanceSurface = root.optString("appearanceSurface", "").takeIf { com.privatevault.app.appearance.isValidAppearanceId(it) },
             backgroundTimeoutMs = root.optLong("backgroundTimeoutMs", 10_000L).also { require(it in com.privatevault.app.security.backgroundTimeouts) },
             inactivityTimeoutMs = root.optLong("inactivityTimeoutMs", 60_000L).also { require(it in com.privatevault.app.security.inactivityTimeouts) },
-            masterPasswordIntervalMs = root.optLong("masterPasswordIntervalMs", 86_400_000L).also { require(it in com.privatevault.app.security.masterPasswordIntervals) },
+            masterPasswordIntervalMs = root.optLong("masterPasswordIntervalMs", 86_400_000L)
+                .also { require(it >= 0L) }.let { com.privatevault.app.security.capMasterPasswordInterval(it) },
             passkeys = (if (root.getInt("version") >= 5) root.getJSONArray("passkeys") else JSONArray()).mapJson {
                 com.privatevault.app.data.VaultPasskey(it.getString("id"), it.getString("rpId"), it.getString("userHandle"),
                     it.getString("username"), it.getString("displayName"), it.getString("privateKey"), it.getString("publicKey"), it.getLong("createdAt"))

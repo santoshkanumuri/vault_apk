@@ -1,0 +1,51 @@
+[
+  {
+    "name": "inline marks",
+    "plain": "Hello",
+    "hash": "185f8db32271fe25f561a6fc938b2e26",
+    "document": {"format": "nuvori.richnote", "version": 1, "plainHash": "185f8db32271fe25f561a6fc938b2e26", "blocks": [
+      {"type": "paragraph", "spans": [
+        {"text": "H", "bold": true, "italic": true, "underline": true, "strike": true},
+        {"text": "e", "code": true},
+        {"text": "l", "color": "red", "bg": "yellow"},
+        {"text": "l", "link": "https://example.com/path?q=1"},
+        {"text": "o"}
+      ]}
+    ]}
+  },
+  {
+    "name": "every block type",
+    "plain": "Trip\n☑ Charger\n☐ Adapter\n  • Nested\n1. First\n2. Second\n> Quoted\n———\nA | B\n1 | 2",
+    "hash": "824cbd2e97e7000f5722d43d24f334c4",
+    "document": {"format": "nuvori.richnote", "version": 1, "plainHash": "824cbd2e97e7000f5722d43d24f334c4", "blocks": [
+      {"type": "heading", "level": 2, "spans": [{"text": "Trip"}]},
+      {"type": "check", "checked": true, "spans": [{"text": "Charger"}]},
+      {"type": "check", "checked": false, "spans": [{"text": "Adapter"}]},
+      {"type": "bullet", "indent": 1, "spans": [{"text": "Nested", "italic": true}]},
+      {"type": "numbered", "spans": [{"text": "First"}]},
+      {"type": "numbered", "spans": [{"text": "Second"}]},
+      {"type": "quote", "spans": [{"text": "Quoted"}]},
+      {"type": "divider"},
+      {"type": "table", "header": true, "rows": [
+        [{"spans": [{"text": "A"}]}, {"spans": [{"text": "B", "bold": true}]}],
+        [{"spans": [{"text": "1"}]}, {"spans": [{"text": "2"}]}]
+      ]}
+    ]}
+  },
+  {
+    "name": "normalizing: merged spans, unknown values dropped, unsafe link removed",
+    "plain": "Plain line\n\nSecond paragraph",
+    "hash": "0e6a658aeb546e1a21438e827c9931f3",
+    "document": {"format": "nuvori.richnote", "version": 1, "plainHash": "0e6a658aeb546e1a21438e827c9931f3", "blocks": [
+      {"type": "paragraph", "spans": [{"text": "Plain ", "bold": true}, {"text": "line", "bold": true, "color": "chartreuse"}]},
+      {"type": "unknown-block", "spans": [{"text": "ignored"}]},
+      {"type": "paragraph", "spans": []},
+      {"type": "paragraph", "spans": [{"text": "Second ", "link": "javascript:alert(1)"}, {"text": "paragraph", "future": 1}]}
+    ]},
+    "normalized": {"format": "nuvori.richnote", "version": 1, "plainHash": "0e6a658aeb546e1a21438e827c9931f3", "blocks": [
+      {"type": "paragraph", "spans": [{"text": "Plain line", "bold": true}]},
+      {"type": "paragraph", "spans": []},
+      {"type": "paragraph", "spans": [{"text": "Second paragraph"}]}
+    ]}
+  }
+]

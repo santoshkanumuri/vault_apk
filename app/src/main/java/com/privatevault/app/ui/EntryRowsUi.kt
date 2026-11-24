@@ -1,6 +1,5 @@
 package com.privatevault.app
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -188,6 +187,3 @@ internal fun EntryType.legacyLabel(): String = when (this) {
     EntryType.CARD -> "card"; EntryType.QUESTION -> "security question"; EntryType.PASSWORD -> "password"
     EntryType.NOTE -> "note"; EntryType.AUTHENTICATOR -> "authenticator"; EntryType.AUTOFILL -> "autofill profile"
 }
-
-@Suppress("unused")
-private val unusedBorder = BorderStroke(1.dp, Color.Transparent)

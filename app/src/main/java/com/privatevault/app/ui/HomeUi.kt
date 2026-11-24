@@ -42,6 +42,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -246,7 +247,12 @@ internal fun NuvoriSearchField(value: String, onValue: (String) -> Unit, placeho
 /** Greeting, item count, lock, and the prominent search entry. */
 @Composable
 internal fun HomeHeader(itemCount: Int, search: String, onSearch: (String) -> Unit, onLock: () -> Unit, modifier: Modifier = Modifier) {
-    val hour = remember { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) }
+    // Read again each time the screen comes back, so "Good morning" doesn't last into the evening.
+    var hour by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) }
+    val headerLifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(headerLifecycle) {
+        headerLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY) }
+    }
     Column(modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {

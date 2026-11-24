@@ -840,7 +840,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 strengthenDriveBackupKey(password.copyOf(), it.copyOf())
             }
             .onFailure {
-                val newer = it is com.privatevault.app.security.UnsupportedVaultFormatException
+                // A newer format or a Keystore failure is not a wrong password: retrying can't help.
+                val newer = it is com.privatevault.app.security.UnsupportedVaultFormatException ||
+                    it is com.privatevault.app.security.VaultKeyUnavailableException
                 // Security review L-03: wrong passwords in a row slow down later tries, across restarts.
                 if (!newer) preferences.edit().putInt(UNLOCK_FAILURES, (failures + 1).coerceAtMost(1000))
                     .putLong(UNLOCK_FAILED_AT, System.currentTimeMillis()).commit()

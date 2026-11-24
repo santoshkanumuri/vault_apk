@@ -285,7 +285,7 @@ internal interface CloudSyncStore : SyncSessionStore {
     fun acceptMembershipEvents(events: List<SyncMembershipEventEntity>)
     /** Changes by [author] this device can relay, after [after], in order, at most [limit]. */
     fun heldOperations(author: String, after: Long, limit: Int): List<SyncOperationEntity>
-    /** A peer wrote its progress to the drive at [at], at the end of a finished drive pass. */
+    /** A peer signed and wrote its progress to the drive at [at], at the end of a finished drive pass. */
     fun recordPeerSeen(deviceId: String, at: Long)
     /** What a peer announced in its drive progress file, as in a Wi-Fi handshake. */
     fun recordPeerFeatures(deviceId: String, features: Set<String>) {}
@@ -734,12 +734,13 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
             // is deleted because of it. A report older than one received over Wi-Fi is refused there.
             val signed = if (epochOf(file.name) == keysEpoch)
                 DriveProgress.verify(body, current.vaultId, peer, member.identityPublicKey, keysEpoch) else null
-            if (signed != null) {
-                runCatching { store.recordPeerProgress(peer, signed.progress) }
-                runCatching { signed.features?.let { store.recordPeerFeatures(peer, it) } }
-            }
-            // A sealed report under the peer's own name proves it wrote to the drive, even when its
-            // progress is refused. Contact times never move backward, so an old report changes nothing.
+            if (signed == null) continue
+            runCatching { store.recordPeerProgress(peer, signed.progress) }
+            runCatching { signed.features?.let { store.recordPeerFeatures(peer, it) } }
+            // Only a report the member signed proves it synced: an unsigned one may come from a removed
+            // device that still holds an old key, so it never makes a member look seen or up to date.
+            // A signed report counts even when its progress is refused (older than a Wi-Fi report).
+            // Contact times never move backward, so an old report changes nothing.
             runCatching {
                 val seenAt = minOf(runCatching { body.get("updatedAt").asLong }.getOrDefault(0L), now())
                 if (seenAt > 0) store.recordPeerSeen(peer, seenAt)

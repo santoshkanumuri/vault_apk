@@ -197,4 +197,68 @@
     <string name="you_may_not_need_a_password_here_use_tha">You may not need a password here: use that button on the site.</string>
     <string name="dismiss">Dismiss</string>
     <string name="nothing_to_copy_add_details_in_nuvori">Nothing to copy. Add details in Nuvori.</string>
+    <!-- Sync status over Wi-Fi and Google Drive together (sync/SyncOverview.kt). Same words as Windows src/strings.ts syncStatusText. -->
+    <string name="sync_state_syncing">Syncing changes</string>
+    <string name="sync_state_attention">Sync needs attention</string>
+    <string name="sync_state_keys">Waiting for new sync keys</string>
+    <string name="sync_state_conflicts">Conflicts to review</string>
+    <string name="sync_state_waiting_for">Waiting for %1$s</string>
+    <string name="sync_state_waiting_for_devices">Waiting for %1$d devices</string>
+    <string name="sync_state_waiting_here">Changes still waiting</string>
+    <string name="sync_state_stale">Devices haven\'t synced in %1$d days</string>
+    <string name="sync_state_not_yet">Not synced yet</string>
+    <string name="sync_state_up_to_date">Up to date</string>
+    <string name="sync_detail_up_to_date">Every device has your latest changes.</string>
+    <plurals name="sync_detail_waiting_one">
+        <item quantity="one">%2$s hasn\'t confirmed %1$d change yet.</item>
+        <item quantity="other">%2$s hasn\'t confirmed %1$d changes yet.</item>
+    </plurals>
+    <plurals name="sync_detail_waiting_many">
+        <item quantity="one">%1$d change isn\'t on every device yet.</item>
+        <item quantity="other">%1$d changes aren\'t on every device yet.</item>
+    </plurals>
+    <string name="sync_detail_waiting_here">Changes arrived and are waiting to apply on this device.</string>
+    <string name="sync_detail_stale_drive">Open Nuvori on your other device so it syncs with Google Drive.</string>
+    <string name="sync_detail_stale_wifi">Open Nuvori on your other device on the same Wi-Fi.</string>
+    <string name="sync_detail_not_yet">Waiting for the first sync with your devices.</string>
+    <string name="sync_detail_keys">Changes made here stay on this device until they arrive.</string>
+    <plurals name="sync_detail_conflicts">
+        <item quantity="one">%1$d record was changed on two devices. Choose which version to keep.</item>
+        <item quantity="other">%1$d records were changed on two devices. Choose which version to keep.</item>
+    </plurals>
+    <string name="sync_detail_both_failed">Couldn\'t reach your devices over Wi-Fi or Google Drive.</string>
+    <plurals name="sync_detail_wifi_only_failed">
+        <item quantity="one">Wi-Fi couldn\'t reach %1$s. Your changes wait until it connects.</item>
+        <item quantity="other">Wi-Fi couldn\'t reach %1$s. Your changes wait until they connect.</item>
+    </plurals>
+    <string name="sync_detail_drive_only_failed">Google Drive didn\'t finish the last sync. Your changes wait on this device.</string>
+    <plurals name="sync_detail_rejected">
+        <item quantity="one">%1$d incoming change couldn\'t apply. Update both devices, then retry.</item>
+        <item quantity="other">%1$d incoming changes couldn\'t apply. Update both devices, then retry.</item>
+    </plurals>
+    <string name="sync_detail_device_silent">%1$s hasn\'t synced in %2$d days and doesn\'t have your latest changes.</string>
+    <plurals name="sync_note_wifi_failed_drive_kept_up">
+        <item quantity="one">Wi-Fi couldn\'t reach %1$s. Google Drive kept it in sync.</item>
+        <item quantity="other">Wi-Fi couldn\'t reach %1$s. Google Drive kept them in sync.</item>
+    </plurals>
+    <string name="sync_note_wifi_failed_drive_carries">Wi-Fi couldn\'t reach %1$s. Changes go through Google Drive.</string>
+    <string name="sync_note_wifi_failed">Wi-Fi couldn\'t reach %1$s on the last check.</string>
+    <string name="sync_note_drive_failed_wifi_kept_up">Google Drive didn\'t finish. Wi-Fi kept your devices in sync.</string>
+    <string name="sync_note_drive_failed_wifi_carries">Google Drive didn\'t finish. Changes go over Wi-Fi.</string>
+    <string name="sync_note_drive_failed">Google Drive didn\'t finish the last sync.</string>
+    <string name="sync_note_paused">Automatic sync is paused. Sync now still checks once.</string>
+    <string name="sync_your_devices">your devices</string>
+    <string name="sync_last_synced">Last synced %1$s</string>
+    <string name="sync_peer_up_to_date">Up to date</string>
+    <string name="sync_peer_waiting">Waiting</string>
+    <string name="sync_peer_silent">Not syncing</string>
+    <string name="sync_peer_not_checked">Not checked yet</string>
+    <string name="sync_peer_detail_up_to_date">Has all your changes.</string>
+    <plurals name="sync_peer_detail_waiting">
+        <item quantity="one">Waiting for %2$s to confirm %1$d change.</item>
+        <item quantity="other">Waiting for %2$s to confirm %1$d changes.</item>
+    </plurals>
+    <string name="sync_peer_detail_silent">Hasn\'t synced in %1$d days. Open Nuvori on it to catch up.</string>
+    <string name="sync_peer_detail_not_checked">Linked to your vault. Waiting for the first check.</string>
+    <string name="sync_peer_wifi_failed">Wi-Fi couldn\'t reach it on the last check.</string>
 </resources>

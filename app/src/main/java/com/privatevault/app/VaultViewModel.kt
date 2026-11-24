@@ -246,6 +246,25 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             lockedSyncStore.progress(), mirror.peerProgress[deviceId])
     }
 
+    /**
+     * What the one sync status reads, over Wi-Fi and Google Drive together ([com.privatevault.app.sync.SyncOverviewRules]).
+     * Reads sync files: call it off the main thread where it runs often. Null before a sync group exists.
+     */
+    internal fun syncFacts(devices: List<com.privatevault.app.data.SyncMembershipEntity>,
+        lan: com.privatevault.app.sync.DeviceSyncStatus,
+        peerStatus: Map<String, com.privatevault.app.sync.DevicePeerStatus>,
+        cloud: com.privatevault.app.sync.CloudSyncStatus, conflicts: Int, rejected: Int,
+        now: Long = System.currentTimeMillis()): com.privatevault.app.sync.SyncFacts? = runCatching {
+        val mirror = lockedSyncStore.snapshot() ?: return null
+        val active = devices.filter { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name }
+        com.privatevault.app.sync.SyncOverviewRules.facts(now,
+            active.map { it.deviceId to it.displayName.ifBlank { "A paired device" } }, mirror.localDeviceId,
+            runCatching { lockedSyncStore.progress() }.getOrNull(), mirror.peerProgress, mirror.lastContactAt,
+            mirror.lastExchangeAt, lan, peerStatus, cloud, conflicts, rejected,
+            runCatching { lockedSyncStore.waitingForKeys() }.getOrDefault(false),
+            runCatching { deviceSyncQueueStatus() != null }.getOrDefault(false))
+    }.getOrNull()
+
     fun deviceSyncAddress(deviceId: String): String =
         lockedSyncStore.snapshot()?.peerAddresses?.get(deviceId).orEmpty()
     fun deviceSyncContact(deviceId: String): Pair<Long, Long> {

@@ -75,8 +75,10 @@ import com.privatevault.app.data.EntryType
 import com.privatevault.app.data.EntryWithDetails
 import com.privatevault.app.data.VaultEntry
 import com.privatevault.app.security.Totp
+import com.privatevault.app.sync.AttentionCause
 import com.privatevault.app.sync.DeviceSyncPhase
 import com.privatevault.app.sync.MemberStatus
+import com.privatevault.app.sync.OverallSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -115,7 +117,13 @@ internal fun SyncAcknowledgementEffect(viewModel: VaultViewModel) {
                 SyncRequests.clear(); viewModel.notify("Synced. Some changes are still waiting to apply.", StatusKind.WARNING)
             }
             DeviceSyncPhase.ATTENTION -> {
-                SyncRequests.clear(); viewModel.notify("Sync didn't finish. ${status.detail}".trim(), StatusKind.ERROR)
+                SyncRequests.clear()
+                // Sync now also runs a Google Drive pass: a Wi-Fi miss is no failure while Drive works.
+                val cloud = viewModel.cloudSyncStatus.value
+                if (com.privatevault.app.sync.SyncOverviewRules.isReachFailure(status.detail) && cloud.connected &&
+                    !cloud.needsSignIn && cloud.lastError == null)
+                    viewModel.notify("Wi-Fi couldn't reach your devices. Sync continues through Google Drive.", StatusKind.INFO)
+                else viewModel.notify("Sync didn't finish. ${status.detail}".trim(), StatusKind.ERROR)
             }
             else -> Unit
         }
@@ -142,12 +150,16 @@ internal data class HomeSync(
     val transferReadyToComplete: Boolean = false,
     val managerName: String = "",
     val driveConnected: Boolean = false,
+    /** One status over Wi-Fi and Google Drive ([com.privatevault.app.sync.SyncOverviewRules]); null until read. */
+    val overview: com.privatevault.app.sync.SyncOverview? = null,
+    val overviewText: SyncOverviewText? = null,
 )
 
 /** Collects what Home needs to know about sync. Disk reads for timestamps happen off the main thread. */
 @Composable
 internal fun rememberHomeSync(viewModel: VaultViewModel): HomeSync {
     val status by viewModel.deviceSyncStatus.collectAsStateWithLifecycle()
+    val peerStatus by viewModel.devicePeerStatus.collectAsStateWithLifecycle()
     val members by viewModel.pairedDevices.collectAsStateWithLifecycle()
     val conflicts by viewModel.syncConflicts.collectAsStateWithLifecycle()
     val rejected by viewModel.rejectedSyncChanges.collectAsStateWithLifecycle()
@@ -157,22 +169,31 @@ internal fun rememberHomeSync(viewModel: VaultViewModel): HomeSync {
     val cloud by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
     val active = members.filter { it.status == MemberStatus.ACTIVE.name }
     val ids = active.map { it.deviceId }
-    // A Drive pass records contact times too, so its finish time is a key next to the Wi-Fi phase.
-    val details by produceState(0L to (null as String?), status.phase, ids, cloud.lastSyncAt) {
+    var tick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) { while (true) { delay(60_000); tick++ } }
+    // A Drive pass records signed contact times and progress too, so its state is a key next to the Wi-Fi phase.
+    val details by produceState(Pair(null as String?, null as com.privatevault.app.sync.SyncFacts?),
+        status, peerStatus, active, cloud, conflicts.size, rejected, tick) {
         value = withContext(Dispatchers.IO) {
-            val last = runCatching { ids.maxOfOrNull { viewModel.deviceSyncContact(it).second } ?: 0L }.getOrDefault(0L)
             val waiting = if (ids.isEmpty()) null else runCatching { viewModel.deviceSyncQueueStatus() }.getOrNull()
-            last to waiting
+            val facts = if (ids.isEmpty()) null
+                else viewModel.syncFacts(active, status, peerStatus, cloud, conflicts.size, rejected)
+            waiting to facts
         }
     }
+    val words = rememberSyncWords()
+    val facts = details.second
+    val overview = facts?.let { com.privatevault.app.sync.SyncOverviewRules.overview(it) }
     val me = local?.deviceId
     return HomeSync(
         pairedDevices = active.size, phase = status.phase, detail = status.detail,
-        lastChecked = details.first, waiting = details.second, conflicts = conflicts.size, rejected = rejected,
+        lastChecked = overview?.lastSynced ?: 0L, waiting = details.first, conflicts = conflicts.size, rejected = rejected,
         transferOfferedHere = transfer?.let { it.targetDeviceId == me && !it.accepted } == true,
         transferReadyToComplete = transfer?.accepted == true && managerId != null && managerId == me,
         managerName = (members + listOfNotNull(local)).firstOrNull { it.deviceId == managerId }?.displayName.orEmpty(),
         driveConnected = cloud.connected,
+        overview = overview,
+        overviewText = if (facts != null && overview != null) syncOverviewText(facts, overview, words) else null,
     )
 }
 
@@ -190,15 +211,20 @@ private fun syncAttention(sync: HomeSync, now: Long, openDevices: () -> Unit): L
         "${sync.conflicts} sync ${if (sync.conflicts == 1) "conflict" else "conflicts"} to review", null, openDevices))
     if (sync.rejected > 0) add(AttentionItem(StatusKind.WARNING,
         "${sync.rejected} ${if (sync.rejected == 1) "change" else "changes"} couldn't apply", "Retry from Devices & sync", openDevices))
-    when {
+    val overview = sync.overview
+    val text = sync.overviewText
+    // One status over Wi-Fi and Google Drive: a Wi-Fi miss while Drive delivers is not a problem here.
+    if (overview != null && text != null) when (overview.state) {
+        OverallSync.ATTENTION -> if (overview.cause != AttentionCause.REJECTED)
+            add(AttentionItem(StatusKind.ERROR, text.title, text.detail.takeIf { it.isNotBlank() }, openDevices))
+        OverallSync.KEYS, OverallSync.STALE -> add(AttentionItem(text.kind, text.title, text.detail, openDevices))
+        OverallSync.WAITING_HERE -> add(AttentionItem(StatusKind.WARNING, sync.waiting ?: "Changes are waiting to apply", null, openDevices))
+        else -> Unit
+    } else when {
         sync.phase == DeviceSyncPhase.ATTENTION -> add(AttentionItem(StatusKind.ERROR, "Sync needs attention",
             sync.detail.takeIf { it.isNotBlank() }, openDevices))
         sync.phase == DeviceSyncPhase.RECEIVED -> add(AttentionItem(StatusKind.WARNING, "Changes are waiting to apply", null, openDevices))
         sync.waiting != null && sync.phase == DeviceSyncPhase.CHECKED -> add(AttentionItem(StatusKind.WARNING, sync.waiting, null, openDevices))
-        sync.lastChecked > 0 && now - sync.lastChecked > 3L * 24 * 60 * 60 * 1000 ->
-            add(AttentionItem(StatusKind.WARNING, "Devices haven't synced in ${(now - sync.lastChecked) / 86_400_000} days",
-                if (sync.driveConnected) "Open Nuvori on your other device so it syncs with Google Drive"
-                else "Open Nuvori on your other device on the same Wi-Fi", openDevices))
     }
 }
 
@@ -206,6 +232,10 @@ private fun calmLine(sync: HomeSync, itemCount: Int, now: Long): CalmLine = when
     sync.pairedDevices == 0 -> CalmLine(StatusKind.SUCCESS, "Unlocked. Stored on this device only.")
     sync.phase == DeviceSyncPhase.TRANSFERRING || sync.phase == DeviceSyncPhase.CONNECTING ->
         CalmLine(StatusKind.PROGRESS, "Syncing with your devices…")
+    sync.overview?.state == OverallSync.WAITING && sync.overviewText != null ->
+        CalmLine(StatusKind.INFO, sync.overviewText.title)
+    sync.overview?.state == OverallSync.UP_TO_DATE && sync.lastChecked > 0 ->
+        CalmLine(StatusKind.SUCCESS, "Everything's in sync · ${relativeTimeShort(sync.lastChecked, now)}")
     sync.phase == DeviceSyncPhase.SEARCHING || sync.phase == DeviceSyncPhase.FOUND ->
         CalmLine(StatusKind.PROGRESS, "Looking for your devices…")
     sync.phase == DeviceSyncPhase.PAUSED -> CalmLine(StatusKind.NEUTRAL, "Automatic sync is paused")

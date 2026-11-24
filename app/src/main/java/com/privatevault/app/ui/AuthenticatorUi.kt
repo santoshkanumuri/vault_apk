@@ -1,5 +1,7 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.OutlinedButton
+import com.privatevault.app.controls.TextButton
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
@@ -109,7 +111,7 @@ internal fun TotpTile(entry: VaultEntry, copy: (String, String) -> Unit, open: (
                     CountdownRing(remainingMs.toFloat() / periodMs, seconds, accent, Modifier.padding(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (initiallyMasked) TextButton(onClick = { revealed = !revealed }) { Text(if (revealed) "Hide" else "Show") }
-                    IconButton(enabled = code != null, onClick = copyCurrent, modifier = Modifier.size(44.dp)) {
+                    IconButton(enabled = code != null, onClick = copyCurrent) {
                         Icon(NuvoriIcons.Copy, "Copy authenticator code", Modifier.size(20.dp))
                     }
                 }

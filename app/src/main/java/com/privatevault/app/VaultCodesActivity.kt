@@ -1,5 +1,9 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.Button
+import com.privatevault.app.controls.FilledTonalButton
+import com.privatevault.app.controls.OutlinedButton
+import com.privatevault.app.controls.TextButton
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -14,6 +18,7 @@ import android.os.PersistableBundle
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.Image
@@ -186,6 +191,8 @@ class VaultCodesActivity : FragmentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Draw behind transparent system bars on every API level; NuvoriTheme sets the icon colour from the palette.
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
@@ -1008,7 +1015,7 @@ class VaultCodesActivity : FragmentActivity() {
         }
         Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(8.dp), contentAlignment = Alignment.Center) {
             Surface(Modifier.widthIn(max = 560.dp).fillMaxWidth().then(if (compact) Modifier else Modifier.fillMaxHeight()),
-                shape = RoundedCornerShape(24.dp)) {
+                shape = NuvoriShapes.Dialog) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         NuvoriLogo(Modifier.size(28.dp))

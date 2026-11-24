@@ -4,9 +4,6 @@
         <!-- The splash matches the black window behind it, so the black icon circle does not show on a light system theme. -->
         <item name="android:windowSplashScreenBackground" tools:targetApi="31">#000000</item>
         <item name="android:fontFamily">sans</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#000000</item>
-        <item name="android:navigationBarColor">#000000</item>
         <item name="android:windowBackground">#000000</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>

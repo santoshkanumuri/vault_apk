@@ -56,12 +56,14 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     // Upgrade the old Fragment dependency pulled in by Play Services Wearable.
     implementation("androidx.fragment:fragment:1.8.2")
-    implementation("androidx.compose.ui:ui:1.6.8")
-    implementation("androidx.compose.foundation:foundation:1.6.8")
-    implementation("androidx.compose.material3:material3:1.2.1")
+    // Wear OS components: time text, round-screen lists, crown scrolling and swipe-to-go-back.
+    implementation("androidx.compose.ui:ui:1.7.5")
+    implementation("androidx.compose.foundation:foundation:1.7.5")
+    implementation("androidx.wear.compose:compose-foundation:1.4.1")
+    implementation("androidx.wear.compose:compose-material:1.4.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
-    debugImplementation("androidx.compose.ui:ui-tooling:1.6.8")
-    debugImplementation("androidx.compose.ui:ui-test-manifest:1.6.8")
+    debugImplementation("androidx.compose.ui:ui-tooling:1.7.5")
+    debugImplementation("androidx.compose.ui:ui-test-manifest:1.7.5")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.6.8")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.7.5")
 }

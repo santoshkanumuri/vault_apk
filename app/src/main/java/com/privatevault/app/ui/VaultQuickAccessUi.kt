@@ -1,10 +1,11 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.FilledTonalButton
+import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -142,7 +143,7 @@ private fun CategoryButtons(selected: QuickCategory, entries: List<VaultEntry>, 
                 onClick = { if (!isSelected) onSelect(category) },
                 modifier = Modifier.weight(1f).heightIn(min = 60.dp)
                     .semantics { role = Role.Tab; contentDescription = "${category.label}, $count" },
-                shape = RoundedCornerShape(14.dp),
+                shape = NuvoriShapes.Card,
                 color = if (isSelected) scheme.primaryContainer else scheme.surfaceVariant.copy(alpha = .55f),
                 contentColor = if (isSelected) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
             ) {

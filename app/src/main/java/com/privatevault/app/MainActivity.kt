@@ -15,6 +15,7 @@ import android.os.PersistableBundle
 import android.service.quicksettings.TileService
 import android.view.WindowManager
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -45,6 +46,8 @@ class MainActivity : FragmentActivity() {
     private val nfcReader by lazy { NfcCardReader(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Draw behind transparent system bars on every API level; NuvoriTheme sets the icon colour from the palette.
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         syncSettingsRequested = opensSyncSettings(intent)
         val emulatorDebug = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 &&

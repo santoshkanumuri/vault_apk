@@ -6,6 +6,10 @@
 
 package com.privatevault.app
 
+import com.privatevault.app.controls.Button
+import com.privatevault.app.controls.FilledTonalButton
+import com.privatevault.app.controls.OutlinedButton
+import com.privatevault.app.controls.TextButton
 import com.privatevault.app.security.decodePhoto
 import com.privatevault.app.security.PasswordColumnMapping
 import android.net.Uri
@@ -80,8 +84,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -92,7 +94,6 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -102,19 +103,14 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.runtime.key
 import androidx.compose.runtime.movableContentOf
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberBottomSheetScaffoldState
-import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material.icons.Icons
@@ -222,7 +218,8 @@ import java.util.Locale
 @Composable
 private fun DeleteButton(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, label: String = "Delete") {
     Button(onClick = onClick, modifier = modifier, enabled = enabled,
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFAD4248), contentColor = Color.White)) {
+        // The theme's danger colour, the same one the Settings delete actions use.
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError)) {
         Text(label)
     }
 }
@@ -313,7 +310,13 @@ fun PrivateVaultApp(
                 }
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
                     // Above the bottom bar when unlocked, and above the "Privacy policy" button on the lock screen.
-                    .padding(bottom = if (status is VaultStatus.Unlocked) 64.dp else 48.dp)) { data ->
+                    .padding(bottom = when {
+                        status !is VaultStatus.Unlocked -> 48.dp
+                        // Wide windows use the side rail, so there is no bottom bar to clear.
+                        androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840 -> 16.dp
+                        // Clears the 80dp bottom bar and its divider.
+                        else -> 88.dp
+                    })) { data ->
                     NoticeSnackbar(data)
                 }
                 if (status is VaultStatus.Locked || status is VaultStatus.NeedsSetup && showSetup)
@@ -418,7 +421,7 @@ private fun CenteredAuthCard(title: String, subtitle: String, onBack: (() -> Uni
     // The bottom padding keeps the card clear of the "Privacy policy" button drawn at the bottom of the screen.
     Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()
         .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 56.dp), contentAlignment = Alignment.Center) {
-        Card(Modifier.widthIn(max = 460.dp).fillMaxWidth(), shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Card(Modifier.widthIn(max = 460.dp).fillMaxWidth(), shape = NuvoriShapes.Dialog, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (onBack != null) BackIcon(onBack)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1177,7 +1180,7 @@ private fun CardFace(
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(entry.title, modifier = Modifier.weight(1f).padding(end = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text(entry.cardKind.label().uppercase(), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                Text(entry.cardKind.label().uppercase(), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
             }
             Column {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1191,11 +1194,11 @@ private fun CardFace(
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(Modifier.weight(1f)) {
-                        Text("CARDHOLDER", fontSize = 9.sp, color = ink, letterSpacing = .8.sp)
+                        Text("CARDHOLDER", style = MaterialTheme.typography.labelSmall, color = ink, letterSpacing = .8.sp)
                         Text(entry.secondaryValue.ifBlank { "Name on card" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("EXPIRES", fontSize = 9.sp, color = ink, letterSpacing = .8.sp)
+                        Text("EXPIRES", style = MaterialTheme.typography.labelSmall, color = ink, letterSpacing = .8.sp)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(entry.tertiaryValue.ifBlank { null }?.let(::displayExpiry) ?: "MM/YY", maxLines = 1, softWrap = false)
                             if (copy != null && entry.tertiaryValue.isNotBlank()) CardCopyAction("Copy expiry date") { copy("Expiry", entry.tertiaryValue) }
@@ -1203,7 +1206,7 @@ private fun CardFace(
                     }
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("CVV", fontSize = 9.sp, color = ink, letterSpacing = .8.sp)
+                    Text("CVV", style = MaterialTheme.typography.labelSmall, color = ink, letterSpacing = .8.sp)
                     Spacer(Modifier.width(8.dp))
                     AnimatedContent(cvvVisible, label = "cvv") { visible ->
                         Text(if (visible) entry.fourthValue.ifBlank { "—" } else "•••", fontWeight = FontWeight.SemiBold)
@@ -1231,7 +1234,8 @@ private fun CardFace(
 
 @Composable
 private fun CardCopyAction(description: String, action: () -> Unit) {
-    IconButton(onClick = action, modifier = Modifier.size(40.dp)) {
+    // No fixed size: IconButton keeps its 48dp touch target, with the icon still 16dp.
+    IconButton(onClick = action) {
         Icon(NuvoriIcons.Copy, contentDescription = description, modifier = Modifier.size(16.dp), tint = LocalContentColor.current)
     }
 }
@@ -1445,20 +1449,13 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
         if (androidx.core.content.ContextCompat.checkSelfPermission(cameraContext, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) launchCamera()
         else cameraPermission.launch(android.Manifest.permission.CAMERA)
     }
-    val actionSheet = rememberStandardBottomSheetState(initialValue = SheetValue.PartiallyExpanded, skipHiddenState = true)
-    val actionScaffold = rememberBottomSheetScaffoldState(actionSheet)
-    val actionScope = rememberCoroutineScope()
-    val actionSheetExpanded = actionSheet.currentValue == SheetValue.Expanded
+    // Phone and wide layouts share one action model: Edit in the top bar, everything else in its overflow menu.
     var actionsMenuExpanded by remember(item.entry.id) { mutableStateOf(false) }
     val note = remember(item.entry.type, item.entry.notes, item.entry.fourthValue) {
         if (item.entry.type == EntryType.NOTE) RichNotes.load(item.entry) else null
     }
     val notePalette = rememberRichNotePalette()
     var pendingLink by remember(item.entry.id) { mutableStateOf<String?>(null) }
-    val toggleActions: () -> Unit = {
-        if (widePane) actionsMenuExpanded = !actionsMenuExpanded
-        else actionScope.launch { if (actionSheetExpanded) actionSheet.partialExpand() else actionSheet.expand() }
-    }
     val detailContent: @Composable (PaddingValues) -> Unit = { contentPadding ->
     pendingLink?.let { link -> LinkConfirmDialog(link) { pendingLink = null } }
     Column(Modifier.fillMaxSize().padding(contentPadding).background(MaterialTheme.colorScheme.background)) {
@@ -1473,19 +1470,20 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            IconButton(onClick = edit, modifier = Modifier.size(48.dp)) {
+                Icon(NuvoriIcons.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Box {
-                IconButton(onClick = toggleActions, modifier = Modifier.size(48.dp)) {
+                IconButton(onClick = { actionsMenuExpanded = !actionsMenuExpanded }, modifier = Modifier.size(48.dp)) {
                     Icon(NuvoriIcons.More,
-                        contentDescription = if (if (widePane) actionsMenuExpanded else actionSheetExpanded) "Close entry actions" else "Open entry actions",
+                        contentDescription = if (actionsMenuExpanded) "Close entry actions" else "Open entry actions",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (widePane) DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
+                DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
                     DropdownMenuItem(text = { Text("Add photo") }, onClick = { actionsMenuExpanded = false; addPhoto() },
                         leadingIcon = { Icon(NuvoriIcons.AddPhoto, null, Modifier.size(18.dp)) })
                     DropdownMenuItem(text = { Text("Camera") }, onClick = { actionsMenuExpanded = false; openCamera() },
                         leadingIcon = { Icon(NuvoriIcons.Camera, null, Modifier.size(18.dp)) })
-                    DropdownMenuItem(text = { Text("Edit") }, onClick = { actionsMenuExpanded = false; edit() },
-                        leadingIcon = { Icon(NuvoriIcons.Edit, null, Modifier.size(18.dp)) })
                     if (item.entry.type != EntryType.AUTHENTICATOR) DropdownMenuItem(text = { Text("Duplicate") },
                         onClick = { actionsMenuExpanded = false; viewModel.duplicateEntry(item); close() },
                         leadingIcon = { Icon(NuvoriIcons.Duplicate, null, Modifier.size(18.dp)) })
@@ -1591,7 +1589,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
             }
             if (item.groups.isNotEmpty()) {
                 item { SectionTitle(if (item.entry.type == EntryType.CARD) "Groups" else "Folders and groups") }
-                item { FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { item.groups.forEach { FilterChip(true, {}, { Text(it.name) }) } } }
+                item { FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { item.groups.forEach { GroupLabel(it.name) } } }
             }
             if (item.photos.isNotEmpty()) {
                 item { SectionTitle("Photos") }
@@ -1614,59 +1612,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
         }
     }
     }
-    if (widePane) {
-        Box(modifier.background(MaterialTheme.colorScheme.background)) { detailContent(PaddingValues()) }
-    } else BottomSheetScaffold(
-        modifier = modifier.background(MaterialTheme.colorScheme.background),
-        scaffoldState = actionScaffold,
-        sheetPeekHeight = 56.dp,
-        sheetContainerColor = MaterialTheme.colorScheme.surface,
-        sheetShape = NuvoriShapes.Sheet,
-        sheetTonalElevation = 8.dp,
-        sheetShadowElevation = 12.dp,
-        sheetDragHandle = {
-            Surface(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                    .clickable(role = Role.Button, onClick = toggleActions),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-            ) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(36.dp).clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = .18f)), contentAlignment = Alignment.Center) {
-                        AnimatedContent(actionSheetExpanded, label = "entry action direction") { expanded ->
-                            Icon(if (expanded) NuvoriIcons.ChevronDown else NuvoriIcons.ChevronUp,
-                                contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                        }
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    AnimatedContent(actionSheetExpanded, modifier = Modifier.weight(1f), label = "entry action instruction") { expanded ->
-                        Text(if (expanded) "Pull down to close" else "Pull up to edit",
-                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-            }
-        },
-        sheetContent = {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = addPhoto, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Add photo") }
-                        OutlinedButton(onClick = openCamera, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Camera") }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = edit, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Edit") }
-                        if (item.entry.type != EntryType.AUTHENTICATOR) OutlinedButton(onClick = { viewModel.duplicateEntry(item); close() },
-                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Duplicate") }
-                        DeleteButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
-                    }
-                }
-            }
-        }
-    ) { contentPadding -> detailContent(contentPadding) }
+    Box(modifier.background(MaterialTheme.colorScheme.background)) { detailContent(PaddingValues()) }
     if (confirmDelete) AlertDialog(
         modifier = wideDialogModifier,
         properties = wideDialogProperties,
@@ -1778,11 +1724,21 @@ private fun PlainRow(label: String, value: String, copy: ((String, String) -> Un
     }
 }
 
+/** A group or folder the entry is in: a plain label, since it opens nothing. */
+@Composable
+private fun GroupLabel(name: String) {
+    Surface(shape = NuvoriShapes.Chip, color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant) {
+        Text(name, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+    }
+}
+
 /** A hidden field. Hold or tap the eye to reveal; copy never reveals. */
 @Composable
 private fun SecretRow(label: String, value: String, revealed: Boolean, toggle: () -> Unit, copy: (String, String) -> Unit) {
     HairlineCard(Modifier.fillMaxWidth()) {
-        Row(Modifier.clip(NuvoriShapes.Card).combinedClickable(onClick = {}, onLongClick = toggle)
+        // A tap copies (copy never reveals); a long press reveals.
+        Row(Modifier.clip(NuvoriShapes.Card).combinedClickable(onClick = { if (value.isNotBlank()) copy(label, value) }, onLongClick = toggle)
             .semantics { contentDescription = "$label. Hold to reveal." }
             .heightIn(min = 60.dp).padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically) {

@@ -34,7 +34,7 @@ class WatchCodesTest {
 
     @Test fun setupMessageUsesVisibleTextOnDarkBackground() {
         compose.setContent { WatchTheme { WatchCodes(null, true) {} } }
-        val message = compose.onNodeWithText("Open Nuvori on your phone, then choose Watch codes to connect.")
+        val message = compose.onNodeWithText("On your phone, open Nuvori > Settings > Watch codes to connect.")
         message.assertIsDisplayed()
         val pixels = message.captureToImage().toPixelMap()
         var brightPixels = 0

@@ -295,7 +295,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _importMapping.value = null
     }
 
-    internal fun checkPasswordDuplicates() = securedLaunch("Could not check for duplicates.") {
+    internal fun checkPasswordDuplicates() = securedLaunch("Couldn't check for duplicates.") {
         val groups = com.privatevault.app.security.exactPasswordDuplicateGroups(dao().allEntries())
         if (groups.isEmpty()) {
             _passwordDuplicateReview.value = null
@@ -321,7 +321,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _passwordDuplicateReview.value = null
     }
 
-    internal fun deleteSelectedPasswordDuplicates() = securedLaunch("Could not delete the duplicates.") {
+    internal fun deleteSelectedPasswordDuplicates() = securedLaunch("Couldn't delete the duplicates.") {
         val selectedIds = _passwordDuplicateReview.value?.selectedIds.orEmpty()
         require(selectedIds.isNotEmpty()) { "Select at least one duplicate." }
         val db = requireNotNull(database)
@@ -342,7 +342,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _passkeyTransferPreview.value = null
     }
 
-    fun previewCredentialTransfer(json: String, sourcePackage: String) = securedLaunch("Could not read the credential transfer.") {
+    fun previewCredentialTransfer(json: String, sourcePackage: String) = securedLaunch("Couldn't read the credential transfer.") {
         cancelCredentialTransfer()
         val activeKey = requireNotNull(sessionKey)
         val transfer = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
@@ -366,7 +366,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun confirmCredentialTransfer() = securedLaunch("Could not import the passkeys.") {
+    fun confirmCredentialTransfer() = securedLaunch("Couldn't import the passkeys.") {
         val preview = requireNotNull(_passkeyTransferPreview.value)
         require(preview.items.none { it.status == PasskeyTransferStatus.CONFLICT }) {
             "Resolve passkey credential-ID conflicts before importing."
@@ -393,7 +393,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         if (!cancelled) notify("No compatible passkey transfer was available. The source manager must support Android credential transfer.", StatusKind.WARNING)
     }
 
-    internal fun previewPasswordImport(uri: Uri, mapping: PasswordColumnMapping? = null) = securedLaunch("Could not read that file.") {
+    internal fun previewPasswordImport(uri: Uri, mapping: PasswordColumnMapping? = null) = securedLaunch("Couldn't read that file.") {
         cancelPasswordImport()
         val activeKey = requireNotNull(sessionKey)
         val parsed = try {
@@ -473,7 +473,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         })
     }
 
-    fun confirmPasswordImport() = securedLaunch("Could not import the logins.") {
+    fun confirmPasswordImport() = securedLaunch("Couldn't import the logins.") {
         val preview = _importPreview.value
         if (preview != null) {
             require(preview?.items?.filter { it.status == PasswordImportStatus.PASSWORD_DIFFERS }
@@ -515,7 +515,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             pendingCameraFile = file
             androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.camera", file)
                 .also { pendingCameraUri = it; externalFlowActive = true }
-        }.getOrElse { clearCamera(); notify("Could not open the camera.", StatusKind.ERROR); null }
+        }.getOrElse { clearCamera(); notify("Couldn't open the camera.", StatusKind.ERROR); null }
     }
 
     fun clearCamera() {
@@ -613,7 +613,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setLightMode(enabled: Boolean) {
         if (preferences.edit().putBoolean("light_mode", enabled).commit()) _lightMode.value = enabled
-        else notify("Could not save appearance preference.", StatusKind.ERROR)
+        else notify("Couldn't save appearance preference.", StatusKind.ERROR)
         persistSettings()
     }
 
@@ -636,7 +636,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         if (appearance.value.appearance == next) return
         runCatching {
             com.privatevault.app.appearance.AppearanceStore.setLocal(getApplication(), next, java.time.Instant.now().toString(), null)
-        }.onFailure { notify("Could not save appearance preference.", StatusKind.ERROR); return }
+        }.onFailure { notify("Couldn't save appearance preference.", StatusKind.ERROR); return }
         publishAppearance()
     }
 
@@ -676,7 +676,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val value = enabled && nfcSupported
         if (!value) cancelNfcScan()
         if (preferences.edit().putBoolean("nfc_enabled", value).commit()) _nfcEnabled.value = value
-        else { _nfcEnabled.value = false; notify("Could not save NFC preference. NFC is off for this session.", StatusKind.ERROR) }
+        else { _nfcEnabled.value = false; notify("Couldn't save NFC preference. NFC is off for this session.", StatusKind.ERROR) }
         persistSettings()
     }
 
@@ -698,7 +698,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun setInactivityTimeout(value: Long) = updateSecuritySettings(null, value, null)
     fun setMasterPasswordInterval(value: Long) = updateSecuritySettings(null, null, value)
 
-    fun connectWatch() = securedLaunch("Could not connect the watch.") {
+    fun connectWatch() = securedLaunch("Couldn't connect the watch.") {
         watchPublishJob?.cancel()
         val db = requireNotNull(database)
         val key = requireNotNull(sessionKey).copyOf()
@@ -719,7 +719,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         } finally { key.fill(0) }
     }
 
-    fun removeWatchCodes() = securedLaunch("Could not remove the watch codes.") {
+    fun removeWatchCodes() = securedLaunch("Couldn't remove the watch codes.") {
         watchPublishJob?.cancel()
         val db = requireNotNull(database)
         val key = requireNotNull(sessionKey).copyOf()
@@ -781,7 +781,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 _securitySettings.value = updated
                 if (inactivity != null) scheduleInactivity()
                 notify("Security settings saved", StatusKind.SUCCESS)
-            }.onFailure { notify("Could not save security settings.", StatusKind.ERROR) }
+            }.onFailure { notify("Couldn't save security settings.", StatusKind.ERROR) }
         }
     }
 
@@ -814,7 +814,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 setNfcEnabled(enableNfc)
                 _requestDailyBiometric.value = _securitySettings.value.masterPasswordIntervalMs > 0
             }
-            .onFailure { notify(it.userMessage("Could not create the vault"), StatusKind.ERROR) }
+            .onFailure { notify(it.userMessage("Couldn't create the vault"), StatusKind.ERROR) }
         password.fill('\u0000')
         _checkingPassword.value = false
     }
@@ -850,7 +850,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _checkingPassword.value = false
     }
 
-    private val wrongMasterPassword = "The master password is incorrect."
+    private val wrongMasterPassword = "That master password isn't right. Try again."
     private companion object {
         const val UNLOCK_FAILURES = "unlock_failures"
         const val UNLOCK_FAILED_AT = "unlock_failed_at"
@@ -867,14 +867,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun requireMasterPasswordForBiometric() {
         val current = _status.value
         if (current is VaultStatus.Locked) _status.value = current.copy(canUseBiometric = false)
-        notify("Fingerprint session is unavailable or expired. Enter the master password.", StatusKind.WARNING)
+        notify("Enter your master password. Fingerprint or face unlock works again after that.", StatusKind.WARNING)
     }
 
     fun unlockWithBiometric(key: ByteArray) {
         _requestDailyBiometric.value = false
         viewModelScope.launch {
             runCatching { open(key) }
-                .onFailure { key.fill(0); biometricGate.clearDailySession(); notify("Biometric session expired. Use the master password.", StatusKind.WARNING) }
+                .onFailure { key.fill(0); biometricGate.clearDailySession(); notify("Enter your master password. Fingerprint or face unlock works again after that.", StatusKind.WARNING) }
         }
     }
 
@@ -1004,7 +1004,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dailyBiometricEncryptionCipher(): Cipher? = runCatching { biometricGate.dailyEncryptionCipher() }
-        .onFailure { notify("Fingerprint is unavailable. Use the master password next time.", StatusKind.WARNING) }
+        .onFailure { notify("Fingerprint or face unlock isn't available. Use the master password next time.", StatusKind.WARNING) }
         .getOrNull()
 
     fun enableDailyBiometric(cipher: Cipher) {
@@ -1012,8 +1012,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val interval = _securitySettings.value.masterPasswordIntervalMs
         if (interval == 0L) { _requestDailyBiometric.value = false; return }
         runCatching { biometricGate.enableDailySession(cipher, key, interval) }
-            .onSuccess { _requestDailyBiometric.value = false; notify("Fingerprint enabled for the selected interval.", StatusKind.SUCCESS) }
-            .onFailure { biometricGate.clearDailySession(); _requestDailyBiometric.value = false; notify("Could not enable fingerprint. Use the master password next time.", StatusKind.ERROR) }
+            .onSuccess { _requestDailyBiometric.value = false; notify("Fingerprint or face unlock is on for the interval you chose.", StatusKind.SUCCESS) }
+            .onFailure { biometricGate.clearDailySession(); _requestDailyBiometric.value = false; notify("Couldn't turn on fingerprint or face unlock. Use the master password next time.", StatusKind.ERROR) }
     }
 
     fun skipDailyBiometric() { _requestDailyBiometric.value = false }
@@ -1145,7 +1145,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun saveEntry(entry: VaultEntry, groupIds: Set<String>) = securedLaunch("Could not save that entry.") {
+    fun saveEntry(entry: VaultEntry, groupIds: Set<String>) = securedLaunch("Couldn't save that entry.") {
         if (entry.type == com.privatevault.app.data.EntryType.AUTHENTICATOR) {
             com.privatevault.app.security.Totp.validate(entry.secondaryValue, entry.totpAlgorithm, entry.totpDigits, entry.totpPeriod)
         }
@@ -1155,7 +1155,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("${entry.type.noticeName()} ${if (existed) "updated" else "saved"}", StatusKind.SUCCESS)
     }
 
-    internal fun saveEntryWithPhotos(entry: VaultEntry, groupIds: Set<String>, drafts: List<DraftPhoto>) = securedLaunch("Could not save that entry.") {
+    internal fun saveEntryWithPhotos(entry: VaultEntry, groupIds: Set<String>, drafts: List<DraftPhoto>) = securedLaunch("Couldn't save that entry.") {
         val remaining = drafts.toMutableList()
         val key = requireNotNull(sessionKey).copyOf()
         var existed = false
@@ -1190,7 +1190,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshAutofillCopy() = securedLaunch { refresh() }
 
-    fun importAuthenticatorAccounts(accounts: List<com.privatevault.app.security.TotpSetup>) = securedLaunch("Could not import the accounts.") {
+    fun importAuthenticatorAccounts(accounts: List<com.privatevault.app.security.TotpSetup>) = securedLaunch("Couldn't import the accounts.") {
         require(accounts.isNotEmpty() && accounts.size <= 100)
         val result = requireNotNull(database).let { db ->
             db.captureEntryUpserts(deviceIdentityStore, requireNotNull(sessionKey)) {
@@ -1217,7 +1217,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Empties the passkey ledger on this device. The passkeys and their creating apps stay. */
-    fun clearPasskeyHistory() = securedLaunch("Could not clear the passkey history.") {
+    fun clearPasskeyHistory() = securedLaunch("Couldn't clear the passkey history.") {
         requireNotNull(database).passkeyHistory().clear()
         refreshPasskeys()
         notify("Passkey history cleared", StatusKind.SUCCESS)
@@ -1237,7 +1237,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Forgets one sign-in method here and in the sync group (a delete waits while the group cannot read it yet). */
-    fun deleteSignInMethod(method: com.privatevault.app.data.SignInMethod) = securedLaunch("Could not forget that sign-in method.") {
+    fun deleteSignInMethod(method: com.privatevault.app.data.SignInMethod) = securedLaunch("Couldn't forget that sign-in method.") {
         val db = requireNotNull(database) { "Vault is locked" }
         val key = requireNotNull(sessionKey).copyOf()
         val written = try {
@@ -1249,7 +1249,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("Sign-in method forgotten", StatusKind.SUCCESS)
     }
 
-    fun deletePasskey(id: String) = securedLaunch("Could not delete that passkey.") {
+    fun deletePasskey(id: String) = securedLaunch("Couldn't delete that passkey.") {
         val passkey = requireNotNull(dao().allPasskeys().firstOrNull { it.id == id }) { "Passkey is missing" }
         com.privatevault.app.sync.LocalPasskeyChangeWriter(requireNotNull(database), deviceIdentityStore)
             .delete(passkey, requireNotNull(sessionKey))
@@ -1262,7 +1262,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
-    fun toggleFavorite(entry: VaultEntry): Job = securedLaunch("Could not update favorites.") {
+    fun toggleFavorite(entry: VaultEntry): Job = securedLaunch("Couldn't update favorites.") {
         val current = requireNotNull(dao().entry(entry.id)) { "Entry is missing" }
         val favorite = !current.entry.favorite
         saveLocalEntry(current.entry.copy(favorite = favorite), current.groups.map { it.id }.toSet())
@@ -1272,7 +1272,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun duplicateEntry(item: EntryWithDetails) = securedLaunch("Could not create a copy.") {
+    fun duplicateEntry(item: EntryWithDetails) = securedLaunch("Couldn't create a copy.") {
         val source = item.entry
         require(source.type != com.privatevault.app.data.EntryType.AUTHENTICATOR) { "Add each authenticator using its own setup key." }
         val duplicate = source.copy(
@@ -1294,7 +1294,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("Copy created", StatusKind.SUCCESS)
     }
 
-    fun deleteEntry(item: EntryWithDetails) = securedLaunch("Could not delete that entry.") {
+    fun deleteEntry(item: EntryWithDetails) = securedLaunch("Couldn't delete that entry.") {
         com.privatevault.app.sync.LocalEntryChangeWriter(requireNotNull(database), deviceIdentityStore)
             .delete(item.entry, requireNotNull(sessionKey))
         item.photos.forEach {
@@ -1305,14 +1305,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("${item.entry.type.noticeName()} deleted", StatusKind.SUCCESS)
     }
 
-    fun addGroup(name: String, notes: String = "") = securedLaunch("Could not save that group.") {
+    fun addGroup(name: String, notes: String = "") = securedLaunch("Couldn't save that group.") {
         require(name.isNotBlank()) { "Enter a group name." }
         saveLocalGroup(VaultGroup(name = name.trim(), notes = notes.trim()))
         refresh()
         notify("Group created", StatusKind.SUCCESS)
     }
 
-    fun addFolder(name: String, type: com.privatevault.app.data.EntryType) = securedLaunch("Could not save that folder.") {
+    fun addFolder(name: String, type: com.privatevault.app.data.EntryType) = securedLaunch("Couldn't save that folder.") {
         require(name.isNotBlank()) { "Enter a folder name." }
         require(type != com.privatevault.app.data.EntryType.CARD) { "Cards do not use folders." }
         saveLocalGroup(VaultGroup(name = name.trim(), folderType = type))
@@ -1320,28 +1320,28 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("Folder created", StatusKind.SUCCESS)
     }
 
-    fun renameFolder(folder: VaultGroup, name: String) = securedLaunch("Could not save that folder.") {
+    fun renameFolder(folder: VaultGroup, name: String) = securedLaunch("Couldn't save that folder.") {
         require(folder.folderType != null && name.isNotBlank()) { "Enter a folder name." }
         saveLocalGroup(folder.copy(name = name.trim()))
         refresh()
         notify("Folder renamed", StatusKind.SUCCESS)
     }
 
-    fun deleteGroup(group: VaultGroup) = securedLaunch(if (group.folderType != null) "Could not delete that folder." else "Could not delete that group.") {
+    fun deleteGroup(group: VaultGroup) = securedLaunch(if (group.folderType != null) "Couldn't delete that folder." else "Couldn't delete that group.") {
         com.privatevault.app.sync.LocalGroupChangeWriter(requireNotNull(database), deviceIdentityStore)
             .delete(group, requireNotNull(sessionKey))
         refresh()
         notify(if (group.folderType != null) "Folder deleted" else "Group deleted", StatusKind.SUCCESS)
     }
 
-    fun editGroup(group: VaultGroup, name: String, notes: String) = securedLaunch("Could not save that group.") {
+    fun editGroup(group: VaultGroup, name: String, notes: String) = securedLaunch("Couldn't save that group.") {
         require(name.isNotBlank()) { "Enter a group name." }
         saveLocalGroup(group.copy(name = name.trim(), notes = notes.trim()))
         refresh()
         notify("Group updated", StatusKind.SUCCESS)
     }
 
-    fun setGroupEntries(group: VaultGroup, ids: Set<String>) = securedLaunch("Could not save that group.") {
+    fun setGroupEntries(group: VaultGroup, ids: Set<String>) = securedLaunch("Couldn't save that group.") {
         val db = requireNotNull(database)
         val key = requireNotNull(sessionKey)
         db.withTransaction {
@@ -1358,7 +1358,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("Group updated", StatusKind.SUCCESS)
     }
 
-    fun addPhoto(entryId: String, uri: Uri) = securedLaunch("Could not add that photo.") {
+    fun addPhoto(entryId: String, uri: Uri) = securedLaunch("Couldn't add that photo.") {
         val key = requireNotNull(sessionKey).copyOf()
         val id = UUID.randomUUID().toString()
         val name = "$id.vaultphoto"
@@ -1367,7 +1367,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 try {
                     getApplication<Application>().contentResolver.openInputStream(uri).use { input ->
-                        requireNotNull(input) { "Could not open that image." }
+                        requireNotNull(input) { "Couldn't open that image." }
                         photoStore.encrypt(input, name, key)
                     }
                     photoStore.createThumbnail(name, thumbnailName, key)
@@ -1390,7 +1390,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         try {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 getApplication<Application>().contentResolver.openInputStream(uri).use { input ->
-                    requireNotNull(input) { "Could not open that image." }
+                    requireNotNull(input) { "Couldn't open that image." }
                     photoStore.encrypt(input, draft.encryptedFileName, key)
                 }
                 photoStore.createThumbnail(draft.encryptedFileName, draft.encryptedThumbnailFileName, key)
@@ -1419,7 +1419,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         photoStore.decryptedBytes(draft.encryptedThumbnailFileName, requireNotNull(sessionKey))
     }.getOrNull()
 
-    fun deletePhoto(photo: VaultPhoto) = securedLaunch("Could not delete that photo.") {
+    fun deletePhoto(photo: VaultPhoto) = securedLaunch("Couldn't delete that photo.") {
         val key = requireNotNull(sessionKey).copyOf()
         try {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -1442,7 +1442,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         photoStore.decryptedBytes(file, requireNotNull(sessionKey))
     }.getOrNull()
 
-    fun setCoverPhoto(photo: VaultPhoto) = securedLaunch("Could not set the cover photo.") {
+    fun setCoverPhoto(photo: VaultPhoto) = securedLaunch("Couldn't set the cover photo.") {
         val key = requireNotNull(sessionKey).copyOf()
         try {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -1454,7 +1454,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("Cover photo set", StatusKind.SUCCESS)
     }
 
-    fun transformPhoto(photo: VaultPhoto, rotateDegrees: Float = 0f, crop: com.privatevault.app.security.PhotoCrop? = null) = securedLaunch("Could not update that photo.") {
+    fun transformPhoto(photo: VaultPhoto, rotateDegrees: Float = 0f, crop: com.privatevault.app.security.PhotoCrop? = null) = securedLaunch("Couldn't update that photo.") {
         val version = UUID.randomUUID().toString()
         val imageName = "$version.vaultphoto"
         val thumbnailName = "$version.vaultthumb"
@@ -1477,7 +1477,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify(if (crop != null) "Photo cropped" else "Photo rotated", StatusKind.SUCCESS)
     }
 
-    fun changePassword(current: CharArray, replacement: CharArray) = securedLaunch("Could not change the master password. Check your current password.") {
+    fun changePassword(current: CharArray, replacement: CharArray) = securedLaunch("Couldn't change the master password. Check your current password.") {
         try {
             val db = requireNotNull(database)
             val vaultId = requireNotNull(db.dao().settings()).vaultId
@@ -1502,7 +1502,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun exportBackup(uri: Uri, password: CharArray) = securedLaunch("Could not create the backup. Check your master password and the chosen location.") {
+    fun exportBackup(uri: Uri, password: CharArray) = securedLaunch("Couldn't create the backup. Check your master password and the chosen location.") {
         try {
             // Authenticate before opening/truncating the chosen destination.
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.unlock(password).fill(0) }
@@ -1514,7 +1514,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun restoreBackup(uri: Uri, password: CharArray) = securedLaunch("Could not open that backup. Check the file and its password.") {
+    fun restoreBackup(uri: Uri, password: CharArray) = securedLaunch("Couldn't open that backup. Check the file and its password.") {
         try {
             cancelRestore()
             val activeKey = requireNotNull(sessionKey)
@@ -1536,10 +1536,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _restoreSyncImpact.value = impact
         _restoreCanMoveRole.value = impact.role == com.privatevault.app.backup.RestoreGroupRole.MANAGER &&
             managingRoleCandidates(_pairedDevices.value).any { it.deviceId != localId }
-        _restoreSummary.value = com.privatevault.app.backup.RestoreReview.contents(data.entries.size,
+        _restoreSummary.value = (com.privatevault.app.backup.RestoreReview.contents(data.entries.size,
             data.entries.count { it.type == com.privatevault.app.data.EntryType.AUTHENTICATOR },
             data.groups.size, data.photos.size, data.passkeys.size) + " " +
-            com.privatevault.app.backup.RestoreReview.syncNote(impact)
+            com.privatevault.app.backup.RestoreReview.syncNote(impact)).trim()
     }
 
     private suspend fun currentRestoreSyncImpact(): com.privatevault.app.backup.RestoreSyncImpact {
@@ -1580,7 +1580,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         return RestoreLeave(saved, split)
     }
 
-    fun confirmRestore() = securedLaunch("Could not restore the backup.") {
+    fun confirmRestore() = securedLaunch("Couldn't restore the backup.") {
         val prepared = preparedRestore ?: return@securedLaunch
         getApplication<Application>().stopService(android.content.Intent(getApplication(), com.privatevault.app.sync.LanSyncService::class.java))
         val leave = leaveGroupBeforeRestore()
@@ -1608,7 +1608,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         preferences.edit().putBoolean("light_mode", _lightMode.value).putBoolean("nfc_enabled", _nfcEnabled.value).commit()
         biometricGate.clearDailySession()
         cancelRestore()
-        notify("Backup restored as a separate vault. Use this vault's master password to unlock, then set up fingerprint and reconnect paired devices.", StatusKind.SUCCESS)
+        notify("Backup restored. Unlock with your current master password, not the backup's. Then turn on fingerprint or face unlock again.", StatusKind.SUCCESS)
         lock(LockReason.RESTORED)
     }
 
@@ -1632,7 +1632,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     notify("Google didn't allow access to Drive. Nothing changed.", StatusKind.WARNING)
                 }
                 com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Canceled ->
-                    notify("Google sign-in was canceled. Nothing changed.", StatusKind.INFO)
+                    notify("Google sign-in was cancelled. Nothing changed.", StatusKind.INFO)
                 is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Failed -> notify(outcome.message, StatusKind.ERROR)
                 is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Token -> {
                     com.privatevault.app.backup.DriveBackupRunner.connect(app, outcome.accessToken)
@@ -1647,7 +1647,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Turns on Google Drive backup after sign-in. [password] must be the current master password. */
-    fun turnOnDriveBackup(password: CharArray, interval: Long) = securedLaunch("Could not turn on Google Drive backup. Check your master password.") {
+    fun turnOnDriveBackup(password: CharArray, interval: Long) = securedLaunch("Couldn't turn on Google Drive backup. Check your master password.") {
         try {
             // The backups open with this password, so it must be the master password the user knows.
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.unlock(password).fill(0) }
@@ -1661,7 +1661,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun turnOffDriveBackup() = securedLaunch("Could not turn off Google Drive backup.") {
+    fun turnOffDriveBackup() = securedLaunch("Couldn't turn off Google Drive backup.") {
         com.privatevault.app.backup.DriveBackupRunner.turnOff(getApplication())
         notify("Google Drive backup is off. Backups already in your Drive stay there.", StatusKind.SUCCESS)
     }
@@ -1697,7 +1697,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
      * then asks before anything is replaced; the restored vault gets a new vault ID.
      */
     internal fun restoreFromDrive(backup: com.privatevault.app.backup.DriveBackupFile, password: CharArray) =
-        securedLaunch("Could not open that backup. Check its password and your connection.") {
+        securedLaunch("Couldn't open that backup. Check its password and your connection.") {
             val app = getApplication<Application>()
             val temporary = java.io.File(app.cacheDir, "drive-restore-${UUID.randomUUID()}.tmp")
             try {
@@ -1757,20 +1757,20 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun passwordHistory(entryId: String): List<com.privatevault.app.data.PasswordHistoryEntry> =
         database?.dao()?.passwordHistory(entryId).orEmpty()
 
-    fun clearPasswordHistory(entryId: String, done: () -> Unit = {}) = securedLaunch("Could not clear the previous passwords.") {
+    fun clearPasswordHistory(entryId: String, done: () -> Unit = {}) = securedLaunch("Couldn't clear the previous passwords.") {
         dao().clearPasswordHistory(entryId)
         done()
         notify("Previous passwords cleared", StatusKind.SUCCESS)
     }
 
-    fun loadTrash() = securedLaunch("Could not open Recently deleted.") { _trash.value = dao().trash() }
+    fun loadTrash() = securedLaunch("Couldn't open Recently deleted.") { _trash.value = dao().trash() }
 
     /**
      * Restores a deleted entry as a new entry (new ID), through the normal signed change, so it
      * syncs to paired devices like any new item. It goes back into folders that still exist and
      * take its type, and keeps its previous passwords. Photos were not kept.
      */
-    fun restoreTrashed(item: com.privatevault.app.data.TrashedEntry) = securedLaunch("Could not restore that item.") {
+    fun restoreTrashed(item: com.privatevault.app.data.TrashedEntry) = securedLaunch("Couldn't restore that item.") {
         val db = requireNotNull(database) { "Vault is locked" }
         val stored = com.privatevault.app.sync.SyncEntryCodec.parseTrash(item.entryJson)
         val authenticator = stored.linkedAuthenticatorId.takeIf { id ->
@@ -1794,12 +1794,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         notify("${restored.type.noticeName()} restored", StatusKind.SUCCESS)
     }
 
-    fun forgetTrashed(item: com.privatevault.app.data.TrashedEntry) = securedLaunch("Could not delete that item.") {
+    fun forgetTrashed(item: com.privatevault.app.data.TrashedEntry) = securedLaunch("Couldn't delete that item.") {
         dao().forgetTrashed(item.id)
         _trash.value = dao().trash()
     }
 
-    fun emptyTrash() = securedLaunch("Could not empty Recently deleted.") {
+    fun emptyTrash() = securedLaunch("Couldn't empty Recently deleted.") {
         dao().emptyTrash()
         _trash.value = emptyList()
         notify("Recently deleted is empty", StatusKind.SUCCESS)
@@ -2035,7 +2035,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     notify("Google didn't allow access to Drive. Nothing changed.", StatusKind.WARNING)
                 }
                 com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Canceled ->
-                    notify("Google sign-in was canceled. Nothing changed.", StatusKind.INFO)
+                    notify("Google sign-in was cancelled. Nothing changed.", StatusKind.INFO)
                 is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Failed -> notify(outcome.message, StatusKind.ERROR)
                 is com.privatevault.app.sync.GoogleDriveSignIn.Outcome.Token -> {
                     val account = com.privatevault.app.sync.CloudSyncRunner.connect(app, outcome.accessToken)
@@ -2129,7 +2129,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         db.acceptAuthorityTransfer(deviceIdentityStore)
         com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         refresh()
-        notify("Management role accepted. The current manager completes the handoff.", StatusKind.SUCCESS)
+        notify("Managing role accepted. The current managing device completes the handoff.", StatusKind.SUCCESS)
     }
 
     fun completeAuthorityTransfer() = securedLaunch {
@@ -2147,7 +2147,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         db.cancelAuthorityTransfer(deviceIdentityStore)
         com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         refresh()
-        notify("Management transfer cancelled", StatusKind.INFO)
+        notify("Managing role transfer cancelled", StatusKind.INFO)
     }
 
     fun removeOnlyPairedDevice(deviceId: String) = resetSyncGroup(deviceId)
@@ -2243,7 +2243,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
      * The managing device removes [deviceId] with a signed REMOVE. No approval from that device is
      * needed; it keeps its own copy and learns of the removal the next time it reaches any member.
      */
-    fun removeSyncDevice(deviceId: String) = securedLaunch("Could not remove that device.") {
+    fun removeSyncDevice(deviceId: String) = securedLaunch("Couldn't remove that device.") {
         val db = requireNotNull(database)
         val key = requireNotNull(sessionKey).copyOf()
         try {
@@ -2267,7 +2267,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
      * "Mark as lost": the managing device is gone. This device stops accepting membership changes and
      * new changes from it (local only). It keeps syncing with the other devices until it moves.
      */
-    fun markSyncManagerLost() = securedLaunch("Could not mark that device as lost.") {
+    fun markSyncManagerLost() = securedLaunch("Couldn't mark that device as lost.") {
         val db = requireNotNull(database)
         val key = requireNotNull(sessionKey).copyOf()
         try {
@@ -2295,7 +2295,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
      * After "Mark as lost": this device starts a new group that it manages, and keeps its items.
      * Other devices then pair with it and keep their items too, without duplicates.
      */
-    fun startGroupAfterLostManager() = securedLaunch("Could not start the new group.") {
+    fun startGroupAfterLostManager() = securedLaunch("Couldn't start the new group.") {
         val db = requireNotNull(database)
         val key = requireNotNull(sessionKey).copyOf()
         val wasPaused = com.privatevault.app.sync.LanSyncService.isPaused(getApplication())

@@ -337,16 +337,18 @@ private fun SetupScreen(viewModel: VaultViewModel, firstRunChoice: FirstRunChoic
     BackHandler(onBack = onBack)
     val description = when (firstRunChoice) {
         FirstRunChoice.NEW -> "Your master password cannot be recovered. To pair this empty device with an existing vault, use that vault's master password."
-        FirstRunChoice.JOIN -> "Create an empty vault with the same master password as your managing device. After setup, scan its pairing QR. If the passwords differ, you can change this empty vault's password on the pairing screen."
+        FirstRunChoice.JOIN -> "Use the same master password as your other phone or PC. Next, you'll scan a QR code on that device to copy your vault here. If the passwords differ, you can change this one on the pairing screen."
         FirstRunChoice.RESTORE -> "Create a password for this phone. You will enter the backup's original password next."
         FirstRunChoice.BROWSER_IMPORT -> "Create your encrypted vault first. Then choose a password export from your browser or password manager."
     }
     CenteredAuthCard("Create your private vault", description, onBack = onBack) {
-        SecretField("Master password", password) { password = it }
-        SecretField("Confirm password", confirm) { confirm = it }
-        Text("Use at least ${PasswordCrypto.MIN_PASSWORD_LENGTH} characters. A long phrase is easier to remember.", style = MaterialTheme.typography.bodySmall)
+        val create = { if (valid && !checking) { viewModel.setup(password.toCharArray(), enableNfc); password = ""; confirm = "" } }
+        SecretField("Master password", password, supporting = passwordStrengthHint(password)) { password = it }
+        SecretField("Confirm password", confirm,
+            error = if (confirm.isNotEmpty() && confirm != password) "Passwords don't match." else null, onDone = create) { confirm = it }
+        Text("Use at least ${PasswordCrypto.MIN_PASSWORD_LENGTH} characters. A phrase of four or more words is easy to remember and hard to guess. If you forget it, Nuvori can't reset it.", style = MaterialTheme.typography.bodySmall)
         NfcPreference(enableNfc, viewModel.nfcSupported) { enableNfc = it }
-        Button(onClick = { viewModel.setup(password.toCharArray(), enableNfc); password = ""; confirm = "" }, enabled = valid && !checking, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        Button(onClick = create, enabled = valid && !checking, modifier = Modifier.fillMaxWidth().height(52.dp)) {
             if (checking) PasswordCheckProgress("Creating vault…")
             else Text(if (firstRunChoice == FirstRunChoice.JOIN) "Create and continue" else "Create vault")
         }
@@ -360,26 +362,27 @@ internal fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, 
     val checking by viewModel.checkingPassword.collectAsStateWithLifecycle()
     LaunchedEffect(canUseBiometric) { if (canUseBiometric) biometric() }
     val reason = when (state.reason) {
-        LockReason.STARTUP -> if (state.canUseBiometric) "Use fingerprint or enter the master password." else "Enter the master password to unlock."
-        LockReason.INACTIVITY -> "The vault locked after inactivity. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
-        LockReason.SCREEN_OFF -> "The vault locked when the screen turned off. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
-        LockReason.BACKGROUND -> "The vault locked when you left the app. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
-        LockReason.MANUAL -> "The vault locked. ${if (canUseBiometric) "Use fingerprint to continue." else "Enter the master password."}"
-        LockReason.RESTORED -> "The backup was restored. Enter this vault's master password to open it."
+        LockReason.STARTUP -> if (state.canUseBiometric) "Use fingerprint or face, or enter the master password." else "Enter the master password to unlock."
+        LockReason.INACTIVITY -> "The vault locked after inactivity. ${if (canUseBiometric) "Use fingerprint or face to continue." else "Enter the master password."}"
+        LockReason.SCREEN_OFF -> "The vault locked when the screen turned off. ${if (canUseBiometric) "Use fingerprint or face to continue." else "Enter the master password."}"
+        LockReason.BACKGROUND -> "The vault locked when you left the app. ${if (canUseBiometric) "Use fingerprint or face to continue." else "Enter the master password."}"
+        LockReason.MANUAL -> "The vault locked. ${if (canUseBiometric) "Use fingerprint or face to continue." else "Enter the master password."}"
+        LockReason.RESTORED -> "The backup was restored. Unlock with your current master password, not the backup's."
     }
     CenteredAuthCard("Unlock vault", reason) {
         if (canUseBiometric) {
             OutlinedButton(onClick = { password = ""; biometric() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                Text("Use fingerprint")
+                Text("Use fingerprint or face")
             }
         }
         if (usePassword) {
-            SecretField("Master password", password) { password = it }
-            Button(onClick = { viewModel.unlock(password.toCharArray()); password = "" }, enabled = password.isNotEmpty() && !checking, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            val unlock = { if (password.isNotEmpty() && !checking) { viewModel.unlock(password.toCharArray()); password = "" } }
+            SecretField("Master password", password, onDone = unlock) { password = it }
+            Button(onClick = unlock, enabled = password.isNotEmpty() && !checking, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (checking) PasswordCheckProgress("Unlocking…") else Text("Unlock")
             }
         } else {
-            Text("If the fingerprint prompt does not appear, tap Use fingerprint to try again.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .72f))
+            Text("If the prompt doesn't appear, tap Use fingerprint or face to try again.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .72f))
             OutlinedButton(onClick = { usePassword = true }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Use master password") }
         }
     }
@@ -391,16 +394,23 @@ internal fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, 
  */
 @Composable
 internal fun RestoreReviewDialog(summary: String, impact: com.privatevault.app.backup.RestoreSyncImpact, canMoveRole: Boolean,
-    onReplace: () -> Unit, onMoveRole: () -> Unit, onCancel: () -> Unit) {
+    onReplace: () -> Unit, onMoveRole: () -> Unit, onExportFirst: () -> Unit, onCancel: () -> Unit) {
     val manager = impact.role == com.privatevault.app.backup.RestoreGroupRole.MANAGER
     AlertDialog(modifier = wideDialogModifier, properties = wideDialogProperties, onDismissRequest = onCancel,
-        title = { Text("Backup ready to restore") },
+        title = { Text("Replace this vault with the backup?") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("$summary Your current vault password stays the same. Fingerprint access must be enabled again.")
+            Text(summary)
+            // The sync warning sits right under the summary so it is on screen without scrolling.
             if (impact.role != com.privatevault.app.backup.RestoreGroupRole.NONE) StatusBanner(kind = StatusKind.WARNING,
-                message = if (manager) "This device will leave its sync group without a manager." else "This device will leave its sync group.")
+                message = if (manager) "This device will leave its sync group without a managing device." else "This device will leave its sync group.")
             if (manager && canMoveRole) OutlinedButton(onClick = onMoveRole, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                 Text("Move managing role first")
+            }
+            Text("Everything in this vault now is replaced, and you can't undo it.")
+            // The restore re-encrypts the backup under this vault's key; the master password does not change.
+            Text("Afterward, unlock with your current master password, not the backup's. Then turn on fingerprint or face unlock again.")
+            OutlinedButton(onClick = onExportFirst, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text("Export a backup first")
             }
         } },
         confirmButton = { Button(onClick = onReplace) { Text(if (manager) "Restore anyway" else "Replace vault") } },
@@ -541,7 +551,7 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
         }
     } }
     val lockVault: () -> Unit = {
-        viewModel.notify("Vault locked", StatusKind.SUCCESS)
+        viewModel.notify("Vault locked", StatusKind.NEUTRAL)
         viewModel.lock(LockReason.MANUAL)
     }
     val syncNow: () -> Unit = {
@@ -877,7 +887,8 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
         val restoreImpact by viewModel.restoreSyncImpact.collectAsStateWithLifecycle()
         val canMoveRole by viewModel.restoreCanMoveRole.collectAsStateWithLifecycle()
         RestoreReviewDialog(summary, restoreImpact, canMoveRole, onReplace = viewModel::confirmRestore,
-            onMoveRole = { viewModel.cancelRestore(); openSettings("Android devices") }, onCancel = viewModel::cancelRestore)
+            onMoveRole = { viewModel.cancelRestore(); openSettings("Android devices") },
+            onExportFirst = { viewModel.cancelRestore(); openSettings("Backup and import") }, onCancel = viewModel::cancelRestore)
     }
     if (showQuickAdd) AddTypeSheet(onDismiss = { showQuickAdd = false }) { type ->
         showQuickAdd = false
@@ -983,8 +994,9 @@ private fun NuvoriBottomBar(current: VaultTab, onSelect: (Int) -> Unit) {
                         }
                     },
                     colors = NavigationBarItemDefaults.colors(
-                        indicatorColor = scheme.primaryContainer,
-                        selectedIconColor = scheme.onPrimaryContainer,
+                        // The pill must stand out 3:1 from the bar (primaryContainer was 1.2:1): primary is 5.6:1 or more.
+                        indicatorColor = scheme.primary,
+                        selectedIconColor = scheme.onPrimary,
                         selectedTextColor = scheme.onSurface,
                         unselectedIconColor = scheme.onSurfaceVariant,
                         unselectedTextColor = scheme.onSurfaceVariant))
@@ -1023,8 +1035,8 @@ private fun VaultRailDestination(selected: Boolean, onClick: () -> Unit, label: 
     val scheme = MaterialTheme.colorScheme
     NavigationRailItem(selected = selected, onClick = onClick,
         icon = { Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp)) }, modifier = Modifier.fillMaxWidth(),
-        colors = NavigationRailItemDefaults.colors(indicatorColor = scheme.primaryContainer,
-            selectedIconColor = scheme.onPrimaryContainer, selectedTextColor = scheme.onSurface,
+        colors = NavigationRailItemDefaults.colors(indicatorColor = scheme.primary,
+            selectedIconColor = scheme.onPrimary, selectedTextColor = scheme.onSurface,
             unselectedIconColor = scheme.onSurfaceVariant, unselectedTextColor = scheme.onSurfaceVariant),
         label = { Text(label, fontSize = 12.sp, lineHeight = 14.sp, maxLines = 2,
             textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis) })
@@ -1213,7 +1225,10 @@ private fun CardFace(
                     }
                     Spacer(Modifier.weight(1f))
                     if (authenticate != null && (entry.fourthValue.isNotBlank() || entry.primaryValue.isNotBlank())) {
-                        CompactCardAction(if (cvvVisible || numberVisible) "Hide" else "View") {
+                        val shown = cvvVisible || numberVisible
+                        val hasCvv = entry.fourthValue.isNotBlank()
+                        CompactCardAction(if (shown) "Hide" else "Show",
+                            accessibleLabel = (if (shown) "Hide " else "Show ") + if (hasCvv) "card number and CVV" else "card number") {
                             if (cvvVisible || numberVisible) { cvvVisible = false; numberVisible = false }
                             else {
                                 numberVisible = true
@@ -1416,8 +1431,9 @@ private fun FolderRow(folder: VaultGroup, entries: List<EntryWithDetails>, onFol
 }
 
 @Composable
-private fun CompactCardAction(label: String, action: () -> Unit) {
-    TextButton(onClick = action, colors = ButtonDefaults.textButtonColors(contentColor = LocalContentColor.current), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), modifier = Modifier.height(36.dp)) {
+private fun CompactCardAction(label: String, accessibleLabel: String? = null, action: () -> Unit) {
+    TextButton(onClick = action, colors = ButtonDefaults.textButtonColors(contentColor = LocalContentColor.current), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp),
+        modifier = Modifier.height(36.dp).then(if (accessibleLabel != null) Modifier.semantics { contentDescription = accessibleLabel } else Modifier)) {
         Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     }
 }
@@ -1618,7 +1634,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
         properties = wideDialogProperties,
         onDismissRequest = { confirmDelete = false },
         title = { Text("Delete ${item.entry.title}?") },
-        text = { Text("This removes the entry from this phone and from paired devices on the next sync. This phone keeps a copy in Recently deleted for 30 days (Settings > Recently deleted). Its photos are deleted for good.") },
+        text = { Text("This removes the item from this phone and from your paired devices on the next sync. This phone keeps a copy in Recently deleted for 30 days (Settings > Recently deleted). Its photos are deleted for good.") },
         confirmButton = { DeleteButton(onClick = { viewModel.deleteEntry(item); confirmDelete = false; close() }) },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } }
     )
@@ -2233,7 +2249,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     fun acceptAuthenticatorQr(text: String) {
         runCatching { com.privatevault.app.security.parseAuthenticatorTransferQr(text) }
             .onSuccess(::acceptAuthenticatorPage)
-            .onFailure { authenticatorError = "Could not read this transfer QR. HOTP and unsupported code formats cannot be imported." }
+            .onFailure { authenticatorError = "Couldn't read this transfer QR. HOTP and unsupported code formats cannot be imported." }
         authenticatorScanner = false
     }
     val authenticatorPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -2241,7 +2257,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     }
     fun importAuthenticatorImage(uri: Uri) = transferScope.launch {
         runCatching { readQrImage(context, uri) }.onSuccess(::acceptAuthenticatorQr)
-            .onFailure { authenticatorError = "Could not read that QR image." }
+            .onFailure { authenticatorError = "Couldn't read that QR image." }
     }
     val authenticatorImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (viewModel.pickerReturned(PickerAction.AUTHENTICATOR_IMAGE, uri) && uri != null) importAuthenticatorImage(uri)
@@ -2268,7 +2284,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             else runCatching { com.privatevault.app.security.parseAuthenticatorTransferText(content) }
                 .onSuccess(::acceptAuthenticatorPage)
                 .onFailure { authenticatorError = "Use a OneAuth oneauth_04 JSON export or a text file with one otpauth://totp link per line." }
-        }.onFailure { authenticatorError = "Could not read that authenticator export file." }
+        }.onFailure { authenticatorError = "Couldn't read that authenticator export file." }
     }
     val authenticatorFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (viewModel.pickerReturned(PickerAction.AUTHENTICATOR_FILE, uri) && uri != null) importAuthenticatorFile(uri)
@@ -2282,6 +2298,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     var password by remember { mutableStateOf("") }
     var current by remember { mutableStateOf("") }
     var replacement by remember { mutableStateOf("") }
+    var replacementConfirm by remember { mutableStateOf("") }
     var pendingBackupPassword by remember { mutableStateOf<CharArray?>(null) }
     DisposableEffect(Unit) { onDispose { pendingBackupPassword?.fill('\u0000'); pendingBackupPassword = null } }
     LaunchedEffect(passwordDuplicateReview) {
@@ -2569,15 +2586,15 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             }
             if (page == "Security") {
                 SettingsPrimaryButton("Lock now", icon = NuvoriIcons.Lock,
-                    onClick = { viewModel.notify("Vault locked", StatusKind.SUCCESS); viewModel.lock(LockReason.MANUAL); close() })
+                    onClick = { viewModel.notify("Vault locked", StatusKind.NEUTRAL); viewModel.lock(LockReason.MANUAL); close() })
                 SecurityChoices("Auto-lock after leaving the app", "The vault locks after you switch apps. Screen-off always locks immediately.",
                     security.backgroundTimeoutMs, backgroundLockChoices, onSelect = viewModel::setBackgroundTimeout)
                 SecurityChoices("Auto-lock after inactivity while open", "The countdown starts after your last interaction. Switching apps never extends it. A file or photo picker that Nuvori opens counts as time in the app, for up to 10 minutes.",
                     security.inactivityTimeoutMs, listOf(60_000L to "1 minute", 300_000L to "5 minutes", 900_000L to "15 minutes", 1_800_000L to "30 minutes"),
                     onSelect = viewModel::setInactivityTimeout)
-                SecurityChoices("Require the master password again", "Fingerprint is required for every biometric unlock. This controls how long the protected vault key remains available for fingerprint unlock.",
+                SecurityChoices("Require the master password again", "How often Nuvori asks for your master password. In between, you unlock with fingerprint or face.",
                     security.masterPasswordIntervalMs, listOf(0L to "Every unlock", 86_400_000L to "After 1 day", 604_800_000L to "After 1 week", 2_592_000_000L to "After 1 month"),
-                    footnote = "Changing this interval ends the current fingerprint session. Enter your master password after the next lock to start a new one.") { value ->
+                    footnote = "Changing this ends the current fingerprint or face session. Enter your master password after the next lock to start a new one.") { value ->
                     if (value >= 604_800_000L) { pendingInterval = value; page = "Confirm interval" }
                     else viewModel.setMasterPasswordInterval(value)
                 }
@@ -2590,11 +2607,11 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 }
             }
             if (page == "Confirm interval") {
-                SettingsSection("Confirm longer fingerprint access") {
+                SettingsSection("Ask for the master password less often?") {
                     StatusBanner(kind = StatusKind.WARNING,
-                        message = "Nuvori cannot reset your master password. If you forget it, your vault cannot be recovered.")
+                        message = "You'll type your master password less often, so it's easier to forget. Nuvori can't reset it, and a forgotten password means a lost vault.")
                     if (pendingInterval == 2_592_000_000L) StatusBanner(kind = StatusKind.WARNING,
-                        message = "Anyone who can pass the device biometric may unlock the vault for up to 30 days.")
+                        message = "For up to 30 days, anyone whose fingerprint or face unlocks this phone can open your vault.")
                     SettingsPrimaryButton("Confirm", onClick = { pendingInterval?.let(viewModel::setMasterPasswordInterval); pendingInterval = null; page = "Security" })
                     SettingsSecondaryButton("Cancel", onClick = { pendingInterval = null; page = "Security" })
                 }
@@ -2602,7 +2619,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             if (page == "About") {
                 SettingsSection("Nuvori") {
                     Text("Yours, by design", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                    Text("Local encrypted storage. No Nuvori account or server. Optional sync uses local Wi-Fi or your own Google Drive. Keep encrypted backups and recovery codes somewhere safe. This app has not undergone an independent security audit.")
+                    Text("Your vault is encrypted on this device. There's no Nuvori account or server. Optional sync uses your Wi-Fi or your own Google Drive, which stores only encrypted files. Keep an encrypted backup and its password somewhere safe. Nuvori hasn't had an independent security audit.")
                     TextButton(onClick = { showPrivacy = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Privacy policy") }
                 }
             }
@@ -2741,12 +2758,12 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         modifier = wideDialogModifier,
         properties = wideDialogProperties,
         onDismissRequest = { action = null; password = ""; resumeBackupUri = null },
-        title = { Text(if (action == "export") "Protect backup" else "Replace this vault?") },
+        title = { Text(if (action == "export") "Protect backup" else "Restore a backup") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (resumeBackupUri != null) StatusBanner(kind = StatusKind.INFO, message = if (action == "export")
                 "The vault locked while you chose where to save. Enter the password again to finish the backup."
                 else "The vault locked while you chose the backup. Enter its password again to continue.")
-            Text(if (action == "export") "This backup will always require the current master password." else "The backup will be validated first. You will review its contents before confirming replacement.")
+            Text(if (action == "export") "This backup will always require the current master password." else "Enter the password the backup was made with. You'll see what it holds before anything is replaced.")
             SecretField(if (action == "export") "Current master password" else "Backup password", password) { password = it }
         } },
         confirmButton = { Button(onClick = {
@@ -2764,25 +2781,40 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             action = null
         }, enabled = password.isNotEmpty()) { Text(when {
             resumeBackupUri != null && action == "export" -> "Save backup"
-            resumeBackupUri != null -> "Validate backup"
+            resumeBackupUri != null -> "Check backup"
             action == "export" -> "Choose location"
-            else -> "Choose and validate"
+            else -> "Choose backup"
         }) } },
         dismissButton = { TextButton(onClick = { action = null; password = ""; resumeBackupUri = null }) { Text("Cancel") } }
     )
 
-    if (action == "password") AlertDialog(
-        modifier = wideDialogModifier,
-        properties = wideDialogProperties,
-        onDismissRequest = { action = null }, title = { Text("Change master password") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            SecretField("Current password", current) { current = it }
-            SecretField("New password", replacement) { replacement = it }
-            Text("Existing backup files keep their original passwords.", style = MaterialTheme.typography.bodySmall)
-        } },
-        confirmButton = { Button(onClick = { viewModel.changePassword(current.toCharArray(), replacement.toCharArray()); current = ""; replacement = ""; action = null }, enabled = current.isNotEmpty() && replacement.length >= PasswordCrypto.MIN_PASSWORD_LENGTH) { Text("Change") } },
-        dismissButton = { TextButton(onClick = { action = null }) { Text("Cancel") } }
-    )
+    if (action == "password") {
+        val clearPasswordFields = { current = ""; replacement = ""; replacementConfirm = ""; action = null }
+        val mismatch = replacementConfirm.isNotEmpty() && replacement != replacementConfirm
+        val canChange = current.isNotEmpty() && replacement.length >= PasswordCrypto.MIN_PASSWORD_LENGTH && replacement == replacementConfirm
+        val submit = {
+            if (canChange) {
+                viewModel.changePassword(current.toCharArray(), replacement.toCharArray())
+                clearPasswordFields()
+            }
+        }
+        AlertDialog(
+            modifier = wideDialogModifier,
+            properties = wideDialogProperties,
+            onDismissRequest = clearPasswordFields, title = { Text("Change master password") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SecretField("Current password", current) { current = it }
+                SecretField("New password", replacement, supporting = passwordStrengthHint(replacement)) { replacement = it }
+                SecretField("Confirm new password", replacementConfirm,
+                    error = if (mismatch) "Passwords don't match." else null, onDone = submit) { replacementConfirm = it }
+                StatusBanner(kind = StatusKind.WARNING,
+                    message = "Nuvori can't reset this password. If you forget it, your vault can't be recovered.")
+                Text("Backup files you saved yourself still open with your old password.", style = MaterialTheme.typography.bodySmall)
+            } },
+            confirmButton = { Button(onClick = submit, enabled = canChange) { Text("Change password") } },
+            dismissButton = { TextButton(onClick = clearPasswordFields) { Text("Cancel") } }
+        )
+    }
     oneAuthUri?.let { uri ->
         AlertDialog(
             modifier = wideDialogModifier,
@@ -2804,7 +2836,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                         }
                         acceptAuthenticatorPage(transfer)
                     } catch (_: Exception) {
-                        authenticatorError = "Could not decrypt this OneAuth export. Check its password and format."
+                        authenticatorError = "Couldn't decrypt this OneAuth export. Check its password and format."
                     } finally { pass.fill('\u0000') }
                 }
             }) { Text("Review codes") } },
@@ -2816,9 +2848,11 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
 }
 
 @Composable
-internal fun SecretField(label: String, value: String, onValue: (String) -> Unit) {
+internal fun SecretField(label: String, value: String, error: String? = null, supporting: String? = null,
+    onDone: (() -> Unit)? = null, onValue: (String) -> Unit) {
     var visible by remember { mutableStateOf(false) }
     val name = label.replaceFirstChar { it.lowercase() }
+    val helper = error ?: supporting
     OutlinedTextField(
         value, onValue, label = { Text(label) }, singleLine = true,
         visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -2828,8 +2862,43 @@ internal fun SecretField(label: String, value: String, onValue: (String) -> Unit
                     contentDescription = if (visible) "Hide $name" else "Show $name")
             }
         },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth()
+        isError = error != null,
+        supportingText = if (helper != null) { { Text(helper) } } else null,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password,
+            imeAction = if (onDone != null) ImeAction.Done else ImeAction.Default),
+        keyboardActions = KeyboardActions(onDone = { onDone?.invoke() }),
+        modifier = Modifier.fillMaxWidth()
     )
+}
+
+/**
+ * A rough, offline strength hint for a new master password, ported from the Windows app's
+ * src/lib/strength.ts so both apps say the same thing. It only advises; it never blocks.
+ */
+internal fun passwordStrengthHint(password: String): String? {
+    if (password.isEmpty()) return null
+    val lower = password.lowercase(Locale.ROOT)
+    var pool = 0
+    if (password.any { it in 'a'..'z' }) pool += 26
+    if (password.any { it in 'A'..'Z' }) pool += 26
+    if (password.any { it in '0'..'9' }) pool += 10
+    if (password.any { it !in 'a'..'z' && it !in 'A'..'Z' && it !in '0'..'9' }) pool += 33
+    val unique = password.toSet().size.toDouble()
+    var bits = kotlin.math.log2(maxOf(pool, 1).toDouble()) * password.length *
+        minOf(1.0, unique / maxOf(4.0, password.length * 0.6))
+    val common = listOf("password", "123456", "qwerty", "letmein", "welcome", "admin", "iloveyou", "monkey", "dragon", "abc123", "nuvori")
+    if (common.any { lower.contains(it) }) bits -= 25
+    if (Regex("(.)\\1{2,}").containsMatchIn(password)) bits -= 10
+    if (Regex("^(?:[a-zA-Z]+|\\d+)$").matches(password)) bits -= 8
+    val score = when { bits < 35 -> 0; bits < 50 -> 1; bits < 65 -> 2; bits < 85 -> 3; else -> 4 }
+    val label = listOf("Weak", "Fair", "Good", "Strong", "Very strong")[score]
+    val hint = when {
+        password.length < PasswordCrypto.MIN_PASSWORD_LENGTH -> "Use at least ${PasswordCrypto.MIN_PASSWORD_LENGTH} characters."
+        score < 2 -> "Add more words, numbers or symbols."
+        score < 3 -> "A longer passphrase is even better."
+        else -> ""
+    }
+    return if (hint.isEmpty()) "Strength: $label." else "Strength: $label. $hint"
 }
 
 /** A field label inside a sentence ("Copy card number"); acronyms such as "CVV" keep their capitals. */

@@ -35,6 +35,9 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -95,13 +98,20 @@ private fun SyncStageTrail(phase: DeviceSyncPhase, modifier: Modifier = Modifier
     if (step < 0) return
     val accent = statusColors(phase.statusKind()).accent
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        listOf("Find", "Verify", "Exchange", "Checked").forEachIndexed { index, label ->
+    val labels = listOf("Find", "Verify", "Sync", "Done")
+    // Inactive dots use the full muted color (7.7:1 or more) so they pass 3:1; the current step is also bold,
+    // and TalkBack reads the step instead of the dot colors.
+    Row(modifier.fillMaxWidth().clearAndSetSemantics {
+        contentDescription = "Sync progress"
+        stateDescription = "Step ${step + 1} of ${labels.size}, ${labels[step].lowercase()}"
+    }, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        labels.forEachIndexed { index, label ->
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(Modifier.size(8.dp).background(
-                    if (index <= step) accent else muted.copy(alpha = .32f), CircleShape))
-                Text(label, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
+                Box(Modifier.size(8.dp).background(if (index <= step) accent else muted, CircleShape))
+                Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                    color = if (index == step) MaterialTheme.colorScheme.onSurface else muted,
+                    fontWeight = if (index == step) FontWeight.Bold else FontWeight.Normal)
             }
         }
     }
@@ -403,14 +413,14 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             if (advanced) {
                 status?.let { SyncStageTrail(it.phase) }
-                if (lastContact > 0) Text("Last verified · ${dateFormat.format(Date(lastContact))}",
+                if (lastContact > 0) Text("Last connected: ${dateFormat.format(Date(lastContact))}",
                     style = MaterialTheme.typography.bodySmall)
-                if (lastExchange > 0) Text("Last exchange · ${dateFormat.format(Date(lastExchange))}",
+                if (lastExchange > 0) Text("Last synced: ${dateFormat.format(Date(lastExchange))}",
                     style = MaterialTheme.typography.bodySmall)
                 if (progress.isNotBlank()) Text(progress, style = MaterialTheme.typography.bodySmall)
-                Text("To send: ${counts.toSend} · To apply here: ${counts.toApplyHere}",
+                Text("Waiting to send: ${counts.toSend}. Waiting to apply here: ${counts.toApplyHere}.",
                     style = MaterialTheme.typography.bodySmall)
-                Text("Received there, not applied: ${counts.receivedThere} · Known changes to receive: ${counts.toReceiveHere}",
+                Text("Waiting to apply there: ${counts.receivedThere}. Waiting to arrive here: ${counts.toReceiveHere}.",
                     style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = { showAddress = !showAddress },
                     modifier = Modifier.heightIn(min = 48.dp)) {
@@ -886,7 +896,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
 
     // 7. Membership: leave the group, or for the managing device, why it cannot yet.
     if (devices.isNotEmpty()) Card(Modifier.fillMaxWidth(),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = .5f))) {
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Leave the group", modifier = Modifier.semantics { heading() },
                 style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
@@ -916,8 +926,8 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                         icon = NuvoriIcons.Shield)
                 } else {
                     StatusBanner(StatusKind.WARNING, title = "$managerName is marked as lost",
-                        message = "This device no longer takes changes from it. Make this device the manager of a new group. Or scan the QR of a device that already did.")
-                    SettingsPrimaryButton("Make this device the manager", onClick = { startNewGroup = true },
+                        message = "This device no longer takes changes from it. Make this device the managing device of a new group, or scan the QR of a device that already did.")
+                    SettingsPrimaryButton("Make this the managing device", onClick = { startNewGroup = true },
                         icon = NuvoriIcons.Shield)
                     TextButton(onClick = viewModel::undoSyncManagerLost, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("$managerName is back")
@@ -1004,7 +1014,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     } catch (_: java.security.GeneralSecurityException) {
                         joinError = "The current password on this device is incorrect."
                     } catch (error: Exception) {
-                        joinError = error.message ?: "Could not start pairing. Try again."
+                        joinError = error.message ?: "Couldn't start pairing. Try again."
                     } finally {
                         currentPassword.fill('\u0000'); replacementPassword?.fill('\u0000')
                         joining = false
@@ -1149,7 +1159,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                         throw cancelled
                     } catch (error: Exception) {
                         passwordError = if (error is IllegalArgumentException || error is IllegalStateException)
-                            error.message else "Could not verify the password. Try again."
+                            error.message else "Couldn't verify the password. Try again."
                     } finally { password.fill('\u0000'); verifyingPassword = false }
                 }
             }) { Text("Verify and connect") }

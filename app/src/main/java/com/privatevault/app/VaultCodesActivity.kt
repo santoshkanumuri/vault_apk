@@ -367,7 +367,7 @@ class VaultCodesActivity : FragmentActivity() {
                 if (pickerVisible) {
                     unlockFailed = password != null
                     message = if (password == null) "Fingerprint was cancelled or unavailable. Try again or use your master password."
-                        else "Could not unlock. Check your master password and try again."
+                        else "Couldn't unlock. Check your master password and try again."
                 }
             } finally {
                 key?.fill(0)
@@ -393,7 +393,7 @@ class VaultCodesActivity : FragmentActivity() {
                 intent.getParcelableExtra<android.view.inputmethod.InlineSuggestionsRequest>(AutofillManager.EXTRA_INLINE_SUGGESTIONS_REQUEST)
             } else null
             passwordSuggestions(this, request, entries, inlineRequest, passkeyLogins, usage, signInReminder)
-        }.getOrElse { message = "Could not show keyboard suggestions. Choose a login here."; return }
+        }.getOrElse { message = "Couldn't show keyboard suggestions. Choose a login here."; return }
         setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, response))
         dismissPicker()
     }
@@ -449,7 +449,7 @@ class VaultCodesActivity : FragmentActivity() {
         if (!pickerVisible || !unlocked) return
         val values = quickCopyValues(entry, entries)
         val value = values[field]?.let { runCatching { it.resolve() }.getOrNull() }
-            ?: run { message = "Could not copy this field. Check it in Nuvori."; return }
+            ?: run { message = "Couldn't copy this field. Check it in Nuvori."; return }
         copySensitive(field.clipLabel, value)
         com.privatevault.app.security.ItemUsageStore.record(applicationContext, entry.id)
         val more = QuickCopySession.start(applicationContext, entry.title, values, field)
@@ -593,7 +593,7 @@ class VaultCodesActivity : FragmentActivity() {
                 pendingLoginLink = null
                 fillLogin(linked, confirmedDialogAction = true)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { message = "Could not link this login. Nothing was filled." }
+            catch (_: Exception) { message = "Couldn't link this login. Nothing was filled." }
             finally { key.fill(0); busy = false }
         }
     }
@@ -654,7 +654,7 @@ class VaultCodesActivity : FragmentActivity() {
                 toast(if (expected != null) "Password updated in Nuvori" else "Login saved to Nuvori")
                 dismissPicker()
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { message = "Could not save. The login may have changed. Cancel and try again." }
+            catch (_: Exception) { message = "Couldn't save. The login may have changed. Cancel and try again." }
             finally { key.fill(0); secret.fill('\u0000'); busy = false; savingId = null }
         }
     }
@@ -703,7 +703,7 @@ class VaultCodesActivity : FragmentActivity() {
                 }
                 dismissPicker()
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { message = "Could not complete this passkey request. It may be unsupported or already registered." }
+            catch (_: Exception) { message = "Couldn't complete this passkey request. It may be unsupported or already registered." }
             finally { key.fill(0); busy = false }
         }
     }
@@ -742,7 +742,7 @@ class VaultCodesActivity : FragmentActivity() {
                 generating = false
                 fillLogin(entry, generated, username)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { message = "Could not save the generated login. Nothing was filled. Cancel and try again." }
+            catch (_: Exception) { message = "Couldn't save the generated login. Nothing was filled. Cancel and try again." }
             finally { key.fill(0); busy = false }
         }
     }
@@ -796,7 +796,7 @@ class VaultCodesActivity : FragmentActivity() {
                         ),
                     )
                 }
-            }.getOrElse { message = "Could not return this login to the app."; return }
+            }.getOrElse { message = "Couldn't return this login to the app."; return }
             setResult(RESULT_OK, result)
             com.privatevault.app.security.ItemUsageStore.record(applicationContext, selected.id)
             rememberForCodeStep(selected, request)
@@ -822,7 +822,7 @@ class VaultCodesActivity : FragmentActivity() {
                 }
             }
             dataset.build()
-        }.getOrElse { message = "Could not fill this account. Check its password or linked authenticator."; return }
+        }.getOrElse { message = "Couldn't fill this account. Check its password or linked authenticator."; return }
         val authenticationResult = if (intent.getBooleanExtra("keyboard_suggestions", false)) {
             android.service.autofill.FillResponse.Builder().addDataset(result).apply {
                 (request.saveInfo() ?: request.delayedUsernameSave())?.let(::setSaveInfo)
@@ -880,7 +880,7 @@ class VaultCodesActivity : FragmentActivity() {
             Dataset.Builder(RemoteViews(packageName, R.layout.autofill_suggestion)).apply {
                 values.forEach { (id, value) -> setValue(id, value) }
             }.build()
-        }.getOrElse { message = "Could not fill these details."; return }
+        }.getOrElse { message = "Couldn't fill these details."; return }
         setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
             .putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT_EPHEMERAL_DATASET, true))
         dismissPicker()
@@ -941,7 +941,7 @@ class VaultCodesActivity : FragmentActivity() {
                     })
                 }
             }.build()
-        }.getOrElse { message = "Could not fill this card."; return }
+        }.getOrElse { message = "Couldn't fill this card."; return }
         setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
             .putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT_EPHEMERAL_DATASET, true))
         dismissPicker()

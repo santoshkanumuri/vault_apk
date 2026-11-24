@@ -6,7 +6,7 @@ kotlin { jvmToolchain(17) }
 
 dependencies {
     api("com.eatthepath:java-otp:1.0.0")
-    api("org.bouncycastle:bcprov-jdk18on:1.77")
+    api("org.bouncycastle:bcprov-jdk18on:1.84")
     implementation("com.google.code.gson:gson:2.13.2")
     testImplementation("junit:junit:4.13.2")
 }

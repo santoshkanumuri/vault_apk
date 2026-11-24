@@ -525,6 +525,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         pendingCameraUri = null
         pendingCameraFile?.delete()
         pendingCameraFile = null
+        // Security review L-09: no plaintext capture outlives its flow, including one an earlier flow left behind.
+        java.io.File(getApplication<Application>().cacheDir, "camera").listFiles()?.forEach { it.delete() }
     }
 
     fun finishCamera(entryId: String, success: Boolean) = viewModelScope.launch {
@@ -819,9 +821,18 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun unlock(password: CharArray) = viewModelScope.launch {
         if (_checkingPassword.value) { password.fill('\u0000'); return@launch }
+        val failures = preferences.getInt(UNLOCK_FAILURES, 0)
+        val wait = com.privatevault.app.security.UnlockThrottle.waitMillis(failures,
+            preferences.getLong(UNLOCK_FAILED_AT, 0L), System.currentTimeMillis())
+        if (wait > 0) {
+            password.fill('\u0000')
+            notify("Too many wrong passwords. Try again in ${com.privatevault.app.security.UnlockThrottle.describe(wait)}.", StatusKind.ERROR)
+            return@launch
+        }
         _checkingPassword.value = true
         runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.unlock(password) } }
             .onSuccess {
+                preferences.edit().remove(UNLOCK_FAILURES).remove(UNLOCK_FAILED_AT).apply()
                 // An earlier wrong-password error must not stay on screen inside the unlocked vault.
                 _notice.value?.takeIf { n -> n.text == wrongMasterPassword }?.let(::clearNotice)
                 open(it)
@@ -830,6 +841,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             }
             .onFailure {
                 val newer = it is com.privatevault.app.security.UnsupportedVaultFormatException
+                // Security review L-03: wrong passwords in a row slow down later tries, across restarts.
+                if (!newer) preferences.edit().putInt(UNLOCK_FAILURES, (failures + 1).coerceAtMost(1000))
+                    .putLong(UNLOCK_FAILED_AT, System.currentTimeMillis()).commit()
                 notify(if (newer) it.message.orEmpty() else wrongMasterPassword, StatusKind.ERROR)
             }
         password.fill('\u0000')
@@ -837,6 +851,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private val wrongMasterPassword = "That master password isn't right. Try again."
+    private companion object {
+        const val UNLOCK_FAILURES = "unlock_failures"
+        const val UNLOCK_FAILED_AT = "unlock_failed_at"
+    }
 
     /** In the background after an unlock: moves an older Drive backup key to the timed settings. */
     private fun strengthenDriveBackupKey(password: CharArray, vaultKey: ByteArray) = viewModelScope.launch {
@@ -1795,9 +1813,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val syncDatabase = database ?: return
         try {
             refreshFrom(syncDatabase)
-        } catch (closed: IllegalStateException) {
-            // The vault locked while this refresh waited, and lock() closed its database: nothing is left to
-            // show, so stop quietly. An error while the same vault is still open is real and still surfaces.
+        } catch (closed: kotlinx.coroutines.CancellationException) {
+            throw closed
+        } catch (closed: Exception) {
+            // The vault locked while this refresh waited: lock() closed its database ("connection pool has been
+            // closed") and dropped the session key (requireNotNull fails). Nothing is left to show, so stop
+            // quietly. Any error while the same vault is still open is real and still surfaces.
             if (database === syncDatabase && _status.value is VaultStatus.Unlocked) throw closed
         }
     }

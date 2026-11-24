@@ -22,8 +22,8 @@ import java.util.UUID
  */
 /**
  * [unverified]: Nuvori could not confirm the site (a browser it does not recognize, a non-https page, or a WebView with
- * frames or several sites). The picker still lists every login, and fills one only after the user confirms it for
- * this app; it never links a login here.
+ * frames or several sites). The picker lists nothing until the user searches, fills a login only after the user
+ * confirms it for this app, never links a login here and never offers a card ([pickerBrowsing], review M-01).
  */
 internal data class LoginFillRequest(val packageName: String, val identity: String,
     val username: AutofillId?, val password: AutofillId?, val otp: AutofillId?, val expiresAt: Long, val origin: String? = null,
@@ -339,13 +339,13 @@ class VaultAutofillService : AutofillService() {
     private fun lockedCardDataset(structure: AssistStructure, browser: Boolean, destination: String, identity: String,
         inlineRequest: android.view.inputmethod.InlineSuggestionsRequest?, cleanups: MutableList<() -> Unit>,
         unknownBrowser: Boolean = false): Dataset? {
-        // Verified first; otherwise the "unverified" fallback (no origin; the picker says the app receives the card).
-        val strict = if (unknownBrowser) null else cardFormFields(structure, browser)
-        val (fields, form) = strict ?: cardFormFields(structure, browser = false, lenient = true) ?: return null
+        // Verified forms only. Cards are never offered on the "unverified" fallback (an unknown browser, a non-https
+        // page, a WebView with frames): Nuvori can't tell who receives the card there (security review M-01).
+        if (unknownBrowser) return null
+        val (fields, form) = cardFormFields(structure, browser) ?: return null
         if (fields.isEmpty()) return null
-        val unverified = strict == null
         val fill = CardFillRequest(destination, identity, form.origin, fields, SystemClock.elapsedRealtime() + 120_000,
-            form.embeddedWebView || unverified, unverified)
+            form.embeddedWebView)
         val token = PendingCardFills.put(fill)
         cleanups += { PendingCardFills.remove(token) }
         val intent = Intent(this, VaultCodesActivity::class.java).setAction("vault.card.$token").putExtra(CARD_FILL_TOKEN, token)

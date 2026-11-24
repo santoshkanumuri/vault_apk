@@ -7,24 +7,14 @@ import android.graphics.Matrix
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
-import java.security.SecureRandom
-import javax.crypto.Cipher
-import javax.crypto.CipherInputStream
-import javax.crypto.CipherOutputStream
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 class EncryptedPhotoStore(context: Context) {
     private val directory = File(context.filesDir, "photos").apply { mkdirs() }
 
+    /** Saves [input] in photo format version 2 ([PhotoCipher]): a key derived from [key], never the vault key itself. */
     fun encrypt(input: InputStream, fileName: String, key: ByteArray) {
-        val nonce = ByteArray(12).also(SecureRandom()::nextBytes)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
-            init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
-        }
         File(directory, fileName).outputStream().use { output ->
-            output.write(nonce)
-            CipherOutputStream(output, cipher).use { encrypted -> input.copyTo(encrypted, 64 * 1024) }
+            PhotoCipher.encrypting(output, key).use { encrypted -> input.copyTo(encrypted, 64 * 1024) }
         }
     }
 
@@ -75,25 +65,64 @@ class EncryptedPhotoStore(context: Context) {
         return openDecrypted(fileName, key).use { it.readBytes() }
     }
 
+    /** Opens a photo saved in either format version ([PhotoCipher]). */
     fun openDecrypted(fileName: String, key: ByteArray): InputStream {
         val input = File(directory, fileName).inputStream()
-        return try {
-            val nonce = ByteArray(12)
-            java.io.DataInputStream(input).readFully(nonce)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
-                init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
+        return try { PhotoCipher.decrypting(input, key) } catch (failure: Exception) { input.close(); throw failure }
+    }
+
+    /**
+     * Saves every photo still in format version 1 again in version 2 (security review L-10), one at
+     * a time and through a temporary file that is checked before it replaces the original, so a
+     * crash or a damaged photo never loses a working copy. Stops early when [keepGoing] turns false
+     * (the vault locked). Returns how many photos it upgraded.
+     */
+    fun upgradeToPhotoKey(key: ByteArray, keepGoing: () -> Boolean = { true }): Int {
+        var upgraded = 0
+        directory.listFiles()?.filter { it.isFile && !it.name.startsWith(UPGRADE_PREFIX) }?.forEach { file ->
+            if (!keepGoing()) return upgraded
+            val head = ByteArray(PhotoCipher.MAGIC.size)
+            val read = runCatching { file.inputStream().use { java.io.DataInputStream(it).readFully(head) } }
+            if (read.isFailure || PhotoCipher.isCurrent(head)) return@forEach
+            val temporary = File(directory, UPGRADE_PREFIX + file.name)
+            try {
+                val original = java.security.MessageDigest.getInstance("SHA-256")
+                openDecrypted(file.name, key).use { plain ->
+                    temporary.outputStream().use { output ->
+                        PhotoCipher.encrypting(output, key).use { encrypted ->
+                            java.security.DigestInputStream(plain, original).copyTo(encrypted, 64 * 1024)
+                        }
+                    }
+                }
+                val copy = java.security.MessageDigest.getInstance("SHA-256")
+                openDecrypted(temporary.name, key).use { plain ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) { val n = plain.read(buffer); if (n < 0) break; copy.update(buffer, 0, n) }
+                    buffer.fill(0)
+                }
+                check(java.security.MessageDigest.isEqual(original.digest(), copy.digest())) { "Photo upgrade check failed" }
+                // The photo may have been deleted meanwhile; never bring it back.
+                if (file.exists() && temporary.renameTo(file)) upgraded++
+            } catch (_: Exception) {
+                // The original stays as it was and opens as before; the next unlock tries again.
+            } finally {
+                temporary.delete()
             }
-            CipherInputStream(input, cipher)
-        } catch (failure: Exception) { input.close(); throw failure }
+        }
+        return upgraded
     }
 
     fun delete(fileName: String) { File(directory, fileName).delete() }
     fun cleanupAbandonedRestore(retained: Set<String>) {
         directory.listFiles()?.filter {
-            (it.name.startsWith("restore-") || it.name.startsWith("draft-")) && it.name !in retained
+            (it.name.startsWith("restore-") || it.name.startsWith("draft-") || it.name.startsWith(UPGRADE_PREFIX)) && it.name !in retained
         }?.forEach { it.delete() }
     }
     fun encryptedFile(fileName: String): File = File(directory, fileName)
+
+    private companion object {
+        const val UPGRADE_PREFIX = "upgrade-"
+    }
 }
 
 // ImageDecoder applies EXIF orientation. Only display copies are downsampled.

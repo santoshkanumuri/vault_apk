@@ -924,8 +924,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
         val retained = _entries.value.flatMap { it.photos }.flatMap { listOf(it.encryptedFileName, it.encryptedThumbnailFileName) }.toSet()
         photoStore.cleanupAbandonedRestore(retained)
+        val photoUpgradeKey = key.copyOf()
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching { com.privatevault.app.sync.PhotoOrphanSweeper(db, photoStore).sweep() }
+            // Security review L-10: photos from 2.3.x move to their own key, until the vault locks.
+            try { runCatching { photoStore.upgradeToPhotoKey(photoUpgradeKey) { database === db && _status.value is VaultStatus.Unlocked } } }
+            finally { photoUpgradeKey.fill(0) }
         }
         touch()
         incomingSyncJob?.cancel()

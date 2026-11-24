@@ -13,7 +13,8 @@ signing.properties
 !downloads/private-vault-*.apk
 !downloads/nuvori-*.apk
 *.aab
-!downloads/nuvori-*.aab
+*-mapping.zip
+mapping.txt
 *.pvault
 *.vaultphoto
 *.vaultthumb

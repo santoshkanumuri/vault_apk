@@ -48,21 +48,21 @@ Run `:app:connectedDebugAndroidTest` with a test device connected. Check autofil
 
 ## Keep release files
 
-Copy the verified outputs to `downloads/nuvori-v<version>-phone.apk` and `downloads/nuvori-v<version>-phone.aab`. Archive the matching `mapping.txt` as `downloads/nuvori-v<version>-phone-mapping.zip` to decode crash reports after build outputs are cleaned. Keep the current phone and watch APKs and AABs in `downloads/`.
+Copy the verified APK to `downloads/nuvori-v<version>-phone.apk`. Keep the AAB and the matching `mapping.txt` (as `nuvori-v<version>-phone-mapping.zip`) outside the repository, for example next to the signing key, because the repository is public and both undo R8's obfuscation (security review L-13). The mapping decodes crash reports after build outputs are cleaned; Play Console also gets it with the AAB.
 
-Keep the watch outputs as `downloads/nuvori-v2.1.2-watch.apk`, `downloads/nuvori-v2.1.2-watch.aab`, and `downloads/nuvori-v2.1.2-watch-mapping.zip`. Each mapping archive must match its own APK and AAB.
+Keep the watch APK as `downloads/nuvori-v2.1.2-watch.apk`, with its AAB and mapping in the same private place. Each mapping archive must match its own APK and AAB.
 
 Only the current phone release is kept in `downloads/`; earlier packages stay in Git history. Keep the per-release checksum file `downloads/SHA256SUMS-<version>.txt` with them.
 
 Refresh `downloads/SHA256SUMS.txt` to list only release files actually present:
 
 ```powershell
-Get-ChildItem downloads -File | Where-Object { $_.Extension -in '.apk', '.aab', '.zip' } | Sort-Object Name | ForEach-Object {
+Get-ChildItem downloads -File | Where-Object { $_.Extension -eq '.apk' } | Sort-Object Name | ForEach-Object {
     $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $($_.Name)"
 } | Set-Content downloads/SHA256SUMS.txt -Encoding ascii
 ```
 
-Update the README download links and release notes with the checks that actually ran. `downloads/` APKs and AABs are allowed by `.gitignore`; build intermediates and signing files stay ignored.
+Update the README download links and release notes with the checks that actually ran. Only `downloads/` APKs are allowed by `.gitignore`; AABs, mapping files, build intermediates and signing files stay ignored.
 
 Install the APK directly on Android 10 or newer. Upload the AAB through Google Play Console for store distribution. The AAB also embeds its R8 mapping. Building these files does not publish a Play release.

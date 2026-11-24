@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.material3.ColorScheme
@@ -82,8 +83,8 @@ internal object NuvoriShapes {
      * menus, chips and snackbars. Square 8dp corners are the Nuvori standard; CircleShape would give
      * Material's pill buttons instead.
      */
-    val Control: Shape = RoundedCornerShape(8.dp)
-    val Chip: Shape = Control
+    val Control: CornerBasedShape = RoundedCornerShape(8.dp)
+    val Chip: CornerBasedShape = Control
     val Card = RoundedCornerShape(12.dp)
     val Sheet = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
     val Dialog = RoundedCornerShape(16.dp)

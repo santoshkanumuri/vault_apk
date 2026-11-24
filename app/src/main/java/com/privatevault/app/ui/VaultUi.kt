@@ -206,7 +206,8 @@ import java.util.Locale
 @Composable
 private fun DeleteButton(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, label: String = "Delete") {
     Button(onClick = onClick, modifier = modifier, enabled = enabled,
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFAD4248), contentColor = Color.White)) {
+        // The theme's danger colour, the same one the Settings delete actions use.
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError)) {
         Text(label)
     }
 }
@@ -297,7 +298,13 @@ fun PrivateVaultApp(
                 }
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
                     // Above the bottom bar when unlocked, and above the "Privacy policy" button on the lock screen.
-                    .padding(bottom = if (status is VaultStatus.Unlocked) 64.dp else 48.dp)) { data ->
+                    .padding(bottom = when {
+                        status !is VaultStatus.Unlocked -> 48.dp
+                        // Wide windows use the side rail, so there is no bottom bar to clear.
+                        androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840 -> 16.dp
+                        // Clears the 80dp bottom bar and its divider.
+                        else -> 88.dp
+                    })) { data ->
                     NoticeSnackbar(data)
                 }
                 if (status is VaultStatus.Locked || status is VaultStatus.NeedsSetup && showSetup)
@@ -1552,7 +1559,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
             }
             if (item.groups.isNotEmpty()) {
                 item { SectionTitle(if (item.entry.type == EntryType.CARD) "Groups" else "Folders and groups") }
-                item { FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { item.groups.forEach { FilterChip(true, {}, { Text(it.name) }) } } }
+                item { FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { item.groups.forEach { GroupLabel(it.name) } } }
             }
             if (item.photos.isNotEmpty()) {
                 item { SectionTitle("Photos") }
@@ -1687,11 +1694,21 @@ private fun PlainRow(label: String, value: String, copy: ((String, String) -> Un
     }
 }
 
+/** A group or folder the entry is in: a plain label, since it opens nothing. */
+@Composable
+private fun GroupLabel(name: String) {
+    Surface(shape = NuvoriShapes.Chip, color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant) {
+        Text(name, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+    }
+}
+
 /** A hidden field. Hold or tap the eye to reveal; copy never reveals. */
 @Composable
 private fun SecretRow(label: String, value: String, revealed: Boolean, toggle: () -> Unit, copy: (String, String) -> Unit) {
     HairlineCard(Modifier.fillMaxWidth()) {
-        Row(Modifier.clip(NuvoriShapes.Card).combinedClickable(onClick = {}, onLongClick = toggle)
+        // A tap copies (copy never reveals); a long press reveals.
+        Row(Modifier.clip(NuvoriShapes.Card).combinedClickable(onClick = { if (value.isNotBlank()) copy(label, value) }, onLongClick = toggle)
             .semantics { contentDescription = "$label. Hold to reveal." }
             .heightIn(min = 60.dp).padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically) {

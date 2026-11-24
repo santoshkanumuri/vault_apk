@@ -1795,9 +1795,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val syncDatabase = database ?: return
         try {
             refreshFrom(syncDatabase)
-        } catch (closed: IllegalStateException) {
-            // The vault locked while this refresh waited, and lock() closed its database: nothing is left to
-            // show, so stop quietly. An error while the same vault is still open is real and still surfaces.
+        } catch (closed: kotlinx.coroutines.CancellationException) {
+            throw closed
+        } catch (closed: Exception) {
+            // The vault locked while this refresh waited: lock() closed its database ("connection pool has been
+            // closed") and dropped the session key (requireNotNull fails). Nothing is left to show, so stop
+            // quietly. Any error while the same vault is still open is real and still surfaces.
             if (database === syncDatabase && _status.value is VaultStatus.Unlocked) throw closed
         }
     }

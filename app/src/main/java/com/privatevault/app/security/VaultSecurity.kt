@@ -370,8 +370,15 @@ class VaultKeyManager internal constructor(
     fun changePassword(current: CharArray, replacement: CharArray) = file.changePassword(current, replacement)
 }
 
+/**
+ * Fingerprint unlock for a limited time. Security review L-04: each session gets its own Keystore
+ * key, which Keystore itself refuses to use after the session's end and while the screen is locked,
+ * so editing the app's files cannot stretch a session. The app's own checks (reboot, clock moved
+ * back) stay as a second layer.
+ */
 class BiometricGate(context: Context) {
-    private val alias = "private_vault_daily_gate"
+    private val alias = "nuvori_biometric_session_v2"
+    private val legacyAlias = "private_vault_daily_gate"
     private val prefs = context.getSharedPreferences("vault_biometric_session", Context.MODE_PRIVATE)
     private val resolver = context.contentResolver
     private fun bootCount(): Int = android.provider.Settings.Global.getInt(resolver, android.provider.Settings.Global.BOOT_COUNT, -1)
@@ -379,7 +386,7 @@ class BiometricGate(context: Context) {
     val hasValidDailySession: Boolean
         get() {
             val nowWall = System.currentTimeMillis()
-            val valid = prefs.getInt("format", 0) == 3 && prefs.contains("wrapped_key") && biometricSessionValid(
+            val valid = prefs.getInt("format", 0) == FORMAT && prefs.contains("wrapped_key") && biometricSessionValid(
                 nowWall, android.os.SystemClock.elapsedRealtime(), bootCount(),
                 prefs.getLong("created_wall", 0), prefs.getLong("created_elapsed", -1), prefs.getInt("boot_count", -1),
                 prefs.getLong("last_seen_wall", 0), prefs.getLong("duration", 0)
@@ -389,8 +396,10 @@ class BiometricGate(context: Context) {
             return valid
         }
 
-    fun dailyEncryptionCipher(): Cipher {
-        val key = secretKey()
+    /** A new session key that Keystore lets work for [duration] from now, ready for the fingerprint prompt. */
+    fun dailyEncryptionCipher(duration: Long): Cipher {
+        require(duration in masterPasswordIntervals && duration > 0)
+        val key = newSessionKey(System.currentTimeMillis() + duration)
         return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
     }
 
@@ -407,7 +416,7 @@ class BiometricGate(context: Context) {
             putLong("created_elapsed", android.os.SystemClock.elapsedRealtime())
             putInt("boot_count", boot)
             putLong("duration", duration)
-            putInt("format", 3)
+            putInt("format", FORMAT)
         }
     }
 
@@ -415,7 +424,9 @@ class BiometricGate(context: Context) {
         if (!hasValidDailySession) return null
         return runCatching {
             val nonce = android.util.Base64.decode(prefs.getString("nonce", null) ?: error("Missing biometric nonce"), android.util.Base64.NO_WRAP)
-            Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, nonce)) }
+            val key = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(alias, null) as? SecretKey
+                ?: error("Biometric session key missing")
+            Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, nonce)) }
         }.onFailure { clearDailySession() }.getOrNull()
     }
 
@@ -427,17 +438,24 @@ class BiometricGate(context: Context) {
 
     fun clearDailySession() {
         prefs.edit(commit = true) { clear() }
+        runCatching {
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.apply { deleteEntry(alias); deleteEntry(legacyAlias) }
+        }
     }
 
-    private fun secretKey(): SecretKey {
+    /** Replaces the session key. Keystore enforces [validUntilWall], fingerprint per use, and an unlocked screen. */
+    private fun newSessionKey(validUntilWall: Long): SecretKey {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (keyStore.getKey(alias, null) as? SecretKey)?.let { return it }
         if (keyStore.containsAlias(alias)) keyStore.deleteEntry(alias)
+        val end = java.util.Date(validUntilWall)
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         generator.init(
             KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeyValidityForOriginationEnd(end)
+                .setKeyValidityForConsumptionEnd(end)
+                .setUnlockedDeviceRequired(true)
                 .setUserAuthenticationRequired(true)
                 .apply {
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
@@ -453,6 +471,10 @@ class BiometricGate(context: Context) {
         return generator.generateKey()
     }
 
+    private companion object {
+        /** 3 was 2.3.x (one long-lived key); 4 has a Keystore key per session. */
+        const val FORMAT = 4
+    }
 }
 
 class BiometricActionGate {

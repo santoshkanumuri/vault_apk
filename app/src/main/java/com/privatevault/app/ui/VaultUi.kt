@@ -2576,7 +2576,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     security.inactivityTimeoutMs, listOf(60_000L to "1 minute", 300_000L to "5 minutes", 900_000L to "15 minutes", 1_800_000L to "30 minutes"),
                     onSelect = viewModel::setInactivityTimeout)
                 SecurityChoices("Require the master password again", "Fingerprint is required for every biometric unlock. This controls how long the protected vault key remains available for fingerprint unlock.",
-                    security.masterPasswordIntervalMs, listOf(0L to "Every unlock", 86_400_000L to "After 1 day", 604_800_000L to "After 1 week", 2_592_000_000L to "After 1 month"),
+                    security.masterPasswordIntervalMs, listOf(0L to "Every unlock", 86_400_000L to "After 1 day", 604_800_000L to "After 1 week"),
                     footnote = "Changing this interval ends the current fingerprint session. Enter your master password after the next lock to start a new one.") { value ->
                     if (value >= 604_800_000L) { pendingInterval = value; page = "Confirm interval" }
                     else viewModel.setMasterPasswordInterval(value)
@@ -2593,8 +2593,8 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 SettingsSection("Confirm longer fingerprint access") {
                     StatusBanner(kind = StatusKind.WARNING,
                         message = "Nuvori cannot reset your master password. If you forget it, your vault cannot be recovered.")
-                    if (pendingInterval == 2_592_000_000L) StatusBanner(kind = StatusKind.WARNING,
-                        message = "Anyone who can pass the device biometric may unlock the vault for up to 30 days.")
+                    if (pendingInterval == 604_800_000L) StatusBanner(kind = StatusKind.WARNING,
+                        message = "Anyone who can pass the device biometric may unlock the vault for up to 7 days.")
                     SettingsPrimaryButton("Confirm", onClick = { pendingInterval?.let(viewModel::setMasterPasswordInterval); pendingInterval = null; page = "Security" })
                     SettingsSecondaryButton("Cancel", onClick = { pendingInterval = null; page = "Security" })
                 }

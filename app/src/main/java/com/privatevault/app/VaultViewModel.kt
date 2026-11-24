@@ -892,7 +892,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             storedOptions == null -> com.privatevault.app.data.VaultSettings(vaultId = UUID.randomUUID().toString())
             storedOptions.vaultId.isBlank() -> storedOptions.copy(vaultId = UUID.randomUUID().toString())
             else -> storedOptions
-        }
+        }.let { it.copy(masterPasswordIntervalMs = com.privatevault.app.security.capMasterPasswordInterval(it.masterPasswordIntervalMs)) }
         if (storedOptions != null) {
             _lightMode.value = options.lightMode
             _nfcEnabled.value = options.nfcEnabled && nfcSupported
@@ -1005,7 +1005,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             VaultBackupManager(getApplication(), db.dao(), photoStore), key, force)
     }
 
-    fun dailyBiometricEncryptionCipher(): Cipher? = runCatching { biometricGate.dailyEncryptionCipher() }
+    fun dailyBiometricEncryptionCipher(): Cipher? = runCatching {
+        biometricGate.dailyEncryptionCipher(_securitySettings.value.masterPasswordIntervalMs) }
         .onFailure { notify("Fingerprint is unavailable. Use the master password next time.", StatusKind.WARNING) }
         .getOrNull()
 

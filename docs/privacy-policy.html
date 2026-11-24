@@ -39,7 +39,7 @@ Camera access is used to scan authenticator setup QR codes or capture photos you
 
 NFC is off by default. If enabled, an explicit card scan reads supported card details for you to review and save. It does not make payments or read a card&#x27;s printed CVV.
 
-Strong biometric authentication is handled by Android. Nuvori does not receive or store fingerprint images or biometric templates. A device-protected, encrypted vault key can enable biometric access for 1 day, 1 week, or 1 month, as you choose in Settings, after master-password authentication and biometric confirmation. Restarting the phone ends it.
+Strong biometric authentication is handled by Android. Nuvori does not receive or store fingerprint images or biometric templates. A device-protected, encrypted vault key can enable biometric access for 1 day or 1 week, as you choose in Settings, after master-password authentication and biometric confirmation. Android's hardware-backed keystore enforces the end of that period and refuses the key while the screen is locked. Restarting the phone ends it.
 
 Optional app suggestions are off by default. When they are on and Nuvori is your Autofill service, opening the Vault codes picker suggests linked accounts for the app that last asked Nuvori to fill. Nuvori keeps only that app&#x27;s package name, in memory, for up to five minutes. Otherwise suggestions use Usage access, which you grant in Android Settings and which stays optional: opening the picker then checks up to five minutes of recent app activity. No app-usage history is stored or transmitted. The app selector lists launchable apps to let you create links. Those links are saved in your encrypted vault. You can disable suggestions in Nuvori and revoke Usage access in Android Settings.
 

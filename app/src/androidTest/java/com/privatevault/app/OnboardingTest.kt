@@ -42,7 +42,7 @@ class OnboardingTest {
         compose.onNodeWithText("Your essentials, together").assertIsDisplayed()
         repeat(3) { compose.onNodeWithText("Next").performClick() }
         compose.onNodeWithText("Ready to start?").assertIsDisplayed()
-        compose.onNodeWithText("Import browser passwords").performClick()
+        compose.onNodeWithText("Import passwords").performClick()
         compose.onNodeWithText("Start").performClick()
         compose.runOnIdle { assertEquals(FirstRunChoice.BROWSER_IMPORT, selected) }
     }

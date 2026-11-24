@@ -52,10 +52,10 @@ class SecurityScreenTest {
         compose.setContent {
             MaterialTheme { UnlockScreen(model, VaultStatus.Locked(LockReason.STARTUP, eligible.value), eligible.value, {}) }
         }
-        compose.onNodeWithText("Use fingerprint").assertIsDisplayed()
+        compose.onNodeWithText("Use fingerprint or face").assertIsDisplayed()
         compose.onNodeWithText("Use master password").assertIsDisplayed()
         compose.runOnIdle { eligible.value = false }
-        compose.onNodeWithText("Use fingerprint").assertDoesNotExist()
+        compose.onNodeWithText("Use fingerprint or face").assertDoesNotExist()
         compose.onNodeWithText("Master password").assertIsDisplayed()
     }
 

@@ -82,11 +82,11 @@ class PickerAndRestoreUiTest {
         compose.runOnIdle { model.unlock("long test passphrase".toCharArray()) }
         compose.waitUntil(90_000) { model.status.value is VaultStatus.Unlocked }
         // After unlock, Backup and import opens and asks for the backup password again (it never outlived the lock).
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("Validate backup").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Check backup").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("The vault locked while you chose the backup. Enter its password again to continue.").assertExists()
         compose.runOnIdle { assertNull(model.pendingPick.value) }
         compose.onNodeWithText("Cancel").performClick()
-        compose.onNodeWithText("Validate backup").assertDoesNotExist()
+        compose.onNodeWithText("Check backup").assertDoesNotExist()
     }
 
     @Test fun aPhotoChosenWhileLockedIsNotKeptButSaysSo() {
@@ -106,7 +106,7 @@ class PickerAndRestoreUiTest {
         compose.setContent {
             MaterialTheme { UnlockScreen(model(), VaultStatus.Locked(LockReason.RESTORED, false), false) {} }
         }
-        compose.onNodeWithText("The backup was restored. Enter this vault's master password to open it.").assertIsDisplayed()
+        compose.onNodeWithText("The backup was restored. Unlock with your current master password, not the backup's.").assertIsDisplayed()
         compose.onNodeWithText("The vault locked when you left the app.", substring = true).assertDoesNotExist()
     }
 
@@ -114,24 +114,28 @@ class PickerAndRestoreUiTest {
         val impact = mutableStateOf(RestoreSyncImpact(RestoreGroupRole.MEMBER, 2))
         var moved = false
         var replaced = false
+        var exported = false
         compose.setContent {
             MaterialTheme {
-                RestoreReviewDialog("The backup is valid: 2 items.", impact.value, canMoveRole = true,
-                    onReplace = { replaced = true }, onMoveRole = { moved = true }, onCancel = {})
+                RestoreReviewDialog("The backup has 2 items.", impact.value, canMoveRole = true,
+                    onReplace = { replaced = true }, onMoveRole = { moved = true }, onExportFirst = { exported = true }, onCancel = {})
             }
         }
         compose.onNodeWithText("This device will leave its sync group.").assertIsDisplayed()
         compose.onNodeWithText("Move managing role first").assertDoesNotExist()
+        compose.onNodeWithText("unlock with your current master password, not the backup's.", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Export a backup first").performClick()
+        compose.runOnIdle { assertTrue(exported) }
         compose.onNodeWithText("Replace vault").performClick()
         compose.runOnIdle { assertTrue(replaced); impact.value = RestoreSyncImpact(RestoreGroupRole.MANAGER, 1) }
-        compose.onNodeWithText("This device will leave its sync group without a manager.").assertIsDisplayed()
+        compose.onNodeWithText("This device will leave its sync group without a managing device.").assertIsDisplayed()
         compose.onNodeWithText("Restore anyway").assertIsDisplayed()
         compose.onNodeWithText("Move managing role first").performClick()
         compose.runOnIdle { assertTrue(moved); impact.value = RestoreSyncImpact.NONE }
         compose.onNodeWithText("This device will leave its sync group.", substring = true).assertDoesNotExist()
     }
 
-    @Test fun theCardFaceMasksTheNumberUntilViewIsTapped() {
+    @Test fun theCardFaceMasksTheNumberUntilShowIsTapped() {
         val card = VaultEntry(id = "card", type = EntryType.CARD, title = "Test Visa", primaryValue = "4242424242424242",
             secondaryValue = "Alex Rivera", tertiaryValue = "1229", fourthValue = "123")
         compose.setContent {
@@ -144,7 +148,7 @@ class PickerAndRestoreUiTest {
         }
         compose.onNodeWithText("4242 4242 4242 4242").assertDoesNotExist()
         compose.onNodeWithText("•••• •••• •••• 4242").assertIsDisplayed()
-        compose.onNodeWithText("View").performClick()
+        compose.onNodeWithText("Show").performClick()
         compose.onNodeWithText("4242 4242 4242 4242").assertIsDisplayed()
         compose.onNodeWithText("123").assertIsDisplayed()
         compose.onNodeWithText("Hide").performClick()

@@ -317,7 +317,7 @@ private fun WatchEmptyState(secure: Boolean, snapshot: WatchSnapshot?, syncedAt:
         WatchBrand()
         Text(when {
             !secure -> "Set a screen lock and unlock your watch to view codes."
-            snapshot == null -> "Open Nuvori on your phone, then choose Watch codes to connect."
+            snapshot == null -> "On your phone, open Nuvori > Settings > Watch codes to connect."
             else -> "No codes on this watch yet. Codes you add on your phone appear here."
         }, color = MaterialTheme.colors.onBackground, textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 12.dp))

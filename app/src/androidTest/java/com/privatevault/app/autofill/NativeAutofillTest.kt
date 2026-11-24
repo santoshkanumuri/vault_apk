@@ -174,7 +174,7 @@ class NativeAutofillTest {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "Wrong dummy master password")
                     }))
                     click("Unlock")
-                    waitNode("Wrong password rejected") { it.text?.toString()?.startsWith("Could not unlock.") == true }
+                    waitNode("Wrong password rejected") { it.text?.toString()?.startsWith("Couldn't unlock.") == true }
                     assertNull(find { it.text?.toString() == "Authorized test login" })
                 }
                 val passwordField = waitNode("Master password") { it.isEditable && it.packageName?.toString() == context.packageName }

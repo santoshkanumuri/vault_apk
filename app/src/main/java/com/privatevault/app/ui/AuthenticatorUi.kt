@@ -138,7 +138,7 @@ internal fun MoreScreen(groupCount: Int, entries: List<EntryWithDetails>, groups
         MoreRow("Devices & sync", "Pair a phone or PC and check sync", NuvoriIcons.Devices, tint(0), devices),
         MoreRow("Settings", "Security, autofill, backup and appearance", NuvoriIcons.Settings, tint(0), settings),
         MoreRow("Help", "Answers and shortcuts", NuvoriIcons.Question, tint(0), help),
-        lock?.let { MoreRow("Lock vault", "Lock now. Unlock with fingerprint or password.", NuvoriIcons.Lock, tint(0), it) },
+        lock?.let { MoreRow("Lock vault", "Lock now. Unlock with fingerprint, face or password.", NuvoriIcons.Lock, tint(0), it) },
     )
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(Modifier.widthIn(max = 720.dp).fillMaxSize(), state = state,
@@ -207,7 +207,7 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (viewModel.pickerReturned(com.privatevault.app.PickerAction.PHOTO, uri) && uri != null) scope.launch {
             runCatching { readQrImage(context, uri) }
-                .onSuccess { acceptQr(it) }.onFailure { error = "Could not read that QR image. Try scanning it or entering the setup key." }
+                .onSuccess { acceptQr(it) }.onFailure { error = "Couldn't read that QR image. Try scanning it or entering the setup key." }
         }
     }
     val valid = issuer.isNotBlank() && runCatching { Totp.validate(secret, algorithm, digits.toInt(), period.toInt()) }.isSuccess
@@ -232,7 +232,7 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                     else permission.launch(Manifest.permission.CAMERA)
                 }, modifier = Modifier.fillMaxWidth()) { Text("Scan setup QR") } }
                 item { OutlinedButton(onClick = { viewModel.externalFlowActive = true; picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth()) { Text("Import QR image") } }
-                item { Text("Imported originals remain outside the vault. The scanner does not save camera images.", style = MaterialTheme.typography.bodySmall) }
+                item { Text("Nuvori doesn't save camera images. An imported QR image stays in your photos and contains your setup key, so delete it once your codes work.", style = MaterialTheme.typography.bodySmall) }
                 item { OutlinedTextField(issuer, { issuer = it }, label = { Text("Service") }, modifier = Modifier.fillMaxWidth()) }
                 item { OutlinedTextField(account, { account = it }, label = { Text("Account") }, modifier = Modifier.fillMaxWidth()) }
                 item { OutlinedTextField(secret, { secret = it }, label = { Text("Setup key") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()) }

@@ -25,10 +25,23 @@ object WatchSync {
     const val SNAPSHOT_PATH = "/nuvori/watch-codes/v1"
     const val PAIR_PATH = "/nuvori/watch-pair/v1"
     const val PROBE_PATH = "/nuvori/watch-probe/v1"
+    /** PAIR replies: 1 saved, 0 refused (no screen lock or a bad message). */
+    const val PAIR_SAVED: Byte = 1
+    /** PAIR reply from watches with the M-02 check: refused because the watch is paired with another phone that is still connected (M-02). */
+    const val PAIR_OTHER_PHONE: Byte = 2
     /** Plain JSON {"accent":"<id>"}. A color id is not secret and never holds vault data. */
     const val APPEARANCE_PATH = "/nuvori/watch-appearance/v1"
     private val label = "nuvori-watch-totp-v1".toByteArray(Charsets.UTF_8)
     private val gson = Gson()
+
+    /**
+     * Security review M-02: whether the watch accepts a PAIR from [requester]. The watch remembers the
+     * node that paired it ([pinned]); another node may replace the pairing only when that phone is no
+     * longer connected, which is what happens when the watch moves to a new phone. A watch paired
+     * before this check has no pinned node and accepts the next PAIR, as before, and pins its sender.
+     */
+    fun mayPair(pinned: String?, requester: String, connected: Set<String>): Boolean =
+        requester.isNotEmpty() && (pinned == null || pinned == requester || pinned !in connected)
 
     /**
      * Legacy: the watch key used before each pairing got a random key. It never changes for a vault, so the phone

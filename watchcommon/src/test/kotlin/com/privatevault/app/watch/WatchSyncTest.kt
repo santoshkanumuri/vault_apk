@@ -53,4 +53,13 @@ class WatchSyncTest {
         assertEquals(removed, WatchSync.decode(WatchSync.encode(removed)))
         assertTrue(runCatching { WatchSync.encode(WatchSnapshot("vault-1", listOf(account, account))) }.isFailure)
     }
+
+    @Test fun onlyThePairedPhoneMayReplaceThePairingWhileItIsConnected() {
+        // Security review M-02.
+        assertTrue("a watch paired before the check accepts the next pairing", WatchSync.mayPair(null, "phone", setOf("phone")))
+        assertTrue(WatchSync.mayPair("phone", "phone", setOf("phone")))
+        assertFalse("another node while the paired phone is connected", WatchSync.mayPair("phone", "other", setOf("phone", "other")))
+        assertTrue("the watch moved to a new phone", WatchSync.mayPair("phone", "new", setOf("new")))
+        assertFalse(WatchSync.mayPair(null, "", setOf()))
+    }
 }

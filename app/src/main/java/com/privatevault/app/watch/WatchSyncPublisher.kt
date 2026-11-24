@@ -62,7 +62,10 @@ class WatchSyncPublisher(private val context: Context) {
                 }.toByteArray()
                 try {
                     val response = Tasks.await(messages.sendRequest(ready.single().id, WatchSync.PAIR_PATH, message), 30, TimeUnit.SECONDS)
-                    require(response.contentEquals(byteArrayOf(1))) { "The watch could not save the pairing. Check its screen lock, then try again." }
+                    require(!response.contentEquals(byteArrayOf(WatchSync.PAIR_OTHER_PHONE))) {
+                        "This watch is connected to Nuvori on another phone. Remove the watch there first, or turn the other phone's Bluetooth off, then try again."
+                    }
+                    require(response.contentEquals(byteArrayOf(WatchSync.PAIR_SAVED))) { "The watch could not save the pairing. Check its screen lock, then try again." }
                 } finally { message.fill(0) }
                 // Stored only after the watch accepted it, so a failed attempt keeps the previous pairing working.
                 pairing.savePaired(vaultId, vaultKey, key)

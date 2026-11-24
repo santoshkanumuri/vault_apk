@@ -21,13 +21,25 @@ class WatchSyncService : WearableListenerService() {
             return Tasks.forResult(byteArrayOf((if (applied) 1 else 0).toByte()))
         }
         if (path != WatchSync.PAIR_PATH) return null
+        val store = WatchStore.get(this)
+        // M-02: only the phone that paired this watch may replace the pairing while it is connected.
+        val pinned = store.pairedNode()
+        if (pinned != null && pinned != nodeId) {
+            val connected = runCatching {
+                Tasks.await(Wearable.getNodeClient(this).connectedNodes, 10, TimeUnit.SECONDS).map { it.id }.toSet()
+            }.getOrNull()
+            // When the watch can't tell which phones are connected, it keeps its pairing.
+            if (connected == null || !WatchSync.mayPair(pinned, nodeId, connected)) {
+                return Tasks.forResult(byteArrayOf(WatchSync.PAIR_OTHER_PHONE))
+            }
+        }
         val key = ByteArray(32)
         val accepted = try {
             val stream = DataInputStream(ByteArrayInputStream(request))
             val vaultId = stream.readUTF()
             stream.readFully(key)
             require(stream.available() == 0)
-            WatchStore.get(this).pair(vaultId, key)
+            store.pair(vaultId, key, nodeId)
             // A queued DataItem can arrive before the pairing message.
             runCatching {
                 val items = Tasks.await(Wearable.getDataClient(this).dataItems, 10, TimeUnit.SECONDS)

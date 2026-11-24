@@ -87,9 +87,9 @@ dependencies {
     implementation("androidx.biometric:biometric:1.2.0-alpha05")
     implementation("androidx.room:room-runtime:2.8.4")
     implementation("androidx.room:room-ktx:2.8.4")
-    implementation("androidx.sqlite:sqlite:2.4.0")
+    implementation("androidx.sqlite:sqlite:2.7.0")
     // This SQLCipher Android line supports 16 KB memory pages; verify native alignment on release.
-    implementation("net.zetetic:sqlcipher-android:4.6.1@aar")
+    implementation("net.zetetic:sqlcipher-android:4.20.0@aar")
     implementation("com.google.protobuf:protobuf-java:3.25.5")
     implementation("com.google.android.gms:play-services-wearable:20.0.1")
     // Google Drive sync: Identity authorization for the drive.appdata scope (no client ID in the app).

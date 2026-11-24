@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.TextButton
 import android.graphics.Bitmap
 import android.content.Context
@@ -123,7 +124,7 @@ internal fun QrScanner(onResult: (String) -> Unit, close: () -> Unit,
                 Text(help)
                 AndroidView(factory = { previewView }, modifier = Modifier.weight(1f).fillMaxWidth())
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                TextButton(onClick = close, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Cancel") }
+                TextButton(onClick = close, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(stringResource(R.string.cancel)) }
             }
         }
     }

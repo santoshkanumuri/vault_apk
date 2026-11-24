@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.OutlinedButton
 import com.privatevault.app.controls.TextButton
 import android.text.format.DateUtils
@@ -68,7 +69,7 @@ internal fun PreviousPasswords(viewModel: VaultViewModel, entryId: String, updat
                 .semantics { contentDescription = "Previous passwords, ${list.size}. ${if (open) "Tap to hide" else "Tap to show"}" },
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Icon(NuvoriIcons.History, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Previous passwords", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.previous_passwords), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 Text("${list.size}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Icon(if (open) NuvoriIcons.ChevronUp else NuvoriIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(18.dp))
             }
@@ -93,18 +94,18 @@ internal fun PreviousPasswords(viewModel: VaultViewModel, entryId: String, updat
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.hairline)
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Kept on this phone only, up to 10.", style = MaterialTheme.typography.bodySmall,
+                    Text(stringResource(R.string.kept_on_this_phone_only_up_to_10), style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { confirmClear = true }) { Text("Clear") }
+                    TextButton(onClick = { confirmClear = true }) { Text(stringResource(R.string.clear)) }
                 }
             }
         }
     }
     if (confirmClear) AlertDialog(onDismissRequest = { confirmClear = false },
-        title = { Text("Clear previous passwords?") },
-        text = { Text("This phone forgets the earlier passwords of this login. The current password stays.") },
-        confirmButton = { TextButton(onClick = { confirmClear = false; viewModel.clearPasswordHistory(entryId) { list = emptyList() } }) { Text("Clear") } },
-        dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } })
+        title = { Text(stringResource(R.string.clear_previous_passwords)) },
+        text = { Text(stringResource(R.string.this_phone_forgets_the_earlier_passwords)) },
+        confirmButton = { TextButton(onClick = { confirmClear = false; viewModel.clearPasswordHistory(entryId) { list = emptyList() } }) { Text(stringResource(R.string.clear)) } },
+        dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(stringResource(R.string.cancel)) } })
 }
 
 /**
@@ -119,7 +120,7 @@ internal fun RecentlyDeletedPage(viewModel: VaultViewModel) {
     LaunchedEffect(Unit) { viewModel.loadTrash() }
     SettingsSection("Recently deleted",
         description = "Entries deleted on this phone or on a paired device stay here for ${TrashedEntry.DAYS} days. A restored entry syncs to your other devices. Photos and passkeys are not kept.") {
-        if (items.isEmpty()) Text("Nothing deleted recently.", style = MaterialTheme.typography.bodyMedium,
+        if (items.isEmpty()) Text(stringResource(R.string.nothing_deleted_recently), style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         items.forEachIndexed { index, item ->
             if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.hairline)
@@ -134,9 +135,9 @@ internal fun RecentlyDeletedPage(viewModel: VaultViewModel) {
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { viewModel.restoreTrashed(item) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Restore") }
+                    OutlinedButton(onClick = { viewModel.restoreTrashed(item) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text(stringResource(R.string.restore)) }
                     TextButton(onClick = { forget = item }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
-                        Text("Delete for good", color = MaterialTheme.colorScheme.error)
+                        Text(stringResource(R.string.delete_for_good), color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
@@ -146,13 +147,13 @@ internal fun RecentlyDeletedPage(viewModel: VaultViewModel) {
     forget?.let { item ->
         AlertDialog(onDismissRequest = { forget = null },
             title = { Text("Delete ${item.title.ifBlank { "this entry" }} for good?") },
-            text = { Text("This phone forgets its copy. You can't undo this.") },
-            confirmButton = { TextButton(onClick = { forget = null; viewModel.forgetTrashed(item) }) { Text("Delete for good", color = MaterialTheme.colorScheme.error) } },
-            dismissButton = { TextButton(onClick = { forget = null }) { Text("Cancel") } })
+            text = { Text(stringResource(R.string.this_phone_forgets_its_copy_you_can_t_un)) },
+            confirmButton = { TextButton(onClick = { forget = null; viewModel.forgetTrashed(item) }) { Text(stringResource(R.string.delete_for_good), color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { forget = null }) { Text(stringResource(R.string.cancel)) } })
     }
     if (confirmEmpty) AlertDialog(onDismissRequest = { confirmEmpty = false },
-        title = { Text("Empty Recently deleted?") },
+        title = { Text(stringResource(R.string.empty_recently_deleted)) },
         text = { Text("This phone forgets all ${items.size} deleted entries. You can't undo this.") },
-        confirmButton = { TextButton(onClick = { confirmEmpty = false; viewModel.emptyTrash() }) { Text("Empty", color = MaterialTheme.colorScheme.error) } },
-        dismissButton = { TextButton(onClick = { confirmEmpty = false }) { Text("Cancel") } })
+        confirmButton = { TextButton(onClick = { confirmEmpty = false; viewModel.emptyTrash() }) { Text(stringResource(R.string.empty), color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = { confirmEmpty = false }) { Text(stringResource(R.string.cancel)) } })
 }

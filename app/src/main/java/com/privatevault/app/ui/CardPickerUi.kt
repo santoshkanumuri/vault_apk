@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -74,14 +75,14 @@ internal fun ColumnScope.CardFillContent(cards: List<VaultEntry>, asksForCode: B
         } else {
             if (cards.size > 6) item(key = "search") {
                 OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
-                    label = { Text("Search cards") }, leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null) })
+                    label = { Text(stringResource(R.string.search_cards)) }, leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null) })
             }
             if (asksForCode) item(key = "code") {
                 Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Column(Modifier.weight(1f)) {
-                        Text("Also fill the security code", style = MaterialTheme.typography.bodyLarge)
-                        Text("Asks for your fingerprint or face if Nuvori was unlocked over a minute ago.",
+                        Text(stringResource(R.string.also_fill_the_security_code), style = MaterialTheme.typography.bodyLarge)
+                        Text(stringResource(R.string.asks_for_your_fingerprint_or_face_if_nuv),
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(checked = includeCode, onCheckedChange = onIncludeCode, enabled = !busy)
@@ -113,7 +114,7 @@ private fun CardChoiceRow(card: VaultEntry, enabled: Boolean, onClick: () -> Uni
                 Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text("Fill", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, maxLines = 1)
+            Text(stringResource(R.string.fill), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, maxLines = 1)
         }
     }
 }

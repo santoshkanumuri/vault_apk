@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -484,7 +485,7 @@ private fun QuickAccessCard(item: EntryWithDetails, open: () -> Unit, copy: (Str
             }
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("Open") }, onClick = { menu = false; open() },
+            DropdownMenuItem(text = { Text(stringResource(R.string.open)) }, onClick = { menu = false; open() },
                 leadingIcon = { Icon(NuvoriIcons.ChevronRight, null, Modifier.size(18.dp)) })
             actions.forEach { (label, action) ->
                 DropdownMenuItem(text = { Text(label) }, onClick = { menu = false; action() },

@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.TextButton
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -169,7 +170,7 @@ internal fun NoticeSnackbar(data: SnackbarData, kind: StatusKind = data.noticeKi
             { TextButton(onClick = data::performAction) { Text(label, color = colors.accent, fontWeight = FontWeight.SemiBold) } }
         },
         dismissAction = if (data.visuals.withDismissAction) {
-            { TextButton(onClick = data::dismiss) { Text("Dismiss", color = colors.accent) } }
+            { TextButton(onClick = data::dismiss) { Text(stringResource(R.string.dismiss), color = colors.accent) } }
         } else null,
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {

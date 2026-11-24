@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -77,12 +78,12 @@ internal fun PasswordGeneratorDialog(onDismiss: () -> Unit, onUse: (String) -> U
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Generate a password") },
+        title = { Text(stringResource(R.string.generate_a_password)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = !passphrase, onClick = { change(settings.copy(mode = GeneratorMode.PASSWORD)) }, label = { Text("Password") })
-                    FilterChip(selected = passphrase, onClick = { change(settings.copy(mode = GeneratorMode.PASSPHRASE)) }, label = { Text("Passphrase") })
+                    FilterChip(selected = !passphrase, onClick = { change(settings.copy(mode = GeneratorMode.PASSWORD)) }, label = { Text(stringResource(R.string.password)) })
+                    FilterChip(selected = passphrase, onClick = { change(settings.copy(mode = GeneratorMode.PASSPHRASE)) }, label = { Text(stringResource(R.string.passphrase)) })
                 }
                 Surface(shape = NuvoriShapes.Card, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(start = 14.dp, end = 4.dp).heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -105,7 +106,7 @@ internal fun PasswordGeneratorDialog(onDismiss: () -> Unit, onUse: (String) -> U
                     GeneratorSwitch("Avoid similar characters", "Leaves out l, I, O, 0 and 1", settings.avoidSimilar) { change(settings.copy(avoidSimilar = it)) }
                 } else {
                     CountSlider("Words", settings.words, PasswordGenerator.WORDS_RANGE) { change(settings.copy(words = it)) }
-                    Text("Separator", style = MaterialTheme.typography.labelLarge)
+                    Text(stringResource(R.string.separator), style = MaterialTheme.typography.labelLarge)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         separatorLabels.forEach { (separator, label) ->
                             FilterChip(selected = settings.separator == separator, onClick = { change(settings.copy(separator = separator)) }, label = { Text(label) })
@@ -114,14 +115,14 @@ internal fun PasswordGeneratorDialog(onDismiss: () -> Unit, onUse: (String) -> U
                     GeneratorSwitch("Capitalize words", null, settings.capitalize) { change(settings.copy(capitalize = it)) }
                     GeneratorSwitch("Include a number", "Many websites ask for one", settings.includeNumber) { change(settings.copy(includeNumber = it)) }
                 }
-                Text("This replaces the password in this form. It does not change the password at the service. Nothing is saved until you save the login.",
+                Text(stringResource(R.string.this_replaces_the_password_in_this_form),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = {
             TextButton(onClick = { store.save(settings); onUse(value) }, enabled = value.isNotEmpty()) { Text("Use $noun") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
 }
 

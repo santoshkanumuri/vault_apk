@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.Button
 import com.privatevault.app.controls.FilledTonalButton
 import com.privatevault.app.controls.OutlinedButton
@@ -144,15 +145,15 @@ internal fun SignInMethodsPage(viewModel: VaultViewModel) {
     val providers = remember(items) { SignInMethodsLogic.providersOf(items) }
     val accounts = remember(items) { SignInMethodsLogic.accountsOf(items) }
 
-    Text("When you sign in to a site with Google, Apple, GitHub or another account in your browser on Windows, the Nuvori extension asks to remember which one you used. Sync brings it here, and Autofill reminds you on that site.",
+    Text(stringResource(R.string.when_you_sign_in_to_a_site_with_google_a),
         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (items.isEmpty()) {
         HairlineCard(Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 TintedIcon(NuvoriIcons.LogIn, tint(EntryType.PASSWORD.tintIndex), size = 48.dp)
-                Text("No sign-in methods yet", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-                Text("On your PC, sign in to a site with “Continue with Google”, GitHub, Microsoft, Apple or another provider, and choose Save when the extension asks. After the next sync it shows here.",
+                Text(stringResource(R.string.no_sign_in_methods_yet), style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+                Text(stringResource(R.string.on_your_pc_sign_in_to_a_site_with_contin),
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         }
@@ -160,7 +161,7 @@ internal fun SignInMethodsPage(viewModel: VaultViewModel) {
         NuvoriSearchField(query, { query = it }, "Search by site")
         if (providers.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(provider.isEmpty(), { provider = "" }, { Text("All") }, shape = NuvoriShapes.Chip)
+            FilterChip(provider.isEmpty(), { provider = "" }, { Text(stringResource(R.string.all)) }, shape = NuvoriShapes.Chip)
             providers.forEach { id ->
                 val count = items.count { it.provider == id }
                 FilterChip(provider == id, { provider = if (provider == id) "" else id }, { Text("${SignInMarks.name(id)} $count") },
@@ -183,9 +184,9 @@ internal fun SignInMethodsPage(viewModel: VaultViewModel) {
                     Icon(NuvoriIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(18.dp))
                 }
                 DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                    DropdownMenuItem(text = { Text("All accounts") }, onClick = { account = ""; open = false })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.all_accounts)) }, onClick = { account = ""; open = false })
                     accounts.forEach { value -> DropdownMenuItem(text = { Text(value) }, onClick = { account = value; open = false }) }
-                    if (items.any { it.account.isEmpty() }) DropdownMenuItem(text = { Text("Account not known") },
+                    if (items.any { it.account.isEmpty() }) DropdownMenuItem(text = { Text(stringResource(R.string.account_not_known)) },
                         onClick = { account = SignInMethodsLogic.NO_ACCOUNT; open = false })
                 }
             }
@@ -195,10 +196,10 @@ internal fun SignInMethodsPage(viewModel: VaultViewModel) {
                 Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     TintedIcon(NuvoriIcons.Search, tint(0), size = 48.dp)
-                    Text("No matches", style = MaterialTheme.typography.titleMedium)
-                    Text("Try another site, or clear the filters.", style = MaterialTheme.typography.bodyMedium,
+                    Text(stringResource(R.string.no_matches), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.try_another_site_or_clear_the_filters), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                    FilledTonalButton(onClick = { query = ""; provider = ""; account = "" }, shape = NuvoriShapes.Control) { Text("Clear filters") }
+                    FilledTonalButton(onClick = { query = ""; provider = ""; account = "" }, shape = NuvoriShapes.Control) { Text(stringResource(R.string.clear_filters)) }
                 }
             }
         } else {
@@ -224,18 +225,18 @@ internal fun SignInMethodsPage(viewModel: VaultViewModel) {
             }
         }
     }
-    Text("Kept in your encrypted vault. Nuvori never stores a password, token or code from these sign-ins. Provider logos only show which sign-in you used.",
+    Text(stringResource(R.string.kept_in_your_encrypted_vault_nuvori_neve),
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     forget?.let { method ->
         val who = if (method.account.isEmpty()) "" else " (${method.account})"
         AlertDialog(onDismissRequest = { forget = null },
             title = { Text("Forget ${SignInMarks.name(method.provider)}$who on ${method.site}?") },
-            text = { Text("Nuvori stops reminding you about it on all your devices. The site and your account there are not changed.") },
+            text = { Text(stringResource(R.string.nuvori_stops_reminding_you_about_it_on_a)) },
             confirmButton = {
                 Button(onClick = { viewModel.deleteSignInMethod(method); forget = null },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFAD4248), contentColor = Color.White)) { Text("Forget") }
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFAD4248), contentColor = Color.White)) { Text(stringResource(R.string.forget)) }
             },
-            dismissButton = { TextButton(onClick = { forget = null }) { Text("Cancel") } })
+            dismissButton = { TextButton(onClick = { forget = null }) { Text(stringResource(R.string.cancel)) } })
     }
 }
 
@@ -251,10 +252,10 @@ internal fun LoginSignInMethods(viewModel: VaultViewModel, loginUrl: String, mod
     val now = remember(methods) { System.currentTimeMillis() }
     HairlineCard(modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Also signs in with", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text(stringResource(R.string.also_signs_in_with), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.semantics { heading() })
             methods.take(4).forEach { SignInMethodRow(it, now, onForget = null, compact = true) }
-            if (openAll != null) TextButton(onClick = openAll, modifier = Modifier.heightIn(min = 48.dp)) { Text("All sign-in methods") }
+            if (openAll != null) TextButton(onClick = openAll, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.all_sign_in_methods)) }
         }
     }
 }
@@ -275,7 +276,7 @@ internal fun SignInReminderNote(method: SignInMethod) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(com.privatevault.app.autofill.SignInReminders.title(method), style = MaterialTheme.typography.titleSmall,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("You may not need a password here: use that button on the site.", style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.you_may_not_need_a_password_here_use_tha), style = MaterialTheme.typography.bodySmall)
             }
         }
     }

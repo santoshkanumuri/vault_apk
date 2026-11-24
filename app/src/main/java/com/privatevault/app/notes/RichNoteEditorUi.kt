@@ -87,6 +87,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -94,6 +95,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.privatevault.app.R
 
 @Composable
 internal fun rememberRichNotePalette(): RichNotePalette {
@@ -211,14 +213,14 @@ private fun RichTableEditor(state: RichNoteEditorState, table: TableItem) {
         if (focused) {
             val (row, column) = state.focusedCell ?: (0 to 0)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                AssistChip(onClick = { state.tableStructureChanged(); table.addRow(row) }, label = { Text("Add row") })
-                AssistChip(onClick = { state.tableStructureChanged(); table.addColumn(column) }, label = { Text("Add column") })
-                AssistChip(onClick = { state.tableStructureChanged(); table.removeRow(row); state.focusedCell = null }, label = { Text("Delete row") },
+                AssistChip(onClick = { state.tableStructureChanged(); table.addRow(row) }, label = { Text(stringResource(R.string.add_row)) })
+                AssistChip(onClick = { state.tableStructureChanged(); table.addColumn(column) }, label = { Text(stringResource(R.string.add_column)) })
+                AssistChip(onClick = { state.tableStructureChanged(); table.removeRow(row); state.focusedCell = null }, label = { Text(stringResource(R.string.delete_row)) },
                     enabled = table.rows.size > 1)
-                AssistChip(onClick = { state.tableStructureChanged(); table.removeColumn(column); state.focusedCell = null }, label = { Text("Delete column") },
+                AssistChip(onClick = { state.tableStructureChanged(); table.removeColumn(column); state.focusedCell = null }, label = { Text(stringResource(R.string.delete_column)) },
                     enabled = table.columnCount > 1)
-                FilterChip(selected = table.header, onClick = { state.tableStructureChanged(); table.header = !table.header }, label = { Text("Header row") })
-                AssistChip(onClick = { state.remove(table) }, label = { Text("Delete table") })
+                FilterChip(selected = table.header, onClick = { state.tableStructureChanged(); table.header = !table.header }, label = { Text(stringResource(R.string.header_row)) })
+                AssistChip(onClick = { state.remove(table) }, label = { Text(stringResource(R.string.delete_table)) })
             }
         }
     }
@@ -269,7 +271,7 @@ internal fun RichNoteToolbar(state: RichNoteEditorState, modifier: Modifier = Mo
                 ToolButton(Icons.Filled.HorizontalRule, "Insert divider") { state.insertDivider() }
                 ToolButton(Icons.Filled.FormatClear, "Clear formatting") { segment?.clearFormatting() }
             }
-            if (lineIs(BlockKind.CHECK)) Text("Tap the checklist button again to tick the item.",
+            if (lineIs(BlockKind.CHECK)) Text(stringResource(R.string.tap_the_checklist_button_again_to_tick_t),
                 Modifier.padding(start = 12.dp, bottom = 4.dp), style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -313,7 +315,7 @@ private fun TextStyleSheet(segment: RichTextSegment?, onDismiss: () -> Unit) {
     val current = segment?.let { s -> s.lines.getOrNull(s.lineOf(s.value.selection.min)) } ?: LineAttrs()
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
-            Text("Text style", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.text_style), Modifier.padding(horizontal = 24.dp, vertical = 8.dp), style = MaterialTheme.typography.titleMedium)
             listOf(
                 Triple("Normal text", BlockKind.PARAGRAPH, 1), Triple("Heading 1", BlockKind.HEADING, 1),
                 Triple("Heading 2", BlockKind.HEADING, 2), Triple("Heading 3", BlockKind.HEADING, 3),
@@ -362,7 +364,7 @@ private fun Swatch(label: String, color: NoteColor?, selected: Boolean, text: Bo
             .background(if (color == null) scheme.surface else if (text) scheme.surface else NoteColors.background(color, light))
             .border(if (selected) 3.dp else 1.dp, if (selected) scheme.primary else scheme.outlineVariant, CircleShape),
             contentAlignment = Alignment.Center) {
-            Text("A", fontWeight = FontWeight.Bold,
+            Text(stringResource(R.string.a), fontWeight = FontWeight.Bold,
                 color = if (color != null && text) NoteColors.text(color, light) else scheme.onSurface)
         }
         Spacer(Modifier.height(4.dp))
@@ -379,16 +381,16 @@ private fun TableSheet(onInsert: (Int, Int, Boolean) -> Unit, onDismiss: () -> U
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Insert table", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.insert_table), style = MaterialTheme.typography.titleMedium)
             Stepper("Rows", rows, 1, RichNotes.MAX_TABLE_ROWS) { rows = it }
             Stepper("Columns", columns, 1, RichNotes.MAX_TABLE_COLUMNS) { columns = it }
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Header row", Modifier.weight(1f))
+                Text(stringResource(R.string.header_row), Modifier.weight(1f))
                 Switch(checked = header, onCheckedChange = { header = it })
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-                TextButton(onClick = { onInsert(rows, columns, header); onDismiss() }) { Text("Insert") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+                TextButton(onClick = { onInsert(rows, columns, header); onDismiss() }) { Text(stringResource(R.string.insert)) }
             }
         }
     }
@@ -419,20 +421,20 @@ private fun LinkDialog(segment: RichTextSegment, onDismiss: () -> Unit) {
         title = { Text(if (existing == null) "Add link" else "Edit link") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(label, { label = it }, label = { Text("Text") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(address, { address = it }, label = { Text("Web or email address") }, singleLine = true,
+                OutlinedTextField(label, { label = it }, label = { Text(stringResource(R.string.text)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(address, { address = it }, label = { Text(stringResource(R.string.web_or_email_address)) }, singleLine = true,
                     isError = address.isNotBlank() && link == null,
                     supportingText = { Text(if (address.isNotBlank() && link == null) "Use a web address (https://) or an email address." else "Links open only after you confirm.") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = {
-            TextButton(onClick = { link?.let { segment.insertLink(label.ifBlank { it }, it, existingRange?.let { r -> r.start until r.end }) }; onDismiss() }, enabled = link != null) { Text("Save link") }
+            TextButton(onClick = { link?.let { segment.insertLink(label.ifBlank { it }, it, existingRange?.let { r -> r.start until r.end }) }; onDismiss() }, enabled = link != null) { Text(stringResource(R.string.save_link)) }
         },
         dismissButton = {
             Row {
-                if (existing != null) TextButton(onClick = { segment.removeLink(); onDismiss() }) { Text("Remove link") }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                if (existing != null) TextButton(onClick = { segment.removeLink(); onDismiss() }) { Text(stringResource(R.string.remove_link)) }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
             }
         },
     )

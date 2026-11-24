@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.Button
 import com.privatevault.app.controls.TextButton
 import android.provider.Settings
@@ -103,8 +104,8 @@ internal fun OnboardingScreen(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 NuvoriLogo(Modifier.size(38.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("NUVORI", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                    Text("Yours, by design", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.nuvori), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.yours_by_design), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text("${page + 1} of 4", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -125,9 +126,9 @@ internal fun OnboardingScreen(
                         item.points.forEach { (icon, label) -> IntroPoint(icon, label) }
                     } else {
                         IntroIcon(NuvoriIcons.Shield)
-                        Text("Ready to start?", style = MaterialTheme.typography.headlineLarge,
+                        Text(stringResource(R.string.ready_to_start), style = MaterialTheme.typography.headlineLarge,
                             modifier = Modifier.semantics { heading() })
-                        Text("Choose what to do after you create your master password.",
+                        Text(stringResource(R.string.choose_what_to_do_after_you_create_your),
                             style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             ChoiceRow(FirstRunChoice.NEW, choice, NuvoriIcons.Password, "New vault", "Start with an empty vault") { choice = it }
@@ -136,7 +137,7 @@ internal fun OnboardingScreen(
                             ChoiceRow(FirstRunChoice.RESTORE, choice, NuvoriIcons.History, "Restore a backup", "From Google Drive or a .pvault file") { choice = it }
                             ChoiceRow(FirstRunChoice.BROWSER_IMPORT, choice, NuvoriIcons.Import, "Import passwords", "From a browser or password manager export") { choice = it }
                         }
-                        TextButton(onClick = onPrivacy) { Text("Privacy policy") }
+                        TextButton(onClick = onPrivacy) { Text(stringResource(R.string.privacy_policy)) }
                     }
                 }
             }

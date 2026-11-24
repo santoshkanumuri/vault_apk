@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.OutlinedButton
 import com.privatevault.app.controls.TextButton
 import android.content.Intent
@@ -52,7 +53,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}, onUsageCleared: ()
                 SettingsPrimaryButton("Choose Nuvori autofill", icon = NuvoriIcons.Password, onClick = {
                     context.startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE, Uri.parse("package:${context.packageName}")))
                 })
-                Text("Linked native apps and exact HTTPS sites in verified Chrome and Brave releases can offer logins. Supported browser forms can offer Save after you unlock and confirm. The Quick copy tile still works with another provider.",
+                Text(stringResource(R.string.linked_native_apps_and_exact_https_sites),
                     style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -88,7 +89,7 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}, onUsageCleared: ()
             }, description = "Off by default. After you pick a login, Nuvori fills its linked authenticator code on the next screen when the app or site has a code field Nuvori recognizes. Turn this on as a fallback to also put the code on the clipboard for 30 seconds. Your keyboard and the app in front can read the clipboard.")
             HorizontalDivider()
             // The "Most used" mark comes from this phone's own fill counts (ItemUsageStore). They never sync.
-            Text("Logins you fill most on this phone come first, and one per site is marked Most used. The counts stay on this phone.",
+            Text(stringResource(R.string.logins_you_fill_most_on_this_phone_come),
                 style = MaterialTheme.typography.bodySmall)
             SettingsSecondaryButton("Clear Most used", icon = NuvoriIcons.History, onClick = {
                 usageScope.launch {
@@ -124,15 +125,15 @@ internal fun AutofillPreference(refreshCopy: () -> Unit = {}, onUsageCleared: ()
                 message = "Anyone using your unlocked phone can choose these details without the vault password. Passwords and authenticator codes still require unlock.")
         }
         SettingsSection("Browsers and in-app pages") {
-            Text("In Chrome or Brave, enable autofill using another service in the browser's settings. The browser must expose Android autofill fields. HTTP pages, mismatched subdomains, ambiguous forms and unverified browsers are rejected.",
+            Text(stringResource(R.string.in_chrome_or_brave_enable_autofill_using),
                 style = MaterialTheme.typography.bodyMedium)
             SettingsSecondaryButton("Open browser autofill settings", icon = Icons.Outlined.Language, onClick = {
                 val intent = Intent(Intent.ACTION_APPLICATION_PREFERENCES).addCategory(Intent.CATEGORY_DEFAULT)
                     .addCategory(Intent.CATEGORY_APP_BROWSER).addCategory(Intent.CATEGORY_PREFERENCE)
                 runCatching { context.startActivity(Intent.createChooser(intent, "Browser autofill settings")) }
             })
-            Text("Embedded app pages", style = MaterialTheme.typography.titleSmall)
-            Text("In-app WebViews require you to choose a login after unlocking. The containing app can read filled credentials; approve only apps you trust. A website link does not authorize an embedded app. If nothing appears, open the page in Chrome or Brave, or copy from the Quick copy tile.",
+            Text(stringResource(R.string.embedded_app_pages), style = MaterialTheme.typography.titleSmall)
+            Text(stringResource(R.string.in_app_webviews_require_you_to_choose_a),
                 style = MaterialTheme.typography.bodyMedium)
         }
     }
@@ -147,9 +148,9 @@ internal fun LoginOptions(apps: String, signatures: String, authenticatorId: Str
     var showGenerator by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = { showGenerator = true }, modifier = Modifier.fillMaxWidth()) { Text("Generate password") }
+        OutlinedButton(onClick = { showGenerator = true }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.generate_password)) }
         OutlinedButton(onClick = { showApps = true }, modifier = Modifier.fillMaxWidth()) { Text("Autofill apps (${linkedAppPackages(apps).size})") }
-        Text("Only authorize apps you trust. Selecting Done approves the installed apps' current signing identities. Suggestions based on recent app usage do not authorize autofill.", style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.only_authorize_apps_you_trust_selecting), style = MaterialTheme.typography.bodySmall)
         OutlinedButton(onClick = { showCodes = true }, modifier = Modifier.fillMaxWidth()) {
             Text(codes.find { it.id == authenticatorId }?.let { "Authenticator: ${it.title} · ${it.primaryValue}" } ?: "Link an authenticator")
         }
@@ -162,11 +163,11 @@ internal fun LoginOptions(apps: String, signatures: String, authenticatorId: Str
         if (identities.any { it.second.isNullOrBlank() }) error = "Couldn't verify one of these apps. Install it before authorizing autofill."
         else { onApps(selected, identities.joinToString("\n") { "${it.first}=${it.second}" }); error = null; showApps = false }
     }
-    if (showCodes) AlertDialog(onDismissRequest = { showCodes = false }, title = { Text("Link existing authenticator") },
+    if (showCodes) AlertDialog(onDismissRequest = { showCodes = false }, title = { Text(stringResource(R.string.link_existing_authenticator)) },
         text = { LazyColumn(Modifier.heightIn(max = 360.dp)) {
-            item { Text("The code stays in Codes and is shown with this login. Deleting this login will not delete the authenticator.") }
-            item { TextButton(onClick = { onCode(""); showCodes = false }) { Text("No linked authenticator") } }
+            item { Text(stringResource(R.string.the_code_stays_in_codes_and_is_shown_wit)) }
+            item { TextButton(onClick = { onCode(""); showCodes = false }) { Text(stringResource(R.string.no_linked_authenticator)) } }
             items(codes, key = { it.id }) { code -> TextButton(onClick = { onCode(code.id); showCodes = false }) { Text("${code.title} · ${code.primaryValue}") } }
-            if (codes.isEmpty()) item { Text("Add an authenticator in Codes first.") }
-        } }, confirmButton = { TextButton(onClick = { showCodes = false }) { Text("Close") } })
+            if (codes.isEmpty()) item { Text(stringResource(R.string.add_an_authenticator_in_codes_first)) }
+        } }, confirmButton = { TextButton(onClick = { showCodes = false }) { Text(stringResource(R.string.close)) } })
 }

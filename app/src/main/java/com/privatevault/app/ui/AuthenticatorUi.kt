@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.OutlinedButton
 import com.privatevault.app.controls.TextButton
 import android.Manifest
@@ -104,7 +105,7 @@ internal fun TotpTile(entry: VaultEntry, copy: (String, String) -> Unit, open: (
                     fontSize = 26.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
                     color = if (revealed && seconds != null && seconds <= 5) accent else scheme.onSurface)
                 if (current != null && code == null)
-                    Text("Check this authenticator's setup key and settings.", color = scheme.error, style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.check_this_authenticator_s_setup_key_and), color = scheme.error, style = MaterialTheme.typography.bodySmall)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 if (remainingMs != null && seconds != null && code != null)
@@ -226,28 +227,28 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                 }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                item { Text("Scan the setup QR, then enter a generated code on the website to finish enrollment. Your phone's automatic date and time should be enabled.") }
+                item { Text(stringResource(R.string.scan_the_setup_qr_then_enter_a_generated)) }
                 item { OutlinedButton(onClick = {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scanner = true
                     else permission.launch(Manifest.permission.CAMERA)
-                }, modifier = Modifier.fillMaxWidth()) { Text("Scan setup QR") } }
-                item { OutlinedButton(onClick = { viewModel.externalFlowActive = true; picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth()) { Text("Import QR image") } }
-                item { Text("Nuvori doesn't save camera images. An imported QR image stays in your photos and contains your setup key, so delete it once your codes work.", style = MaterialTheme.typography.bodySmall) }
-                item { OutlinedTextField(issuer, { issuer = it }, label = { Text("Service") }, modifier = Modifier.fillMaxWidth()) }
-                item { OutlinedTextField(account, { account = it }, label = { Text("Account") }, modifier = Modifier.fillMaxWidth()) }
-                item { OutlinedTextField(secret, { secret = it }, label = { Text("Setup key") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()) }
+                }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.scan_setup_qr)) } }
+                item { OutlinedButton(onClick = { viewModel.externalFlowActive = true; picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.import_qr_image)) } }
+                item { Text(stringResource(R.string.nuvori_doesn_t_save_camera_images_an_imp), style = MaterialTheme.typography.bodySmall) }
+                item { OutlinedTextField(issuer, { issuer = it }, label = { Text(stringResource(R.string.service)) }, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(account, { account = it }, label = { Text(stringResource(R.string.account)) }, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(secret, { secret = it }, label = { Text(stringResource(R.string.setup_key)) }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()) }
                 item { TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "Hide code settings" else "Code settings") } }
                 if (advanced) {
-                    item { OutlinedTextField(algorithm, { algorithm = it.uppercase(java.util.Locale.ROOT) }, label = { Text("Algorithm: SHA1, SHA256, SHA512") }, modifier = Modifier.fillMaxWidth()) }
-                    item { OutlinedTextField(digits, { digits = it }, label = { Text("Digits: 6–8") }, modifier = Modifier.fillMaxWidth()) }
-                    item { OutlinedTextField(period, { period = it }, label = { Text("Interval in seconds") }, modifier = Modifier.fillMaxWidth()) }
+                    item { OutlinedTextField(algorithm, { algorithm = it.uppercase(java.util.Locale.ROOT) }, label = { Text(stringResource(R.string.algorithm_sha1_sha256_sha512)) }, modifier = Modifier.fillMaxWidth()) }
+                    item { OutlinedTextField(digits, { digits = it }, label = { Text(stringResource(R.string.digits_6_8)) }, modifier = Modifier.fillMaxWidth()) }
+                    item { OutlinedTextField(period, { period = it }, label = { Text(stringResource(R.string.interval_in_seconds)) }, modifier = Modifier.fillMaxWidth()) }
                 }
-                item { OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(notes, { notes = it }, label = { Text(stringResource(R.string.notes)) }, modifier = Modifier.fillMaxWidth()) }
                 item { PhotoDraftControls(photoDraft, viewModel) }
                 item { OutlinedButton(onClick = { linkApps = true }, modifier = Modifier.fillMaxWidth()) {
                     Text("Linked apps (${com.privatevault.app.security.linkedAppPackages(linkedApps).size})")
                 } }
-                if (groups.isNotEmpty()) item { Text("Link to groups", style = MaterialTheme.typography.titleSmall) }
+                if (groups.isNotEmpty()) item { Text(stringResource(R.string.link_to_groups), style = MaterialTheme.typography.titleSmall) }
                 items(groups, key = { it.id }) { group ->
                     Row(Modifier.fillMaxWidth().clickable { selectedGroups = if (group.id in selectedGroups) selectedGroups - group.id else selectedGroups + group.id }, verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(group.id in selectedGroups, null); Text(group.name)

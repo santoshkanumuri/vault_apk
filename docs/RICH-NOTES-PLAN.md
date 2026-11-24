@@ -123,11 +123,15 @@ with no change.
 
 - Rich notes need **no protocol change**: the document rides inside the existing encrypted
   entry payload and is versioned and signed with the rest of the entry.
-- A note edited on two devices before they sync is already raised as a conflict for review; the
-  person keeps one version. The format adds `RichNoteMerge.combine`, which builds a "keep both"
-  version (shared blocks once, then each side's own blocks in document order). Wiring a "Keep
-  both edits" choice into the conflict screens on both apps is a follow-up once the current sync
-  security work lands on `main`, since those screens live in the sync layer it is changing.
+- A note edited on two devices before they sync is already raised as a conflict for review. On
+  Android the review sheet for a note adds **Keep both edits**: `RichNoteMerge.combine` keeps the
+  blocks both versions share once and each side's own blocks in document order. A plain line from
+  an older app that matches a formatted line counts as the same line, and the formatted one wins.
+  The conflict labels name the fields "Note text" and "Formatting". The Windows conflict screen
+  keeps its existing choices (this PC's version or the other device's) for now.
+- **Size budget.** Peers refuse a sync payload over 1 MiB, so a note's text and JSON together
+  (as JSON-escaped UTF-8) must stay under 900,000 bytes. Both apps refuse to save a larger note
+  with "This note is too long. Split it into two notes." and keep the editor open.
 - The watch only shows codes today, so it needs nothing. If notes ever reach the watch, they
   should use the plain fallback.
 
@@ -147,7 +151,19 @@ with no change.
 - Lists continue on Enter; Enter on an empty item ends the list (or outdents a nested one).
 - The note view renders the document with tappable checkboxes (saved straight away), tables
   that scroll sideways, and links that ask before opening.
-- Colors come from the Nuvori theme so light and dark both read well.
+- Colors come from one shared palette so light and dark both read well (text color / highlight):
+
+  | Token  | Light text | Light highlight | Dark text | Dark highlight |
+  |--------|-----------|-----------------|-----------|----------------|
+  | gray   | #5F6368 | #E8EAED | #B0B4BA | #3C4043 |
+  | red    | #C62828 | #FFDAD6 | #FF8A80 | #5C1F1B |
+  | orange | #E65100 | #FFE0B2 | #FFB74D | #5A3300 |
+  | yellow | #9A6700 | #FFF59D | #FFE082 | #524800 |
+  | green  | #2E7D32 | #C8E6C9 | #81C784 | #1E4620 |
+  | teal   | #00796B | #B2DFDB | #80CBC4 | #0E3F3A |
+  | blue   | #1565C0 | #BBDEFB | #90CAF9 | #173A5E |
+  | purple | #6A1B9A | #E1BEE7 | #CE93D8 | #3E2050 |
+  | pink   | #AD1457 | #F8BBD0 | #F48FB1 | #561D38 |
 
 ### PC (Tauri + React)
 
@@ -157,6 +173,13 @@ with no change.
   Tab and Shift+Tab (indent), Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z (undo, redo), Ctrl+S (save).
 - Pasted content is read as HTML through an allow list that only produces the document format
   (no raw HTML is ever inserted or stored); anything else is pasted as plain text.
+- How it works: the document is the source of truth. `richNoteHtml.ts` draws it as editor
+  markup and reads the markup back after each keystroke; formatting, Enter, Backspace at a line
+  start, paste and undo are operations on the document (`richNoteEdit.ts`). Copying puts plain
+  text on the clipboard; a copy pasted back into a note keeps its formatting from memory.
+- The note is stored in the entry's `fourthValue` (`save_note` takes `rich`; leaving it out keeps
+  what the note had). Links open only through `open_note_link`, which checks the address again
+  and opens web and mail links only, after the person confirms.
 
 ## Security
 
@@ -172,5 +195,10 @@ with no change.
 
 - Format tests on both apps: encode and decode, limits, sanitizing, plain fallback, hash and
   divergence check, migration of plain notes, and the merge helper.
-- Shared fixtures in `docs/rich-notes/fixtures.json` are read by both test suites, so the
-  apps agree on the format.
+- Shared fixtures in `docs/rich-notes/fixtures.json` are read by both test suites (Kotlin, the
+  Windows `npm test` and a Rust vault test), so the apps agree on the format: both encode each
+  fixture to the same bytes and apply the same link rules. Keep the file identical in both repos.
+- Round trip Android → Windows → Android: the Windows tests load each fixture as Android wrote
+  it, draw it in the editor's markup, read it back and save it, and check that the saved text and
+  JSON are byte-identical to what Android wrote, for every mark, color, list, checklist, table
+  and divider.

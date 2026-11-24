@@ -165,21 +165,63 @@ class RichNoteFormatTest {
         assertFalse(block["spans"].asJsonArray[0].asJsonObject.has("italic"))
     }
 
-    /** The same fixtures run in the Windows app's tests, so both apps agree on the format. */
+    private fun fixtures() = generateSequence(File("").absoluteFile) { it.parentFile }
+        .map { File(it, "docs/rich-notes/fixtures.json") }.firstOrNull { it.exists() }
+        ?.let { JsonParser.parseString(it.readText()).asJsonObject } ?: error("fixtures.json not found")
+
+    /**
+     * The same fixtures run in the Windows app's tests (src/lib/richNote.test.mjs), so both apps
+     * read the same documents and write byte-identical JSON for them.
+     */
     @Test fun sharedFixturesMatch() {
-        val file = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, "docs/rich-notes/fixtures.json") }.firstOrNull { it.exists() } ?: error("fixtures.json not found")
-        val fixtures = JsonParser.parseString(file.readText()).asJsonArray
+        val fixtures = fixtures()["fixtures"].asJsonArray
         assertTrue(fixtures.size() > 0)
         fixtures.forEach { element ->
             val fixture = element.asJsonObject
             val name = fixture["name"].asString
+            val plain = fixture["plain"].asString
             val document = RichNotes.decode(fixture["document"].toString())!!.document
-            assertEquals(name, fixture["plain"].asString, RichNotes.plainText(document))
-            assertEquals(name, fixture["hash"].asString, RichNotes.hash(fixture["plain"].asString))
-            assertEquals(name, RichNoteSource.RICH, RichNotes.load(fixture["plain"].asString, fixture["document"].toString()).source)
+            assertEquals(name, plain, RichNotes.plainText(document))
+            assertEquals(name, fixture["hash"].asString, RichNotes.hash(plain))
+            assertEquals(name, fixture["encoded"].asString, RichNotes.encode(document))
+            val reread = RichNotes.load(plain, fixture["encoded"].asString)
+            assertEquals(name, RichNoteSource.RICH, reread.source)
+            assertEquals(name, document, reread.document)
+            assertEquals(name, plain to fixture["encoded"].asString, RichNotes.storageFields(reread.document))
             if (fixture.has("normalized")) assertEquals(name,
                 RichNotes.decode(fixture["normalized"].toString())!!.document, document)
         }
+    }
+
+    @Test fun sharedLinkRulesMatch() {
+        fixtures()["links"].asJsonArray.forEach {
+            val o = it.asJsonObject
+            assertEquals(o["input"].asString, o["safe"].takeUnless { v -> v.isJsonNull }?.asString, RichNotes.sanitizeLink(o["input"].asString))
+        }
+        fixtures()["typedLinks"].asJsonArray.forEach {
+            val o = it.asJsonObject
+            assertEquals(o["input"].asString, o["link"].takeUnless { v -> v.isJsonNull }?.asString, RichNotes.linkFromInput(o["input"].asString))
+        }
+    }
+
+    @Test fun keepBothEditsCombinesStoredNotes() {
+        val mine = RichNotes.storageFields(RichNoteDocument(listOf(TextBlock(BlockKind.HEADING, listOf(RichSpan("List")), level = 1),
+            TextBlock(BlockKind.CHECK, listOf(RichSpan("Milk"))), TextBlock(BlockKind.CHECK, listOf(RichSpan("Eggs", RichMarks(bold = true)))))))
+        // The other device is an older app: plain text only.
+        val (plain, json) = RichNoteMerge.combineStored(mine.first, mine.second, "List\n☐ Milk\nBread", "")
+        val loaded = RichNotes.load(plain, json)
+        assertEquals(RichNoteSource.RICH, loaded.source)
+        assertEquals(listOf("List", "Milk", "Eggs", "Bread"), loaded.document.blocks.map { (it as TextBlock).text })
+        assertEquals(listOf(BlockKind.HEADING, BlockKind.CHECK, BlockKind.CHECK, BlockKind.PARAGRAPH),
+            loaded.document.blocks.map { (it as TextBlock).kind })
+        assertTrue((loaded.document.blocks[2] as TextBlock).spans.single().marks.bold)
+    }
+
+    @Test fun notesTooLargeForASyncPayloadAreRefused() {
+        // Under the text and JSON limits on their own, but over the payload budget together.
+        val lines = List(100) { TextBlock(spans = listOf(RichSpan("界".repeat(1_600), RichMarks(bold = true)))) }
+        assertTrue(RichNotes.encode(RichNoteDocument(lines)).toByteArray().size < RichNotes.MAX_JSON_BYTES)
+        assertTrue(runCatching { RichNotes.storageFields(RichNoteDocument(lines)) }.exceptionOrNull() is RichNoteTooLargeException)
+        assertTrue(RichNotes.storageFields(RichNoteDocument(lines.take(40))).second.isNotEmpty())
     }
 }

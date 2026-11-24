@@ -1,5 +1,6 @@
 package com.privatevault.app.notes
 
+import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -103,6 +104,8 @@ object RichNotes {
     const val MAX_TABLE_COLUMNS = 12
     const val MAX_TEXT_CHARS = 200_000
     const val MAX_JSON_BYTES = 512 * 1024
+    /** The escaped plain text and JSON together, leaving room for the rest of the entry in a sync payload. */
+    const val MAX_STORED_BYTES = 900_000
     const val MAX_LINK_CHARS = 2_048
     const val DIVIDER_TEXT = "———"
 
@@ -131,6 +134,9 @@ object RichNotes {
         val plain = plainText(clean)
         if (isPlainParagraphs(clean)) return plain to ""
         val json = encode(clean)
+        // Both values travel in one sync payload, which peers cap at 1 MiB.
+        val stored = Gson().toJson(plain).toByteArray(Charsets.UTF_8).size + Gson().toJson(json).toByteArray(Charsets.UTF_8).size
+        if (stored > MAX_STORED_BYTES) throw RichNoteTooLargeException("This note is too long. Split it into two notes.")
         return plain to json
     }
 
@@ -297,7 +303,7 @@ object RichNotes {
 
     fun encode(document: RichNoteDocument): String {
         val clean = normalize(document)
-        check(clean.blocks.size <= MAX_BLOCKS) { "Too many blocks" }
+        if (clean.blocks.size > MAX_BLOCKS) throw RichNoteTooLargeException("This note is too long. Split it into two notes.")
         val plain = plainText(clean)
         val textChars = clean.blocks.sumOf { block ->
             when (block) {
@@ -429,25 +435,70 @@ object RichNotes {
  * device's first where they compete). Used for a "Keep both edits" conflict choice.
  */
 object RichNoteMerge {
+    /** Above this many block pairs the middle parts are kept one after the other instead. */
+    private const val MAX_PAIRS = 1_000_000
+
+    /** A block with the facts [combine] compares: an unformatted line, and its plain text. */
+    private class Keyed(val block: RichBlock) {
+        val plainLine = block is TextBlock && block.kind == BlockKind.PARAGRAPH && block.spans.all { it.marks.isPlain }
+        val text = RichNotes.plainText(RichNoteDocument(listOf(block))).trim()
+    }
+
+    /**
+     * Two blocks are the same content when equal, or when one is an unformatted line (as an
+     * app without rich notes writes) that reads like the other's plain text.
+     */
+    private fun matches(a: Keyed, b: Keyed) = a.block == b.block || (a.plainLine != b.plainLine && a.text == b.text)
+
+    /** Of two matching blocks, the formatted one is kept. */
+    private fun pick(a: Keyed, b: Keyed): RichBlock = if (a.plainLine && !b.plainLine) b.block else a.block
+
     fun combine(current: RichNoteDocument, incoming: RichNoteDocument): RichNoteDocument {
-        val a = RichNotes.normalize(current).blocks
-        val b = RichNotes.normalize(incoming).blocks
-        if (a == b) return RichNoteDocument(a)
-        // Longest common subsequence of whole blocks, so shared content appears once.
+        val a = RichNotes.normalize(current).blocks.map(::Keyed)
+        val b = RichNotes.normalize(incoming).blocks.map(::Keyed)
+        if (a.map { it.block } == b.map { it.block }) return RichNoteDocument(a.map { it.block })
+        // Shared start and end appear once; only the middle parts are compared.
+        val head = mutableListOf<RichBlock>()
+        var prefix = 0
+        while (prefix < a.size && prefix < b.size && matches(a[prefix], b[prefix])) { head += pick(a[prefix], b[prefix]); prefix++ }
+        val tail = ArrayDeque<RichBlock>()
+        var suffix = 0
+        while (suffix < a.size - prefix && suffix < b.size - prefix && matches(a[a.size - 1 - suffix], b[b.size - 1 - suffix])) {
+            tail.addFirst(pick(a[a.size - 1 - suffix], b[b.size - 1 - suffix])); suffix++
+        }
+        val midA = a.subList(prefix, a.size - suffix)
+        val midB = b.subList(prefix, b.size - suffix)
+        val middle = if (midA.size.toLong() * midB.size > MAX_PAIRS) {
+            val seen = midA.map { it.text }.toHashSet()
+            midA.map { it.block } + midB.filterNot { it.text in seen }.map { it.block }
+        } else interleave(midA, midB)
+        return RichNotes.normalize(RichNoteDocument(head + middle + tail))
+    }
+
+    /** Longest common subsequence of blocks, so shared content appears once. */
+    private fun interleave(a: List<Keyed>, b: List<Keyed>): List<RichBlock> {
         val lengths = Array(a.size + 1) { IntArray(b.size + 1) }
         for (i in a.indices.reversed()) for (j in b.indices.reversed()) {
-            lengths[i][j] = if (a[i] == b[j]) lengths[i + 1][j + 1] + 1 else maxOf(lengths[i + 1][j], lengths[i][j + 1])
+            lengths[i][j] = if (matches(a[i], b[j])) lengths[i + 1][j + 1] + 1 else maxOf(lengths[i + 1][j], lengths[i][j + 1])
         }
         val out = mutableListOf<RichBlock>()
         var i = 0
         var j = 0
         while (i < a.size || j < b.size) {
             when {
-                i < a.size && j < b.size && a[i] == b[j] -> { out += a[i]; i++; j++ }
-                j >= b.size || (i < a.size && lengths[i + 1][j] >= lengths[i][j + 1]) -> { out += a[i]; i++ }
-                else -> { out += b[j]; j++ }
+                i < a.size && j < b.size && matches(a[i], b[j]) -> { out += pick(a[i], b[j]); i++; j++ }
+                j >= b.size || (i < a.size && lengths[i + 1][j] >= lengths[i][j + 1]) -> { out += a[i].block; i++ }
+                else -> { out += b[j].block; j++ }
             }
         }
-        return RichNoteDocument(out)
+        return out
     }
+
+    /**
+     * "Keep both edits" for a note in a sync conflict: each side's stored (plain, formatting)
+     * values in, the combined values to store out. Throws [RichNoteTooLargeException].
+     */
+    fun combineStored(currentPlain: String, currentJson: String, incomingPlain: String, incomingJson: String): Pair<String, String> =
+        RichNotes.storageFields(combine(RichNotes.load(currentPlain, currentJson).document,
+            RichNotes.load(incomingPlain, incomingJson).document))
 }

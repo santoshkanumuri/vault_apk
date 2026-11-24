@@ -1,5 +1,7 @@
 package com.privatevault.app.notes
 
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -108,6 +110,8 @@ internal fun LazyListScope.richNoteEditorItems(state: RichNoteEditorState, palet
     val single = state.items.size == 1
     state.items.forEachIndexed { index, item ->
         item(key = "rich-${item.key}") {
+          // Copy and cut in note text go to the clipboard marked sensitive.
+          CompositionLocalProvider(LocalClipboardManager provides rememberSensitiveClipboard()) {
             when (item) {
                 is TextItem -> RichSegmentField(state, item, palette, placeholder = if (single && index == 0) "Start writing" else null)
                 is DividerItem -> Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -118,6 +122,7 @@ internal fun LazyListScope.richNoteEditorItems(state: RichNoteEditorState, palet
                 }
                 is TableItem -> RichTableEditor(state, item)
             }
+          }
         }
     }
 }

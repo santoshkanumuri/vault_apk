@@ -1262,7 +1262,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             title = "${source.title} copy",
             primaryValue = if (source.type == com.privatevault.app.data.EntryType.CARD) "" else source.primaryValue,
             secondaryValue = "",
-            fourthValue = "",
+            // A note's fourth value is its formatting (notes/RichNote.kt); a card's is its CVV.
+            fourthValue = if (source.type == com.privatevault.app.data.EntryType.NOTE) source.fourthValue else "",
             linkedAuthenticatorId = "",
             favorite = false,
             lastOpenedAt = 0,
@@ -2339,10 +2340,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         } finally { key.fill(0) }
     }
 
-    fun resolveSyncConflict(id: String, useIncoming: Boolean, expectedVersion: String) = securedLaunch {
+    fun resolveSyncConflict(id: String, useIncoming: Boolean, expectedVersion: String, combineNotes: Boolean = false) = securedLaunch {
         com.privatevault.app.sync.SyncConflictResolver(requireNotNull(database), deviceIdentityStore,
             lockedSyncStore.photoBlobs, getApplication())
-            .resolve(id, useIncoming, requireNotNull(sessionKey), expectedVersion)
+            .resolve(id, useIncoming, requireNotNull(sessionKey), expectedVersion, combineNotes)
         refresh()
         notify("Conflict resolved", StatusKind.SUCCESS)
     }

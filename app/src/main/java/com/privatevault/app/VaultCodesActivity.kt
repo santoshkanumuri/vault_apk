@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.Button
 import com.privatevault.app.controls.FilledTonalButton
 import com.privatevault.app.controls.OutlinedButton
@@ -1041,25 +1042,25 @@ class VaultCodesActivity : FragmentActivity() {
                         UnlockContent(password, { password = it }, submit) { password = ""; authenticate(null) }
                     }
                     if (unlocked) message?.let { StatusBanner(StatusKind.ERROR, it) }
-                    TextButton(onClick = ::dismissPicker, modifier = Modifier.align(Alignment.End)) { Text("Cancel") }
+                    TextButton(onClick = ::dismissPicker, modifier = Modifier.align(Alignment.End)) { Text(stringResource(R.string.cancel)) }
                 }
             }
         }
         if (generating) AlertDialog(onDismissRequest = { if (!busy) generating = false },
-            title = { Text("Save generated password?") },
+            title = { Text(stringResource(R.string.save_generated_password)) },
             text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Save the username or email, generated password, and website link for ${loginFill?.origin.orEmpty()} before filling. Submit the website form to finish. If it rejects the password, remove the generated login. Your old login will remain unchanged.")
-                OutlinedTextField(generationUsername, { generationUsername = it }, label = { Text("Username or email") },
+                OutlinedTextField(generationUsername, { generationUsername = it }, label = { Text(stringResource(R.string.username_or_email)) },
                     enabled = !busy && generationEntry == null, singleLine = true, modifier = Modifier.fillMaxWidth())
             } },
             confirmButton = { Button(enabled = !busy && generationUsername.isNotBlank() && generationUsername.length <= 1024,
                 onClick = ::saveGeneratedLogin) { PickerButtonLabel("Save new login and fill", busy) } },
-            dismissButton = { TextButton(enabled = !busy, onClick = { generating = false }) { Text("Cancel") } })
+            dismissButton = { TextButton(enabled = !busy, onClick = { generating = false }) { Text(stringResource(R.string.cancel)) } })
         selectedUpdate?.let { entry ->
-            AlertDialog(onDismissRequest = { selectedUpdate = null }, title = { Text("Update saved password?") },
+            AlertDialog(onDismissRequest = { selectedUpdate = null }, title = { Text(stringResource(R.string.update_saved_password)) },
                 text = { Text("Replace the saved password for ${entry.primaryValue} at ${loginSave?.let(::saveDestination).orEmpty()} in \"${entry.title}\"? The old password is replaced and can't be recovered. Groups, photos and the linked authenticator code stay unchanged.") },
-                confirmButton = { Button(enabled = !busy, onClick = { selectedUpdate = null; saveLogin(entry) }) { Text("Replace password") } },
-                dismissButton = { TextButton(onClick = { selectedUpdate = null }) { Text("Cancel") } })
+                confirmButton = { Button(enabled = !busy, onClick = { selectedUpdate = null; saveLogin(entry) }) { Text(stringResource(R.string.replace_password)) } },
+                dismissButton = { TextButton(onClick = { selectedUpdate = null }) { Text(stringResource(R.string.cancel)) } })
         }
         pendingLoginLink?.let { entry ->
             val request = loginFill
@@ -1076,21 +1077,21 @@ class VaultCodesActivity : FragmentActivity() {
             if (request?.unverified == true) {
                 AlertDialog(
                     onDismissRequest = { if (!busy) pendingLoginLink = null },
-                    title = { Text("Fill this login here?") },
+                    title = { Text(stringResource(R.string.fill_this_login_here)) },
                     text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         StatusBanner(StatusKind.WARNING, "Nuvori can't confirm which site this is." +
                             (savedFor?.let { " This login is saved for $it." } ?: ""))
                         Text("Fill $account in $destinationName (${request.packageName})? It receives the login and can read it. " +
                             "Nothing in your vault changes.")
                     } },
-                    confirmButton = { Button(enabled = !busy, onClick = { fillOnce(entry) }) { Text("Fill once") } },
-                    dismissButton = { TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text("Cancel") } },
+                    confirmButton = { Button(enabled = !busy, onClick = { fillOnce(entry) }) { Text(stringResource(R.string.fill_once)) } },
+                    dismissButton = { TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text(stringResource(R.string.cancel)) } },
                 )
                 return@let
             }
             AlertDialog(
                 onDismissRequest = { if (!busy) pendingLoginLink = null },
-                title = { Text("Fill this login here?") },
+                title = { Text(stringResource(R.string.fill_this_login_here)) },
                 text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     caution?.let { StatusBanner(StatusKind.WARNING, it) }
                     val claimed = request?.let(::claimedHost)
@@ -1101,14 +1102,14 @@ class VaultCodesActivity : FragmentActivity() {
                 else if (request?.origin != null)
                     "Fill $account and link it to the exact website $destinationName. Nuvori can suggest it there next time."
                 else "Fill $account and link it to $destinationName (${request?.packageName.orEmpty()}). Nuvori will also bind the link to the app's current signing certificate.")
-                    Text("Fill once uses it this time only. Nothing in your vault changes.",
+                    Text(stringResource(R.string.fill_once_uses_it_this_time_only_nothing),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } },
                 confirmButton = { Button(enabled = !busy, onClick = { linkAndFill(entry) }) { PickerButtonLabel("Fill and link", busy) } },
                 dismissButton = {
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text("Cancel") }
-                        OutlinedButton(enabled = !busy, onClick = { fillOnce(entry) }) { Text("Fill once") }
+                        TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text(stringResource(R.string.cancel)) }
+                        OutlinedButton(enabled = !busy, onClick = { fillOnce(entry) }) { Text(stringResource(R.string.fill_once)) }
                     }
                 },
             )
@@ -1206,9 +1207,9 @@ class VaultCodesActivity : FragmentActivity() {
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Icon(NuvoriIcons.Passkey, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
                     Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                    Text("Use fingerprint")
+                    Text(stringResource(R.string.use_fingerprint))
                 }
-                OutlinedTextField(password, onPasswordChange, label = { Text("Master password") },
+                OutlinedTextField(password, onPasswordChange, label = { Text(stringResource(R.string.master_password)) },
                     singleLine = true, enabled = !busy, isError = unlockFailed,
                     visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
@@ -1223,7 +1224,7 @@ class VaultCodesActivity : FragmentActivity() {
                 message?.let { StatusBanner(StatusKind.ERROR, it) }
                 Button(onClick = { keyboard?.hide(); onSubmit() }, enabled = !busy && password.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel("Unlock", busy) }
-                Text("A master password starts a new fingerprint session. Fingerprint use does not extend it.",
+                Text(stringResource(R.string.a_master_password_starts_a_new_fingerpri),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -1306,7 +1307,7 @@ class VaultCodesActivity : FragmentActivity() {
         if (searchable) OutlinedTextField(
             search,
             { search = it },
-            label = { Text("Search saved logins") },
+            label = { Text(stringResource(R.string.search_saved_logins)) },
             leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null) },
             trailingIcon = if (search.isEmpty()) null else {
                 { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = "Clear search") } }
@@ -1323,12 +1324,12 @@ class VaultCodesActivity : FragmentActivity() {
                 item(key = "sign-in-reminder") { SignInReminderNote(reminder) }
             }
             if (otp) item(key = "code-search") {
-                OutlinedTextField(search, { search = it }, label = { Text("Search linked codes") },
+                OutlinedTextField(search, { search = it }, label = { Text(stringResource(R.string.search_linked_codes)) },
                     singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }), modifier = Modifier.fillMaxWidth())
             }
             if (generation && request.password == null) item(key = "generate-new") {
-                Button(onClick = { prepareGeneration(null) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Generate for a new account") }
+                Button(onClick = { prepareGeneration(null) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(stringResource(R.string.generate_for_a_new_account)) }
             }
             if (searching) {
                 // One ranked list across every eligible login: exact, same site, then name matches.
@@ -1403,7 +1404,7 @@ class VaultCodesActivity : FragmentActivity() {
                 TextButton(onClick = {
                     dismissPicker()
                     startActivity(Intent(this@VaultCodesActivity, MainActivity::class.java))
-                }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Open Nuvori to manage passwords") }
+                }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(stringResource(R.string.open_nuvori_to_manage_passwords)) }
             }
         }
     }
@@ -1424,7 +1425,7 @@ class VaultCodesActivity : FragmentActivity() {
                     }
                 }
                 Button(onClick = { prepareGeneration(entry) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                    Text("Generate new password for this account")
+                    Text(stringResource(R.string.generate_new_password_for_this_account))
                 }
             }
         }
@@ -1453,12 +1454,12 @@ class VaultCodesActivity : FragmentActivity() {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (needsUsername) OutlinedTextField(typedUsername, { typedUsername = it.take(1024) },
-                        label = { Text("Username or email") }, singleLine = true,
+                        label = { Text(stringResource(R.string.username_or_email)) }, singleLine = true,
                         supportingText = { Text(if (request.usernameConfirmed) "Required to save a new login."
                             else "Check this is your account name, not a server or workspace.") }, modifier = Modifier.fillMaxWidth())
                     else PickerLabeledValue("Username", request.username)
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Password", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.password), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             // Fixed length when hidden: neither the password nor its length belongs on screen.
                             if (showPassword) Text(request.password.concatToString(), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
@@ -1469,13 +1470,13 @@ class VaultCodesActivity : FragmentActivity() {
                             }
                         }
                     }
-                    OutlinedTextField(name, { name = it.take(200) }, label = { Text("Name") }, singleLine = true,
+                    OutlinedTextField(name, { name = it.take(200) }, label = { Text(stringResource(R.string.name)) }, singleLine = true,
                         modifier = Modifier.fillMaxWidth())
                 }
             }
             if (identical.isNotEmpty()) {
                 StatusBanner(StatusKind.SUCCESS, "This password is already saved in Nuvori.")
-                Button(onClick = ::finishAlreadySaved, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Done") }
+                Button(onClick = ::finishAlreadySaved, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(stringResource(R.string.done)) }
                 OutlinedButton(enabled = !busy && canCreate, onClick = { saveLogin(null, typedUsername, name) },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel("Save as new login", busy && savingId == "new") }
             } else {
@@ -1521,7 +1522,7 @@ class VaultCodesActivity : FragmentActivity() {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             PickerKeyBadge()
-                            Text("New passkey", style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(R.string.new_passkey), style = MaterialTheme.typography.titleMedium)
                         }
                         PickerLabeledValue("Website or app", if (rpName.isNotBlank() && rpName != rpId) "$rpName ($rpId)" else rpId)
                         PickerLabeledValue("Account", if (displayName.isNotBlank() && displayName != userName) "$displayName ($userName)" else userName)
@@ -1541,7 +1542,7 @@ class VaultCodesActivity : FragmentActivity() {
             val mostUsedId = remember(matches, usage) { usage.mostUsed(matches.map { it.id }) }
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item { PickerHint(source) }
-                if (matches.isEmpty()) item { Text("No matching passkeys in this vault.") }
+                if (matches.isEmpty()) item { Text(stringResource(R.string.no_matching_passkeys_in_this_vault)) }
                 items(matches, key = { it.id }) { passkey ->
                     PickerPasskeyRow(passkey, !busy, mostUsed = passkey.id == mostUsedId) { usePasskey(passkey) }
                 }
@@ -1574,7 +1575,7 @@ private fun PickerPasskeyRow(passkey: VaultPasskey, enabled: Boolean, mostUsed: 
                 Text(passkey.rpId, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text("Sign in", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, maxLines = 1)
+            Text(stringResource(R.string.sign_in), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, maxLines = 1)
         }
     }
 }

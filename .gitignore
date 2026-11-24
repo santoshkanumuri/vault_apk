@@ -33,5 +33,6 @@ captures/
 !docs/PERSONAL-DEVICE-SYNC.md
 !docs/PUBLISHING.md
 !docs/WATCH-COMPANION.md
+!docs/RICH-NOTES-PLAN.md
 __pycache__/
 .claude/

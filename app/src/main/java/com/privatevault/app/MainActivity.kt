@@ -187,7 +187,11 @@ class MainActivity : FragmentActivity() {
         val prompt = BiometricPrompt(this, ContextCompat.getMainExecutor(this),
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    onSuccess()
+                    // Security review L-08: the action key needs a fresh strong biometric for each use, so only a real
+                    // authentication lets this cipher encrypt. A faked callback (hooked process) can't pass.
+                    val proven = runCatching { result.cryptoObject?.cipher?.doFinal(ByteArray(16))?.isNotEmpty() == true }.getOrDefault(false)
+                    if (proven) onSuccess()
+                    else viewModel.notify("Fingerprint check did not complete.", StatusKind.WARNING)
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {

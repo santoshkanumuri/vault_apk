@@ -77,6 +77,7 @@ import com.privatevault.app.security.appSigningIdentity
 import com.privatevault.app.security.loginAuthorized
 import com.privatevault.app.security.loginAuthorizedForDestination
 import com.privatevault.app.security.possibleLoginMatches
+import com.privatevault.app.security.pickerBrowsing
 import com.privatevault.app.security.LoginMatchTier
 import com.privatevault.app.security.PickerFillGrant
 import com.privatevault.app.security.pickerFillAllowed
@@ -1272,11 +1273,12 @@ class VaultCodesActivity : FragmentActivity() {
         val sameSiteLogins = remember(entries, usage) { rankLoginSearch(eligible.filter { it.id in sameSite }, "", usage) { LoginMatchTier.SAME_SITE } }
         // One "Most used" badge for this app or site: among its linked logins, or else its same-site ones.
         val mostUsedId = usage.mostUsed(suggested.map { it.id }) ?: usage.mostUsed(sameSiteLogins.map { it.id })
+        val browsing = pickerBrowsing(request.unverified, request.embeddedWebView)
         // Heuristic hints only: every one still goes through the confirmation dialog.
         val possible = remember(entries, noMatches, usage) {
-            // An embedded WebView's claimed site ranks logins saved for that site first. Ordering only: still confirmed.
-            if (searchable && noMatches) possibleLoginMatches(eligible, request.packageName, appLabel(request.packageName), request.origin,
-                embeddedSite = request.embeddedSite.takeIf { claimedHost(request) != null }, usage = usage) {
+            // A page Nuvori can't confirm, or a site an app's WebView claims, never picks a login for the user.
+            if (searchable && noMatches && browsing.suggestions) possibleLoginMatches(eligible, request.packageName, appLabel(request.packageName), request.origin,
+                embeddedSite = request.embeddedSite.takeIf { browsing.claimedSite && claimedHost(request) != null }, usage = usage) {
                 authorized(it) || it.id in sameSite
             } else emptyList()
         }
@@ -1284,7 +1286,7 @@ class VaultCodesActivity : FragmentActivity() {
         val results = if (searching) rankLoginSearch(eligible, search, usage, ::tier) else emptyList()
         // Nothing is linked yet: list the rest too, so any login is one scroll away before typing.
         val others = remember(entries, noMatches, possible, usage) {
-            if (searchable && noMatches) rankLoginSearch(eligible.filter { entry -> entry.id !in sameSite && possible.none { it.id == entry.id } }, "", usage, ::tier)
+            if (searchable && noMatches && browsing.everyLogin) rankLoginSearch(eligible.filter { entry -> entry.id !in sameSite && possible.none { it.id == entry.id } }, "", usage, ::tier)
             else emptyList()
         }
         // Open the keyboard only when there is nothing better than searching. Exact or same-site logins stay one tap away.

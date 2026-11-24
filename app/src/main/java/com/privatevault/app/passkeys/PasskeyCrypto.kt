@@ -45,8 +45,8 @@ internal object PasskeyCrypto {
         }
         val rp = (if (create) input.optJSONObject("rp")?.optString("id") else input.optString("rpId")).orEmpty()
         require(rp.isNotEmpty()) { "The request doesn't name a website (RP ID)" }
-        // Credential Manager and the allowlisted browser validate the privileged origin. Rechecking it
-        // against the RP ID here rejects valid parent-domain and related-origin WebAuthn requests.
+        // Which callers may use this RP ID (origin under it, related origins, Digital Asset Links for apps) is
+        // checked before this, by passkeyOrigin / PasskeyCallerCheck; here only the RP ID's shape.
         require(httpsOrigin("https://$rp") == "https://$rp") { "The website ($rp) isn't a valid site name" }
         if (create) {
             val algorithms = input.optJSONArray("pubKeyCredParams") ?: org.json.JSONArray()

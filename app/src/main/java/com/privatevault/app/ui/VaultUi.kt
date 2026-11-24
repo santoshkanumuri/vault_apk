@@ -153,6 +153,7 @@ import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Watch
 import com.privatevault.app.nfc.cardNetwork
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -190,6 +191,17 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.privatevault.app.data.EntryType
+import com.privatevault.app.notes.LinkConfirmDialog
+import com.privatevault.app.notes.RichNoteEditorState
+import com.privatevault.app.notes.RichNoteFallbackNotice
+import com.privatevault.app.notes.RichNoteSource
+import com.privatevault.app.notes.RichNoteToolbar
+import com.privatevault.app.notes.RichNoteTooLargeException
+import com.privatevault.app.notes.RichNotes
+import com.privatevault.app.notes.rememberRichNotePalette
+import com.privatevault.app.notes.richNoteEditorItems
+import com.privatevault.app.notes.richNoteViewItems
+import com.privatevault.app.notes.toggleCheck
 import com.privatevault.app.data.CardKind
 import com.privatevault.app.data.EntryWithDetails
 import com.privatevault.app.data.VaultEntry
@@ -1439,7 +1451,13 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
     }
     // Phone and wide layouts share one action model: Edit in the top bar, everything else in its overflow menu.
     var actionsMenuExpanded by remember(item.entry.id) { mutableStateOf(false) }
+    val note = remember(item.entry.type, item.entry.notes, item.entry.fourthValue) {
+        if (item.entry.type == EntryType.NOTE) RichNotes.load(item.entry) else null
+    }
+    val notePalette = rememberRichNotePalette()
+    var pendingLink by remember(item.entry.id) { mutableStateOf<String?>(null) }
     val detailContent: @Composable (PaddingValues) -> Unit = { contentPadding ->
+    pendingLink?.let { link -> LinkConfirmDialog(link) { pendingLink = null } }
     Column(Modifier.fillMaxSize().padding(contentPadding).background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             BackIcon(close)
@@ -1553,9 +1571,21 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                         }
                 }
                 item { AutofillFormAvailability(viewModel::refreshAutofillCopy) }
-            } else {
+            } else if (note != null) {
                 item { SectionTitle("Note") }
-                item { PlainRow("Contents", item.entry.notes) }
+                if (note.source == RichNoteSource.DIVERGED || note.source == RichNoteSource.NEWER_VERSION)
+                    item { RichNoteFallbackNotice(note.source) }
+                richNoteViewItems(note.document, notePalette,
+                    onToggleCheck = { index ->
+                        viewModel.saveEntry(RichNotes.applyTo(item.entry, note.document.toggleCheck(index)),
+                            item.groups.map { it.id }.toSet())
+                    },
+                    onLink = { pendingLink = it })
+                item {
+                    TextButton(onClick = { copy("Note", RichNotes.plainText(note.document)) }) {
+                        Icon(NuvoriIcons.Copy, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Copy text")
+                    }
+                }
             }
             if (item.groups.isNotEmpty()) {
                 item { SectionTitle(if (item.entry.type == EntryType.CARD) "Groups" else "Folders and groups") }
@@ -1798,6 +1828,13 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
         }
     }
     var notes by remember { mutableStateOf(existing?.notes.orEmpty()) }
+    // Notes are edited as rich text: formatting in fourthValue, plain text in notes (docs/RICH-NOTES-PLAN.md).
+    val noteState = remember(existing?.id, type) {
+        if (type == EntryType.NOTE) RichNoteEditorState.forNote(existing?.notes.orEmpty(), existing?.fourthValue.orEmpty()) else null
+    }
+    val noteEmpty by remember(noteState) { derivedStateOf { noteState?.isEmpty ?: true } }
+    val notePalette = rememberRichNotePalette()
+    var noteError by remember { mutableStateOf<String?>(null) }
     var profile by remember { mutableStateOf(existing?.autofillProfile() ?: AutofillProfile()) }
     var tags by remember { mutableStateOf(existing?.tags.orEmpty()) }
     var selectedGroups by remember { mutableStateOf(initialGroups) }
@@ -1809,7 +1846,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
     val usedCardColors = remember(existing?.id) {
         CardColorMath.usedColors(viewModel.entries.value.filter { it.entry.type == EntryType.CARD && it.entry.id != existing?.id }.map { it.entry.color })
     }
-    val valid = title.isNotBlank() && when (type) { EntryType.CARD -> primary.isNotBlank(); EntryType.QUESTION -> primary.isNotBlank() && secondary.isNotBlank(); EntryType.PASSWORD -> secondary.isNotBlank(); EntryType.NOTE -> notes.isNotBlank(); EntryType.AUTHENTICATOR -> false; EntryType.AUTOFILL -> profile.hasValue }
+    val valid = title.isNotBlank() && when (type) { EntryType.CARD -> primary.isNotBlank(); EntryType.QUESTION -> primary.isNotBlank() && secondary.isNotBlank(); EntryType.PASSWORD -> secondary.isNotBlank(); EntryType.NOTE -> !noteEmpty; EntryType.AUTHENTICATOR -> false; EntryType.AUTOFILL -> profile.hasValue }
 
     BackHandler(onBack = onDismiss)
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
@@ -1820,7 +1857,10 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                         Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     IconButton(onClick = {
-                    onSave((existing ?: VaultEntry(type = type, title = title)).copy(title = title.trim(), primaryValue = if (type == EntryType.AUTOFILL) profile.encode() else primary.trim(), secondaryValue = if (type == EntryType.CARD) secondary.trim() else secondary, tertiaryValue = tertiary.trim(), fourthValue = fourth.trim(), cardKind = cardKind, network = network.trim(), notes = notes.trim(), tags = tags.trim(), color = color, linkedApps = loginApps, autofillSignatures = loginSignatures, linkedAuthenticatorId = linkedCode), selectedGroups, photoDraft.takeForSave())
+                    val edited = (existing ?: VaultEntry(type = type, title = title)).copy(title = title.trim(), primaryValue = if (type == EntryType.AUTOFILL) profile.encode() else primary.trim(), secondaryValue = if (type == EntryType.CARD) secondary.trim() else secondary, tertiaryValue = tertiary.trim(), fourthValue = fourth.trim(), cardKind = cardKind, network = network.trim(), notes = notes.trim(), tags = tags.trim(), color = color, linkedApps = loginApps, autofillSignatures = loginSignatures, linkedAuthenticatorId = linkedCode)
+                    val saved = if (noteState == null) edited else try { RichNotes.applyTo(edited, noteState.document()) }
+                        catch (error: RichNoteTooLargeException) { noteError = error.message; null }
+                    if (saved != null) onSave(saved, selectedGroups, photoDraft.takeForSave())
                     }, enabled = valid && !photoDraft.busy, modifier = Modifier.size(48.dp)) {
                         Icon(NuvoriIcons.Check, contentDescription = "Save entry")
                     }
@@ -1890,7 +1930,11 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                 }
                 EntryType.NOTE, EntryType.AUTHENTICATOR -> Unit
             }
-            item { OutlinedTextField(notes, { notes = it }, label = { Text(if (type == EntryType.NOTE) "Note" else "Notes") }, minLines = if (type == EntryType.NOTE) 7 else 2, modifier = Modifier.fillMaxWidth()) }
+            if (noteState != null) {
+                if (noteState.source == RichNoteSource.DIVERGED || noteState.source == RichNoteSource.NEWER_VERSION)
+                    item(key = "note-notice") { RichNoteFallbackNotice(noteState.source) }
+                richNoteEditorItems(noteState, notePalette)
+            } else item { OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, minLines = 2, modifier = Modifier.fillMaxWidth()) }
             item { PhotoDraftControls(photoDraft, viewModel) }
             item { OutlinedTextField(tags, { tags = it }, label = { Text("Tags") }, placeholder = { Text("Travel, business, banking") }, modifier = Modifier.fillMaxWidth()) }
             if (type != EntryType.CARD && groups.any { it.folderType == type }) item {
@@ -1914,7 +1958,12 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                 } }
             }
                 }
+                if (noteState != null) RichNoteToolbar(noteState)
             }
+    }
+    noteError?.let { message ->
+        AlertDialog(onDismissRequest = { noteError = null }, title = { Text("Note not saved") }, text = { Text(message) },
+            confirmButton = { TextButton(onClick = { noteError = null }) { Text("OK") } })
     }
     if (scanning) AlertDialog(
         properties = wideDialogProperties,

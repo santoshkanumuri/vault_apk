@@ -166,8 +166,26 @@ class WatchActivity : ComponentActivity() {
         val clip = ClipData.newPlainText("Authenticator code", code)
         if (Build.VERSION.SDK_INT >= 33)
             clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
-        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
+        val clipboard = applicationContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(clip)
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ clearCopiedCode(clipboard, code) }, CLIP_CLEAR_MILLIS)
         Toast.makeText(this, "Code copied", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** How long a copied code stays on the watch clipboard (security review M-02). */
+private const val CLIP_CLEAR_MILLIS = 30_000L
+
+/**
+ * Clears a copied code unless something else was copied since. A clipboard this app can't read (it is not in front)
+ * is cleared too: on a watch that costs little, and a second factor shouldn't linger.
+ */
+private fun clearCopiedCode(clipboard: ClipboardManager, code: String) {
+    runCatching {
+        val current = clipboard.primaryClip
+        val text = current?.takeIf { it.itemCount == 1 }?.getItemAt(0)?.text?.toString()
+        if (current != null && text != code) return
+        clipboard.clearPrimaryClip()
     }
 }
 

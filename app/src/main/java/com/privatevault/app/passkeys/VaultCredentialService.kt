@@ -56,16 +56,46 @@ internal fun credentialDestination(context: Context, info: CallingAppInfo, passk
     return CredentialDestination(info.packageName, identity, canonical)
 }
 
+/** The caller's WebAuthn origin: the website a verified browser reported, or `android:apk-key-hash:` for an app. */
 @RequiresApi(34)
-internal fun passkeyOrigin(context: Context, info: CallingAppInfo, rpId: String): String =
+private fun callerOrigin(context: Context, info: CallingAppInfo): String =
     credentialDestination(context, info, passkey = true).origin ?: run {
         val identity = requireNotNull(appSigningIdentity(context, info.packageName))
         val hash = identity.substringBefore(',').chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         "android:apk-key-hash:${Base64.getUrlEncoder().withoutPadding().encodeToString(hash)}"
     }
 
+/**
+ * The caller's origin, only when it may use passkeys for [rpId] ([PasskeyCallerCheck.allowedNow]): never uses the
+ * network, so an app (or a related origin) passes only after [verifiedPasskeyOrigin] checked it recently.
+ */
+@RequiresApi(34)
+internal fun passkeyOrigin(context: Context, info: CallingAppInfo, rpId: String): String =
+    callerOrigin(context, info).also {
+        require(PasskeyCallerCheck.allowedNow(rpId, it, info.packageName)) { "This app or website isn't allowed to use passkeys for $rpId" }
+    }
+
+/** As [passkeyOrigin], but may ask the RP's Digital Asset Links or related origins file first. Blocking (network). */
+@RequiresApi(34)
+internal fun verifiedPasskeyOrigin(context: Context, info: CallingAppInfo, rpId: String): String {
+    val origin = callerOrigin(context, info)
+    val identity = requireNotNull(appSigningIdentity(context, info.packageName)).substringBefore(',')
+    require(PasskeyCallerCheck.verify(rpId, origin, info.packageName, identity)) {
+        if (PasskeyCallerCheck.isAppOrigin(origin)) "$rpId doesn't list this app in its Digital Asset Links"
+        else "This website isn't allowed to use passkeys for $rpId"
+    }
+    return passkeyOrigin(context, info, rpId)
+}
+
 @RequiresApi(34)
 class VaultCredentialService : CredentialProviderService() {
+    /** Requests are answered here, off the main thread: a passkey check may fetch the site's well-known files. */
+    private val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    override fun onDestroy() {
+        worker.shutdown()
+        super.onDestroy()
+    }
     private fun action(create: Boolean): PendingIntent {
         val intent = Intent(this, VaultCodesActivity::class.java).setAction("vault.passkey.${UUID.randomUUID()}")
             .putExtra("passkey_create", create).putExtra("passkey_issued", SystemClock.elapsedRealtime())
@@ -96,18 +126,26 @@ class VaultCredentialService : CredentialProviderService() {
     override fun onBeginCreateCredentialRequest(request: BeginCreateCredentialRequest, cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginCreateCredentialResponse, CreateCredentialException>) {
         if (cancellationSignal.isCanceled) return
-        when (request) {
-            is BeginCreatePublicKeyCredentialRequest -> try {
-                val caller = requireNotNull(request.callingAppInfo) { "Android didn't say which app asked" }
-                val rpId = JSONObject(request.requestJson).optJSONObject("rp")?.optString("id").orEmpty()
-                val origin = passkeyOrigin(this, caller, rpId)
-                PasskeyCrypto.request(request.requestJson, origin, true)
-                record(true, true, caller, request.requestJson, null)
-                callback.onResult(BeginCreateCredentialResponse(listOf(CreateEntry("Nuvori", action(true)))))
-            } catch (error: Exception) {
-                record(true, true, request.callingAppInfo, request.requestJson, error)
-                callback.onError(CreateCredentialUnknownException("This passkey request is not supported."))
+        if (request is BeginCreatePublicKeyCredentialRequest) {
+            worker.execute {
+                try {
+                    val caller = requireNotNull(request.callingAppInfo) { "Android didn't say which app asked" }
+                    val rpId = JSONObject(request.requestJson).optJSONObject("rp")?.optString("id").orEmpty()
+                    // Shape first, so a malformed request never reaches the network.
+                    PasskeyCrypto.request(request.requestJson, "https://$rpId", true)
+                    val origin = verifiedPasskeyOrigin(this, caller, rpId)
+                    PasskeyCrypto.request(request.requestJson, origin, true)
+                    record(true, true, caller, request.requestJson, null)
+                    if (!cancellationSignal.isCanceled) callback.onResult(BeginCreateCredentialResponse(listOf(CreateEntry("Nuvori", action(true)))))
+                } catch (error: Exception) {
+                    record(true, true, request.callingAppInfo, request.requestJson, error)
+                    if (!cancellationSignal.isCanceled) callback.onError(CreateCredentialUnknownException("This passkey request is not supported."))
+                }
             }
+            return
+        }
+        when (request) {
+            is BeginCreatePublicKeyCredentialRequest -> Unit
             is BeginCreatePasswordCredentialRequest -> try {
                 credentialDestination(this, requireNotNull(request.callingAppInfo) { "Android didn't say which app asked" })
                 callback.onResult(BeginCreateCredentialResponse(listOf(CreateEntry("Save in Nuvori", passwordAction(true)))))
@@ -121,13 +159,20 @@ class VaultCredentialService : CredentialProviderService() {
     override fun onBeginGetCredentialRequest(request: BeginGetCredentialRequest, cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginGetCredentialResponse, GetCredentialException>) {
         if (cancellationSignal.isCanceled) return
+        worker.execute { beginGet(request, cancellationSignal, callback) }
+    }
+
+    private fun beginGet(request: BeginGetCredentialRequest, cancellationSignal: CancellationSignal,
+        callback: OutcomeReceiver<BeginGetCredentialResponse, GetCredentialException>) {
+        if (cancellationSignal.isCanceled) return
         try {
             val builder = BeginGetCredentialResponse.Builder()
             request.beginGetCredentialOptions.filterIsInstance<BeginGetPublicKeyCredentialOption>().mapNotNull { option ->
                 runCatching {
                     val caller = requireNotNull(request.callingAppInfo) { "Android didn't say which app asked" }
                     val rpId = JSONObject(option.requestJson).optString("rpId")
-                    val origin = passkeyOrigin(this, caller, rpId)
+                    PasskeyCrypto.request(option.requestJson, "https://$rpId", false)
+                    val origin = verifiedPasskeyOrigin(this, caller, rpId)
                     PasskeyCrypto.request(option.requestJson, origin, false)
                     // No account names or credential IDs leave the encrypted vault before authentication.
                     PublicKeyCredentialEntry(this, "Unlock Nuvori", action(false), option)
@@ -139,8 +184,10 @@ class VaultCredentialService : CredentialProviderService() {
                     .getOrThrow()
                 builder.addAction(Action("Search Nuvori passwords", passwordAction(false), "Unlock to choose a saved login"))
             }
-            callback.onResult(builder.build())
-        } catch (_: Exception) { callback.onError(GetCredentialUnknownException("This passkey request is not supported.")) }
+            if (!cancellationSignal.isCanceled) callback.onResult(builder.build())
+        } catch (_: Exception) {
+            if (!cancellationSignal.isCanceled) callback.onError(GetCredentialUnknownException("This passkey request is not supported."))
+        }
     }
     override fun onClearCredentialStateRequest(request: ProviderClearCredentialStateRequest, cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<Void?, ClearCredentialException>) { if (!cancellationSignal.isCanceled) callback.onResult(null) }

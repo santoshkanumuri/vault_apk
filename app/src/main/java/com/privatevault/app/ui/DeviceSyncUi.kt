@@ -205,8 +205,9 @@ private fun ConflictVersion(label: String, side: SyncConflictSide) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ConflictReviewSheet(conflict: SyncConflictReview, onDismiss: () -> Unit,
-    onChoose: (Boolean) -> Unit) {
+    onChoose: (Boolean) -> Unit, onCombine: (() -> Unit)? = null) {
     var pendingChoice by remember(conflict.id) { mutableStateOf<Boolean?>(null) }
+    var pendingCombine by remember(conflict.id) { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(
         skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
@@ -228,7 +229,31 @@ internal fun ConflictReviewSheet(conflict: SyncConflictReview, onDismiss: () -> 
                 StatusBanner(kind = StatusKind.WARNING, message = "A deleted version removes this record.")
             if (conflict.type == "passkey")
                 StatusBanner(kind = StatusKind.INFO, message = "The incoming passkey cannot replace another credential with the same ID. Keep this device's version, then register a new passkey on the website.")
-            if (pendingChoice == null) {
+            if (pendingCombine) {
+                val panel = statusColors(StatusKind.INFO)
+                Surface(color = panel.container, contentColor = panel.content, shape = NuvoriShapes.Card) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Keep both edits?", style = MaterialTheme.typography.titleSmall)
+                        Text("The note keeps the lines and formatting of both versions, with text found in both shown once. Check it afterwards and tidy anything repeated.",
+                            style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { pendingCombine = false },
+                                modifier = Modifier.weight(1f).heightIn(min = 52.dp)) {
+                                Text("Go back", color = panel.content)
+                            }
+                            Button(onClick = { onCombine?.invoke() },
+                                modifier = Modifier.weight(1f).heightIn(min = 52.dp)) {
+                                Text("Keep both")
+                            }
+                        }
+                    }
+                }
+            } else if (pendingChoice == null) {
+                if (conflict.canCombineNotes && onCombine != null)
+                    Button(onClick = { pendingCombine = true },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                        Text("Keep both edits")
+                    }
                 OutlinedButton(onClick = { pendingChoice = false },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
                     Text("Keep this device's version")
@@ -903,10 +928,15 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     }
 
     conflicts.firstOrNull { it.id == reviewConflictId }?.let { conflict ->
-        ConflictReviewSheet(conflict, onDismiss = { reviewConflictId = null }) { useIncoming ->
-            viewModel.resolveSyncConflict(conflict.id, useIncoming, conflict.currentVersion)
-            reviewConflictId = null
-        }
+        ConflictReviewSheet(conflict, onDismiss = { reviewConflictId = null },
+            onChoose = { useIncoming ->
+                viewModel.resolveSyncConflict(conflict.id, useIncoming, conflict.currentVersion)
+                reviewConflictId = null
+            },
+            onCombine = {
+                viewModel.resolveSyncConflict(conflict.id, useIncoming = false, conflict.currentVersion, combineNotes = true)
+                reviewConflictId = null
+            })
     }
     if (scanner) QrScanner(onResult = { value ->
         scanner = false

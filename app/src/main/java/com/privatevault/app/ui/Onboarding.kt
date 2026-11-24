@@ -1,5 +1,7 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.Button
+import com.privatevault.app.controls.TextButton
 import android.provider.Settings
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
@@ -40,7 +42,6 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Timer
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -48,7 +49,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -175,7 +175,7 @@ private fun ChoiceRow(choice: FirstRunChoice, selected: FirstRunChoice, icon: Im
     title: String, description: String, onSelect: (FirstRunChoice) -> Unit) {
     val active = choice == selected
     Card(Modifier.fillMaxWidth().selectable(selected = active, role = Role.RadioButton, onClick = { onSelect(choice) }),
-        shape = RoundedCornerShape(18.dp),
+        shape = NuvoriShapes.Card,
         colors = CardDefaults.cardColors(containerColor = if (active) MaterialTheme.colorScheme.primary.copy(alpha = .16f) else MaterialTheme.colorScheme.surfaceVariant)) {
         Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically) {

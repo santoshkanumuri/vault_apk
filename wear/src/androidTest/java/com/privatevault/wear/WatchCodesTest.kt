@@ -1,7 +1,5 @@
 package com.privatevault.wear
 
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsDisplayed
@@ -11,9 +9,12 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performRotaryScrollInput
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.unit.dp
 import com.privatevault.app.watch.WatchAccount
 import com.privatevault.app.watch.WatchSnapshot
@@ -32,7 +33,7 @@ class WatchCodesTest {
     private val snapshot = WatchSnapshot("sample", small.accounts + (1..7).map { account("z$it", "Zoom $it") })
 
     @Test fun setupMessageUsesVisibleTextOnDarkBackground() {
-        compose.setContent { MaterialTheme(colorScheme = darkColorScheme()) { WatchCodes(null, true) {} } }
+        compose.setContent { WatchTheme { WatchCodes(null, true) {} } }
         val message = compose.onNodeWithText("On your phone, open Nuvori > Settings > Watch codes to connect.")
         message.assertIsDisplayed()
         val pixels = message.captureToImage().toPixelMap()
@@ -45,7 +46,7 @@ class WatchCodesTest {
     }
 
     @Test fun letterCountsOpenOnlyMatchingCodesAndAllOpensEverything() {
-        compose.setContent { MaterialTheme { WatchCodes(snapshot, true) {} } }
+        compose.setContent { WatchTheme { WatchCodes(snapshot, true) {} } }
         compose.onNodeWithContentDescription("All, 10 codes").assertExists()
         compose.onNodeWithTag("letterIndex").performScrollToNode(hasContentDescription("A, 1 code"))
         compose.onNodeWithContentDescription("A, 1 code").assertExists()
@@ -53,28 +54,27 @@ class WatchCodesTest {
         compose.onNodeWithContentDescription("G, 2 codes").assertExists().performClick()
         compose.onNodeWithText("G codes").assertExists()
         compose.onNodeWithText("Amazon").assertDoesNotExist()
-        compose.onNodeWithText("‹ Letters").performClick()
+        // Swiping right goes back one screen, to the letters.
+        compose.onRoot().performTouchInput { swipeRight() }
         compose.onNodeWithContentDescription("All, 10 codes").performClick()
         compose.onNodeWithText("All codes").assertExists()
     }
 
     @OptIn(ExperimentalTestApi::class)
-    @Test fun dialOpensSelectedLetterAfterTwoSecondPause() {
-        compose.setContent { MaterialTheme { WatchCodes(snapshot, true) {} } }
-        compose.mainClock.autoAdvance = false
+    @Test fun dialScrollsTheLetterIndexWithoutOpeningALetter() {
+        compose.setContent { WatchTheme { WatchCodes(snapshot, true) {} } }
         compose.onNodeWithTag("letterIndex").performRotaryScrollInput {
             rotateToScrollVertically(28.dp.toPx() + 1f)
         }
-        compose.mainClock.advanceTimeBy(1_500)
+        compose.mainClock.advanceTimeBy(5_000)
+        compose.onNodeWithTag("letterIndex").assertExists()
         compose.onNodeWithText("A codes").assertDoesNotExist()
-        compose.mainClock.advanceTimeBy(700)
-        compose.onNodeWithText("A codes").assertExists()
     }
 
     @OptIn(ExperimentalTestApi::class)
     @Test fun dialScrollsWithinTheCodeList() {
         val many = WatchSnapshot("sample", (1..12).map { account("$it", "Account $it") })
-        compose.setContent { MaterialTheme { WatchCodes(many, true) {} } }
+        compose.setContent { WatchTheme { WatchCodes(many, true) {} } }
         compose.onNodeWithContentDescription("All, 12 codes").performClick()
         compose.onNodeWithTag("codeList").performRotaryScrollInput {
             rotateToScrollVertically(5_000f)
@@ -84,7 +84,7 @@ class WatchCodesTest {
 
     @Test fun smallVaultOpensStraightToCodesAndTapShowsOneCode() {
         var copied: WatchAccount? = null
-        compose.setContent { MaterialTheme { WatchCodes(small, true) { copied = it } } }
+        compose.setContent { WatchTheme { WatchCodes(small, true) { copied = it } } }
         compose.onNodeWithContentDescription("All, 3 codes").assertDoesNotExist()
         compose.onNodeWithText("Amazon").assertExists().performClick()
         compose.onNodeWithTag("codeDetail").assertExists()
@@ -93,7 +93,7 @@ class WatchCodesTest {
     }
 
     @Test fun recentCodesAppearFirstInTheIndex() {
-        compose.setContent { MaterialTheme { WatchCodes(snapshot, true, recentIds = listOf("g", "missing")) {} } }
+        compose.setContent { WatchTheme { WatchCodes(snapshot, true, recentIds = listOf("g", "missing")) {} } }
         compose.onNodeWithContentDescription("Recent, 1 code").assertExists().performClick()
         compose.onNodeWithText("Recent codes").assertExists()
         compose.onNodeWithText("Google").assertExists()

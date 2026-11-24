@@ -1,5 +1,8 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.Button
+import com.privatevault.app.controls.OutlinedButton
+import com.privatevault.app.controls.TextButton
 import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -130,7 +133,7 @@ private fun PasskeyManagerRow(passkey: PasskeyInfo, data: PasskeyPageData, expan
     val summary = "Added ${DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(passkey.createdAt))}" +
         (lastUsed?.let { " · Used ${relativeTime(it, now)}" } ?: " · Not used here yet")
     Column(Modifier.fillMaxWidth().animateContentSize()) {
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onToggle)
+        Row(Modifier.fillMaxWidth().clip(NuvoriShapes.Card).clickable(onClick = onToggle)
             .semantics(mergeDescendants = true) {
                 role = Role.Button
                 contentDescription = "${passkey.rpId}, $account. $summary" + if (mostUsed) ", $MOST_USED_SPOKEN" else ""

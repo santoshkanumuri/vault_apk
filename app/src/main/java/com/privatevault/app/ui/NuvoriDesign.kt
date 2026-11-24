@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.TextButton
 import android.provider.Settings
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
@@ -30,14 +31,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -76,18 +78,36 @@ import kotlin.math.abs
 // Design tokens shared with the Windows app (see SPEC.md): 8dp controls and chips, 12dp cards,
 // 16dp sheets, 1dp hairlines and flat surfaces.
 internal object NuvoriShapes {
-    val Control = RoundedCornerShape(8.dp)
-    val Chip = RoundedCornerShape(8.dp)
+    /**
+     * The one value that sets every control's corner: buttons (controls/NuvoriButtons.kt), text fields,
+     * menus, chips and snackbars. Square 8dp corners are the Nuvori standard; CircleShape would give
+     * Material's pill buttons instead.
+     */
+    val Control: CornerBasedShape = RoundedCornerShape(8.dp)
+    val Chip: CornerBasedShape = Control
     val Card = RoundedCornerShape(12.dp)
     val Sheet = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
     val Dialog = RoundedCornerShape(16.dp)
     val CardRadius = 12.dp
 }
 
+/** Material's shape scale built from the Nuvori tokens, so stock components follow them without per-call shapes. */
+internal val NuvoriMaterialShapes = Shapes(
+    extraSmall = NuvoriShapes.Control, // text fields, menus, snackbars
+    small = NuvoriShapes.Control,      // chips
+    medium = NuvoriShapes.Card,        // cards
+    large = NuvoriShapes.Dialog,       // FABs, side sheets
+    extraLarge = NuvoriShapes.Dialog   // dialogs, bottom sheets
+)
+
 internal val ColorScheme.isLight: Boolean get() = background.luminance() > .5f
 
-/** Divider and card border color ("hairline" on Windows). */
-internal val ColorScheme.hairline: Color get() = outlineVariant
+/**
+ * Divider and card border color ("hairline" on Windows). In light mode it is 10% darker than the palette's
+ * outline variant, which measured only 1.3 to 1.6:1 against the page and left lists looking flat.
+ */
+internal val ColorScheme.hairline: Color get() =
+    if (isLight) androidx.compose.ui.graphics.lerp(outlineVariant, Color.Black, .1f) else outlineVariant
 
 /** Raised flat surface for cards and grouped lists ("surface" on Windows). */
 internal val ColorScheme.raised: Color get() = surfaceContainer

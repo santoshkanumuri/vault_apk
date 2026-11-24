@@ -133,8 +133,12 @@ class DetailLayoutTest {
         assertTrue("Detail must begin beside the list", pane.left >= list.right && title.left >= pane.left)
         assertTrue("Detail must stay inside its pane", title.right <= pane.right)
         compose.onNodeWithText("Pull up to edit").assertDoesNotExist()
+        // Edit sits in the top bar; the other actions are in its menu (UI review H2).
+        // The test lays the screen out wider than the phone, so check the pane bounds rather than on-screen.
+        val edit = compose.onNodeWithContentDescription("Edit").assertExists().fetchSemanticsNode().boundsInRoot
+        assertTrue("Edit must stay inside the detail pane", edit.left >= pane.left && edit.right <= pane.right)
         compose.onNodeWithContentDescription("Open entry actions").performClick()
-        compose.onNodeWithText("Edit").assertIsDisplayed()
+        compose.onNodeWithText("Delete").assertExists()
     }
 
     @Test fun folderAndEntryRowsAreCompactAndNeverShowPasswords() {
@@ -175,7 +179,7 @@ class DetailLayoutTest {
         compose.onNodeWithContentDescription("Add folder").assertDoesNotExist()
     }
 
-    @Test fun collapsedActionDockIsVisibleAtCompactHeights() {
+    @Test fun topBarActionsAreVisibleAtCompactHeights() {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as android.app.Application
         val model = VaultViewModel(app)
         val height = mutableIntStateOf(420)
@@ -193,14 +197,16 @@ class DetailLayoutTest {
         for (screenHeight in listOf(320, 420)) {
             compose.runOnIdle { height.intValue = screenHeight }
             val viewport = compose.onNodeWithTag("dockViewport").fetchSemanticsNode().boundsInRoot
-            val label = "Pull up to edit"
-            val dock = compose.onNodeWithText(label).fetchSemanticsNode().boundsInRoot
-            assertTrue("$label $dock must be displayed inside a $screenHeight dp detail screen $viewport",
-                compose.onNodeWithText(label).isDisplayed() && dock.top >= viewport.top && dock.bottom <= viewport.bottom)
+            for (action in listOf("Edit", "Open entry actions")) {
+                val bounds = compose.onNodeWithContentDescription(action).fetchSemanticsNode().boundsInRoot
+                assertTrue("$action $bounds must be displayed inside a $screenHeight dp detail screen $viewport",
+                    compose.onNodeWithContentDescription(action).isDisplayed() && bounds.top >= viewport.top &&
+                        bounds.bottom <= viewport.bottom && bounds.right <= viewport.right)
+            }
         }
-        compose.onNodeWithContentDescription("Open entry actions").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Edit").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Close entry actions").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Open entry actions").performClick()
+        compose.onNodeWithText("Delete").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Close entry actions").assertExists()
     }
 
     @Test fun detailActionsFitCompactHeightAndEnlargedText() {
@@ -218,19 +224,27 @@ class DetailLayoutTest {
                 }
             }
         }
-        compose.onNodeWithText("Pull up to edit").assertIsDisplayed().performClick()
         for (entryType in listOf(EntryType.NOTE, EntryType.PASSWORD, EntryType.AUTHENTICATOR)) {
             compose.runOnIdle { type.value = entryType }
-            val viewport = compose.onNodeWithTag("viewport").fetchSemanticsNode().boundsInRoot
-            for (label in listOf("Edit", "Delete", "Camera")) {
-                compose.onNodeWithText(label).assertIsDisplayed()
-                val bounds = compose.onNodeWithText(label).fetchSemanticsNode().boundsInRoot
-                assertTrue("$entryType $label must be reachable inside the detail viewport", bounds.top >= viewport.top && bounds.bottom <= viewport.bottom && bounds.left >= viewport.left && bounds.right <= viewport.right)
+            // A long title and 1.8x text must not push the top-bar actions out of the detail screen.
+            val viewport = compose.onNodeWithTag("viewport").fetchSemanticsNode().boundsInWindow
+            for (action in listOf("Edit", "Open entry actions")) {
+                compose.onNodeWithContentDescription(action).assertIsDisplayed()
+                val bounds = compose.onNodeWithContentDescription(action).fetchSemanticsNode().boundsInWindow
+                assertTrue("$entryType $action must be reachable inside the detail viewport", bounds.top >= viewport.top && bounds.bottom <= viewport.bottom && bounds.left >= viewport.left && bounds.right <= viewport.right)
             }
+        }
+        // The menu is a popup window, so its items are measured in window coordinates.
+        compose.onNodeWithContentDescription("Open entry actions").performClick()
+        val window = compose.onAllNodes(isRoot()).onFirst().fetchSemanticsNode().boundsInWindow
+        for (label in listOf("Delete", "Camera")) {
+            compose.onNodeWithText(label).assertIsDisplayed()
+            val bounds = compose.onNodeWithText(label).fetchSemanticsNode().boundsInWindow
+            assertTrue("$label must open on screen", bounds.top >= window.top && bounds.right <= window.right + 1f)
         }
     }
 
-    @Test fun entryDockStaysInsideTheActualSafeWindow() {
+    @Test fun entryActionsStayInsideTheActualSafeWindow() {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as android.app.Application
         val model = VaultViewModel(app)
         compose.setContent {
@@ -242,8 +256,12 @@ class DetailLayoutTest {
             }
         }
         val safeWindow = compose.onNodeWithTag("safeDetail").fetchSemanticsNode().boundsInWindow
-        val dock = compose.onNodeWithText("Pull up to edit").assertIsDisplayed().fetchSemanticsNode().boundsInWindow
-        assertTrue("Dock $dock must end above the system navigation area $safeWindow", dock.bottom <= safeWindow.bottom)
+        // Edge to edge (UI review H1): the top-bar actions must stay below the status bar and on screen.
+        for (action in listOf("Edit", "Open entry actions")) {
+            val bounds = compose.onNodeWithContentDescription(action).assertIsDisplayed().fetchSemanticsNode().boundsInWindow
+            assertTrue("$action $bounds must stay inside the safe window $safeWindow",
+                bounds.top >= safeWindow.top && bounds.bottom <= safeWindow.bottom && bounds.right <= safeWindow.right)
+        }
     }
 
     @Test fun photoActionsStayAboveSystemNavigation() {

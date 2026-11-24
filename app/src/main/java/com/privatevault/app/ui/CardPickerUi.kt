@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.TextButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*

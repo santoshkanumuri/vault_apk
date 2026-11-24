@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import com.privatevault.app.controls.TextButton
 import android.graphics.Bitmap
 import android.content.Context
 import android.net.Uri

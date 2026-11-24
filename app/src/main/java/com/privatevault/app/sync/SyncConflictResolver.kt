@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.withTransaction
 import com.privatevault.app.data.SyncOperationEntity
 import com.privatevault.app.data.VaultDatabase
+import com.privatevault.app.notes.RichNoteMerge
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.Base64
@@ -16,8 +17,9 @@ import javax.crypto.spec.SecretKeySpec
 data class SyncConflictSide(val description: String, val device: String, val reportedAtUtc: String,
     val deleted: Boolean)
 
+/** [canCombineNotes]: both sides are notes with different text, so "Keep both edits" is offered. */
 data class SyncConflictReview(val id: String, val type: String, val current: SyncConflictSide,
-    val incoming: SyncConflictSide, val currentVersion: String)
+    val incoming: SyncConflictSide, val currentVersion: String, val canCombineNotes: Boolean = false)
 
 /**
  * Version arithmetic shared by conflict detection and resolution. Ordering never uses wall-clock
@@ -64,13 +66,18 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
                     operation.occurredAtUtc, operation.kind == "delete")
                 SyncConflictReview(conflict.conflictId, conflict.entityType, side(current, incoming),
                     side(incoming, current),
-                    currentVersion.recordVersionJson)
+                    currentVersion.recordVersionJson, canCombineNotes(conflict.entityType, current, incoming, key))
             }
         } finally { key.wipe() }
     }
 
+    /**
+     * [combineNotes] keeps both edits of a note: this device's record with the text and formatting
+     * of both versions combined ([RichNoteMerge]). It is sent like any other resolution.
+     */
     suspend fun resolve(id: String, useIncoming: Boolean, localKey: ByteArray,
-        expectedVersion: String? = null) = database.withTransaction {
+        expectedVersion: String? = null, combineNotes: Boolean = false) = database.withTransaction {
+        require(!(combineNotes && useIncoming)) { "Choose one version or keep both edits" }
         val dao = database.syncDao()
         val conflict = requireNotNull(dao.conflicts().firstOrNull { it.conflictId == id && it.resolvedAtUtc.isEmpty() }) {
             "This conflict has already been resolved"
@@ -93,8 +100,17 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
         val mutation = UUID.randomUUID().toString()
         val key = database.syncKeyring(localKey)
         val encrypted = try {
-            val plaintext = IncomingEntryChangeApplier(database).decrypt(selected.toSyncChange(), key)
-                .toString().toByteArray(Charsets.UTF_8)
+            val chosen = IncomingEntryChangeApplier(database).decrypt(selected.toSyncChange(), key)
+            if (combineNotes) {
+                val incoming = operations.first { it.hash == conflict.remoteChangeHash }
+                require(canCombineNotes(conflict.entityType, selected, incoming, key)) { "These versions cannot be combined" }
+                val other = IncomingEntryChangeApplier(database).decrypt(incoming.toSyncChange(), key).getJSONObject("entry")
+                val entry = chosen.getJSONObject("entry")
+                val (plain, json) = RichNoteMerge.combineStored(entry.optString("notes"), entry.optString("fourthValue"),
+                    other.optString("notes"), other.optString("fourthValue"))
+                entry.put("notes", plain).put("fourthValue", json).put("updatedAt", System.currentTimeMillis())
+            }
+            val plaintext = chosen.toString().toByteArray(Charsets.UTF_8)
             try { SyncPayloadCrypto.encrypt(key.writing(), selected.entityType, selected.vaultId, mutation, selected.entityId, plaintext) }
             finally { plaintext.fill(0) }
         } finally { key.wipe() }
@@ -108,6 +124,16 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
             change.payloadCiphertext, change.payloadNonce, change.deviceSignature, change.hash), localKey) == IncomingResult.APPLIED)
     }
 
+    private fun canCombineNotes(entityType: String, current: SyncOperationEntity, incoming: SyncOperationEntity,
+        key: SyncKeyring): Boolean {
+        if (entityType != "entry" || current.kind == "delete" || incoming.kind == "delete") return false
+        val applier = IncomingEntryChangeApplier(database)
+        val a = applier.decrypt(current.toSyncChange(), key).getJSONObject("entry")
+        val b = applier.decrypt(incoming.toSyncChange(), key).getJSONObject("entry")
+        return a.optString("type") == "NOTE" && b.optString("type") == "NOTE" &&
+            (a.optString("notes") != b.optString("notes") || a.optString("fourthValue") != b.optString("fourthValue"))
+    }
+
     private fun describe(operation: SyncOperationEntity, other: SyncOperationEntity, key: SyncKeyring): String {
         if (operation.kind == "delete") return "Deleted"
         val payload = IncomingEntryChangeApplier(database).decrypt(operation.toSyncChange(), key)
@@ -119,8 +145,9 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
                 val labels = mapOf("title" to "Title",
                     "primaryValue" to if (type == "CARD") "Card number" else if (type == "PASSWORD") "Username" else "Primary value",
                     "secondaryValue" to if (type == "PASSWORD") "Password" else if (type == "QUESTION") "Answer" else if (type == "AUTHENTICATOR") "Code setup key" else "Secondary value",
-                    "tertiaryValue" to "Third value", "fourthValue" to "Fourth value",
-                    "notes" to "Notes", "tags" to "Tags", "favorite" to "Favorite",
+                    "tertiaryValue" to "Third value",
+                    "fourthValue" to if (type == "NOTE") "Formatting" else "Fourth value",
+                    "notes" to if (type == "NOTE") "Note text" else "Notes", "tags" to "Tags", "favorite" to "Favorite",
                     "sortOrder" to "Order", "color" to "Color", "network" to "Network",
                     "linkedAuthenticatorId" to "Linked authenticator", "linkedApps" to "Linked apps",
                     "autofillSignatures" to "Autofill signatures", "autofillOrigins" to "Autofill origins",

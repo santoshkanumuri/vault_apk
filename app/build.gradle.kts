@@ -37,9 +37,12 @@ android {
         if (privateSigningFile.exists()) {
             create("privateRelease") {
                 storeFile = file(privateSigningProperties.getProperty("storeFile"))
-                storePassword = privateSigningProperties.getProperty("storePassword")
+                // Security review L-14: the password comes from Credential Manager through
+                // scripts/release-build.ps1. A password still in the file keeps working.
+                val signingPassword = System.getenv("NUVORI_SIGNING_PASSWORD")
+                storePassword = privateSigningProperties.getProperty("storePassword") ?: signingPassword
                 keyAlias = privateSigningProperties.getProperty("keyAlias")
-                keyPassword = privateSigningProperties.getProperty("keyPassword")
+                keyPassword = privateSigningProperties.getProperty("keyPassword") ?: signingPassword
             }
         }
     }

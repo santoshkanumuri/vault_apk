@@ -6,14 +6,16 @@ The phone release is version 2.3.3, version code 74, package `com.application.pr
 
 Install JDK 17, Android SDK API 36, and Build Tools 36.0.0. Set the SDK path in `local.properties` as shown in the [README](../README.md#build-from-source).
 
-The phone build reads signing properties from `NUVORI_SIGNING_PROPERTIES`, or defaults to `~/.private-vault-signing/signing.properties`. The file must contain `storeFile`, `storePassword`, `keyAlias`, and `keyPassword`. Keep signing files and passwords outside the repository. Without the signing file, Gradle produces unsigned release outputs.
+The phone build reads signing properties from `NUVORI_SIGNING_PROPERTIES`, or defaults to `~/.private-vault-signing/signing.properties`. The file names `storeFile` and `keyAlias`. Keep signing files and passwords outside the repository. Without the signing file, Gradle produces unsigned release outputs.
+
+The password lives in Windows Credential Manager, not in the file or on a command line (security review L-14). `scripts\create-release-signing.ps1` makes a new key and stores its password there. For an existing key whose password is still in `signing.properties`, run `scripts\create-release-signing.ps1 -MoveToCredentialManager` once: it stores the password and removes it from the file. Then run release builds through `scripts\release-build.ps1`, which hands the password to Gradle in its environment for that run only. A password still in the file keeps working.
 
 ## Build and verify
 
 Run from the project root on Windows:
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest :watchcommon:test :app:lintRelease :app:assembleRelease :app:bundleRelease --console=plain
+.\scripts\release-build.ps1 :app:testDebugUnitTest :watchcommon:test :app:lintRelease :app:assembleRelease :app:bundleRelease
 ```
 
 On macOS or Linux, use `sh gradlew` with the same tasks.
@@ -23,7 +25,7 @@ Build the watch companion separately. It uses version 2.1.2, code 360012:
 For each new Google Play upload, update `versionCode` in `wear/build.gradle.kts` to an unused, higher number and rebuild. Codes up to 360011 were used by earlier releases, so this watch release uses 360012. `versionName` is the displayed label; the watch is 2.1.2 with the phone at 2.3.3. Renaming an APK or AAB does not change its embedded version. See [Android app versioning](https://developer.android.com/studio/publish/versioning).
 
 ```powershell
-.\gradlew.bat :watchcommon:test :wear:testDebugUnitTest :wear:lintRelease :wear:assembleRelease :wear:bundleRelease --console=plain
+.\scripts\release-build.ps1 :watchcommon:test :wear:testDebugUnitTest :wear:lintRelease :wear:assembleRelease :wear:bundleRelease
 ```
 
 Watch outputs are `wear/build/outputs/apk/release/wear-release.apk`, `wear/build/outputs/bundle/release/wear-release.aab`, and `wear/build/outputs/mapping/release/mapping.txt`. Verify their versions and signatures, and confirm the signer matches the phone release. Watch setup and device testing are described in the [companion guide](WATCH-COMPANION.md).

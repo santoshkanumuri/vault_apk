@@ -1,2 +1,2 @@
 5dc44ee1b5dfcdb4ab5fc78b7230c6bdda093f5aaf7272da9c045ab8cdfd75a7  nuvori-v2.1.3-watch.apk
-771c7488dd67ea6e2047a5ac4f421f9541724ae62be22c62838ae5c48150cb8e  nuvori-v2.3.4-phone.apk
+a41dfab4a9483a87bfea22598427ba460e04ad11e0012288cbe8d4a50bdda72c  nuvori-v2.3.4-phone.apk

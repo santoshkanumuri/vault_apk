@@ -29,9 +29,9 @@ The screenshots contain synthetic demonstration data only.
 
 ## Download
 
-**[Download Nuvori 2.3.3 phone preview APK](downloads/nuvori-v2.3.3-phone.apk?raw=true)**
+**[Download Nuvori 2.3.4 phone preview APK](downloads/nuvori-v2.3.4-phone.apk?raw=true)**
 
-Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.3.3.md) · [Privacy policy](docs/privacy-policy.html)
+Requires **Android 10 or newer**. [SHA-256 checksums](downloads/SHA256SUMS.txt) · [Release notes](docs/RELEASE-2.3.4.md) · [Privacy policy](docs/privacy-policy.html)
 
 Open the download on your phone and allow installation from your browser or file manager when Android asks. No PC connection is needed.
 
@@ -39,7 +39,7 @@ Open the download on your phone and allow installation from your browser or file
 
 For Google Play, build the AAB as the [release build guide](docs/PUBLISHING.md) describes. AABs and R8 mapping files are kept private, because they would undo the app's obfuscation; install the APK directly on a phone.
 
-Wear OS companion version 2.1.2, code 360012: [watch APK](downloads/nuvori-v2.1.2-watch.apk?raw=true), and [setup guide](docs/WATCH-COMPANION.md). Install the watch APK on the watch. For local setup, the phone and watch apps must share the package name and signing certificate; these download builds match.
+Wear OS companion version 2.1.3, code 360013: [watch APK](downloads/nuvori-v2.1.3-watch.apk?raw=true), and [setup guide](docs/WATCH-COMPANION.md). Install the watch APK on the watch. For local setup, the phone and watch apps must share the package name and signing certificate; these download builds match.
 
 ## Features
 

@@ -49,6 +49,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.privatevault.app.sync.LanSyncService
 import com.privatevault.app.sync.SyncOnOpen
+import com.privatevault.app.sync.SyncOverviewRules
 import com.privatevault.app.sync.DeviceSyncPhase
 import com.privatevault.app.sync.DeviceSyncStatus
 import com.privatevault.app.sync.MAX_ACTIVE_SYNC_DEVICES
@@ -118,41 +119,42 @@ private fun SyncStageTrail(phase: DeviceSyncPhase, modifier: Modifier = Modifier
     }
 }
 
-/** The state of this vault's sync at a glance, with the one action people need most. */
+/** The words of the sync status, from strings.xml. */
 @Composable
-internal fun DeviceSyncState(status: DeviceSyncStatus, connected: Int, paired: Int,
-    waiting: Int = 0, lastChecked: Long = 0L, onSyncNow: (() -> Unit)? = null) {
-    val hasWaitingChanges = waiting > 0 && status.phase == DeviceSyncPhase.CHECKED
-    val kind = status.phase.statusKind(hasWaitingChanges)
+internal fun rememberSyncWords(): SyncWords {
+    val resources = LocalContext.current.resources
+    return remember(resources) { ResourceSyncWords(resources) }
+}
+
+/**
+ * The state of this vault's sync at a glance, over Wi-Fi and Google Drive together, with the one
+ * action people need most. [waiting]: this device's changes not every active device confirmed yet.
+ */
+@Composable
+internal fun DeviceSyncState(text: SyncOverviewText, connected: Int, paired: Int,
+    waiting: Long = 0L, busy: Boolean = false, onSyncNow: (() -> Unit)? = null) {
+    val kind = text.kind
     val colors = statusColors(kind)
-    val busy = status.phase == DeviceSyncPhase.CONNECTING || status.phase == DeviceSyncPhase.TRANSFERRING
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    if (lastChecked > 0) LaunchedEffect(lastChecked, status.phase) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(30_000)
-        }
-    }
     Surface(Modifier.fillMaxWidth().animateContentSize(), shape = NuvoriShapes.Card,
         color = colors.container, contentColor = colors.content) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 StatusIcon(kind, colors.accent, size = 28.dp)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(if (hasWaitingChanges) "Changes still waiting" else status.phase.title,
+                    Text(text.title,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    if (lastChecked > 0) Text("Last checked ${relativeTime(lastChecked, now)}",
-                        style = MaterialTheme.typography.labelMedium)
+                    text.lastSynced?.let { Text(it, style = MaterialTheme.typography.labelMedium) }
                 }
             }
-            Text(if (hasWaitingChanges) "The last exchange finished. Some changes still need delivery or application."
-                else status.detail, style = MaterialTheme.typography.bodySmall,
-                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (text.detail.isNotBlank()) Text(text.detail, style = MaterialTheme.typography.bodySmall,
+                maxLines = 3, overflow = TextOverflow.Ellipsis)
+            // A transport that failed while the other one carried the changes: a quiet line, not the headline.
+            text.note?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = colors.accent,
                 trackColor = colors.accent.copy(alpha = .24f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(waiting to "Waiting", connected to "Connected", paired to "Devices").forEach { (count, label) ->
+                listOf(waiting to "Waiting", connected.toLong() to "Connected", paired.toLong() to "Devices").forEach { (count, label) ->
                     Column(Modifier.weight(1f)) {
                         Text("$count", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text(label, style = MaterialTheme.typography.labelSmall)
@@ -359,14 +361,23 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
     savedAddress: String, canRemove: Boolean, showRemove: Boolean,
     onTryAddress: (String) -> Unit, onRemove: () -> Unit,
     counts: PeerSyncCounts = PeerSyncCounts(0, 0, 0, 0), advanced: Boolean = true,
-    transferRole: String? = null, removeHint: String? = null) {
+    transferRole: String? = null, removeHint: String? = null,
+    /** The device's state by its verified progress over Wi-Fi and Google Drive ([peerAckText]). */
+    ack: PeerAckText? = null) {
     val needsCheck = counts.toSend > 0 || counts.toReceiveHere > 0 || counts.toApplyHere > 0 ||
         counts.receivedThere > 0
+    val wifiFailed = status?.phase == DeviceSyncPhase.ATTENTION
+    // With an acknowledgement, a Wi-Fi failure is a quiet line: Google Drive may have delivered everything.
+    val wifiNote = if (ack != null && wifiFailed) {
+        if (com.privatevault.app.sync.SyncOverviewRules.isReachFailure(status!!.detail))
+            stringResource(R.string.sync_peer_wifi_failed) else status.detail
+    } else null
     val (peerLabel, peerKind) = when {
         status?.phase == DeviceSyncPhase.TRANSFERRING -> "Syncing" to StatusKind.PROGRESS
         status?.phase == DeviceSyncPhase.CONNECTING -> "Verifying" to StatusKind.PROGRESS
-        status?.phase == DeviceSyncPhase.ATTENTION -> "Needs attention" to StatusKind.ERROR
         counts.toApplyHere > 0 -> "Waiting to apply" to StatusKind.WARNING
+        ack != null -> ack.label to ack.kind
+        wifiFailed -> "Needs attention" to StatusKind.ERROR
         needsCheck -> "Changes waiting" to StatusKind.WARNING
         status?.phase == DeviceSyncPhase.SEARCHING || status?.phase == DeviceSyncPhase.FOUND ->
             "Looking" to StatusKind.PROGRESS
@@ -399,9 +410,10 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
             Text(when {
                 status?.phase == DeviceSyncPhase.TRANSFERRING -> "Sending and receiving encrypted changes."
                 status?.phase == DeviceSyncPhase.CONNECTING -> "Confirming this is your paired device."
+                counts.toApplyHere > 0 -> "${counts.toApplyHere} received change${if (counts.toApplyHere == 1L) "" else "s"} still need to apply here."
+                ack != null -> ack.detail
                 status?.phase == DeviceSyncPhase.ATTENTION -> status.detail
                 counts.toSend > 0 -> "${counts.toSend} change${if (counts.toSend == 1L) "" else "s"} from this device still need to reach it."
-                counts.toApplyHere > 0 -> "${counts.toApplyHere} received change${if (counts.toApplyHere == 1L) "" else "s"} still need to apply here."
                 counts.toReceiveHere > 0 -> "Changes from this device are waiting to arrive here."
                 counts.receivedThere > 0 -> "It received changes and still needs to apply them."
                 lastExchange > 0 -> "The last check finished with no known changes waiting."
@@ -410,6 +422,8 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = if (status?.phase == DeviceSyncPhase.ATTENTION) 3 else 2,
                 overflow = TextOverflow.Ellipsis)
+            wifiNote?.let { Text(it, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis) }
             if (status?.phase == DeviceSyncPhase.TRANSFERRING)
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             if (advanced) {
@@ -497,8 +511,17 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     val activeDeviceCount = 1 + devices.size
     val connectedCount = devices.count { peerStatuses[it.deviceId]?.phase == DeviceSyncPhase.TRANSFERRING }
     val counts = devices.associate { it.deviceId to viewModel.deviceSyncCounts(it.deviceId) }
-    val waitingCount = counts.values.count { it.toSend > 0 || it.toApplyHere > 0 ||
-        it.toReceiveHere > 0 || it.receivedThere > 0 }
+    // One status over Wi-Fi and Google Drive: a success on either counts ([SyncOverviewRules]).
+    val cloudStatus by viewModel.cloudSyncStatus.collectAsStateWithLifecycle()
+    var statusNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { delay(30_000); statusNow = System.currentTimeMillis() } }
+    val words = rememberSyncWords()
+    val syncFacts = viewModel.syncFacts(devices, syncStatus, peerStatuses, cloudStatus, conflicts.size, rejected, statusNow)
+    val overview = syncFacts?.let { SyncOverviewRules.overview(it) }
+    val overviewText = if (syncFacts != null && overview != null)
+        syncOverviewText(syncFacts, overview, words, syncStatus.phase.title, syncStatus.detail)
+        else SyncOverviewText(syncStatus.phase.statusKind(), syncStatus.phase.title, syncStatus.detail)
+    val waitingCount = overview?.waitingChanges ?: 0L
     var link by remember { mutableStateOf("") }
     var showLink by rememberSaveable { mutableStateOf(false) }
     var showAdvanced by rememberSaveable { mutableStateOf(false) }
@@ -547,7 +570,6 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     DisposableEffect(Unit) { onDispose { viewModel.cancelDevicePairing() } }
     LaunchedEffect(syncStatus.phase) { autoOverride = null }
 
-    val lastChecked = devices.maxOfOrNull { viewModel.deviceSyncContact(it.deviceId).second } ?: 0L
     val autoRunning = !LanSyncService.isPaused(context) &&
         syncStatus.phase != DeviceSyncPhase.OFF && syncStatus.phase != DeviceSyncPhase.PAUSED
     val autoOn = autoOverride ?: autoRunning
@@ -705,8 +727,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     if (devices.isEmpty()) addDeviceCard()
 
     // 1. Status and the main action.
-    if (devices.isNotEmpty()) DeviceSyncState(syncStatus, connectedCount, activeDeviceCount - 1, waitingCount,
-        lastChecked, onSyncNow = { SyncRequests.request(); viewModel.syncDevicesNow() })
+    if (devices.isNotEmpty()) DeviceSyncState(overviewText, connectedCount, activeDeviceCount - 1, waitingCount,
+        busy = syncStatus.phase == DeviceSyncPhase.CONNECTING || syncStatus.phase == DeviceSyncPhase.TRANSFERRING,
+        onSyncNow = { SyncRequests.request(); viewModel.syncDevicesNow() })
 
     // 2. Problems next.
     // A device silent for months holds back the cleanup of old sync history: a suggestion only.
@@ -765,7 +788,10 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                         else -> "Waiting to accept managing role"
                     },
                     removeHint = if (isManager && pendingTransfer != null)
-                        "Cancel the managing-role transfer before removing a device." else null)
+                        "Cancel the managing-role transfer before removing a device." else null,
+                    ack = syncFacts?.peers?.firstOrNull { it.deviceId == device.deviceId }?.let { peer ->
+                        overview?.peers?.get(peer.deviceId)?.let { peerAckText(peer, it, statusNow, words) }
+                    })
             }
             val removedDevices = memberships.filter { it.status != MemberStatus.ACTIVE.name && it.deviceId != localDevice?.deviceId }
             if (removedDevices.isNotEmpty()) HairlineCard(Modifier.fillMaxWidth()) {

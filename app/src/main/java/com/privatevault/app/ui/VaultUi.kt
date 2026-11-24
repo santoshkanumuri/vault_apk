@@ -385,16 +385,17 @@ internal fun RestoreReviewDialog(summary: String, impact: com.privatevault.app.b
         title = { Text("Replace this vault with the backup?") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(summary)
+            // The sync warning sits right under the summary so it is on screen without scrolling.
+            if (impact.role != com.privatevault.app.backup.RestoreGroupRole.NONE) StatusBanner(kind = StatusKind.WARNING,
+                message = if (manager) "This device will leave its sync group without a managing device." else "This device will leave its sync group.")
+            if (manager && canMoveRole) OutlinedButton(onClick = onMoveRole, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text("Move managing role first")
+            }
             Text("Everything in this vault now is replaced, and you can't undo it.")
             // The restore re-encrypts the backup under this vault's key; the master password does not change.
             Text("Afterward, unlock with your current master password, not the backup's. Then turn on fingerprint or face unlock again.")
             OutlinedButton(onClick = onExportFirst, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                 Text("Export a backup first")
-            }
-            if (impact.role != com.privatevault.app.backup.RestoreGroupRole.NONE) StatusBanner(kind = StatusKind.WARNING,
-                message = if (manager) "This device will leave its sync group without a managing device." else "This device will leave its sync group.")
-            if (manager && canMoveRole) OutlinedButton(onClick = onMoveRole, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                Text("Move managing role first")
             }
         } },
         confirmButton = { Button(onClick = onReplace) { Text(if (manager) "Restore anyway" else "Replace vault") } },

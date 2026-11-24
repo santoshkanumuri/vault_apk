@@ -98,7 +98,7 @@ private fun SyncStageTrail(phase: DeviceSyncPhase, modifier: Modifier = Modifier
     if (step < 0) return
     val accent = statusColors(phase.statusKind()).accent
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val labels = listOf("Finding", "Verifying", "Syncing", "Done")
+    val labels = listOf("Find", "Verify", "Sync", "Done")
     // Inactive dots use the full muted color (7.7:1 or more) so they pass 3:1; the current step is also bold,
     // and TalkBack reads the step instead of the dot colors.
     Row(modifier.fillMaxWidth().clearAndSetSemantics {

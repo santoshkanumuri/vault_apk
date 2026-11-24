@@ -123,7 +123,7 @@ class PickerAndRestoreUiTest {
         }
         compose.onNodeWithText("This device will leave its sync group.").assertIsDisplayed()
         compose.onNodeWithText("Move managing role first").assertDoesNotExist()
-        compose.onNodeWithText("Unlock with your current master password, not the backup's.", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("unlock with your current master password, not the backup's.", substring = true).assertIsDisplayed()
         compose.onNodeWithText("Export a backup first").performClick()
         compose.runOnIdle { assertTrue(exported) }
         compose.onNodeWithText("Replace vault").performClick()

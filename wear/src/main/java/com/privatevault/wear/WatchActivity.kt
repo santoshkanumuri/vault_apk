@@ -12,65 +12,44 @@ import android.os.Bundle
 import android.os.Build
 import android.os.PersistableBundle
 import android.view.WindowManager
-import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.content.ContextCompat
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.rotary.onRotaryScrollEvent
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -83,8 +62,25 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.ScalingLazyListState
+import androidx.wear.compose.foundation.lazy.items
+import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
+import androidx.wear.compose.foundation.rememberSwipeToDismissBoxState
+import androidx.wear.compose.material.Card
+import androidx.wear.compose.material.Chip
+import androidx.wear.compose.material.ChipDefaults
+import androidx.wear.compose.material.CircularProgressIndicator
+import androidx.wear.compose.material.Colors
+import androidx.wear.compose.material.MaterialTheme
+import androidx.wear.compose.material.PositionIndicator
+import androidx.wear.compose.material.Scaffold
+import androidx.wear.compose.material.SwipeToDismissBox
+import androidx.wear.compose.material.Text
+import androidx.wear.compose.material.TimeText
 import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.Wearable
+import com.privatevault.app.appearance.AccentTones
 import com.privatevault.app.appearance.AppearancePalette
 import com.privatevault.app.watch.WatchSync
 import com.privatevault.app.watch.parseWatchAppearance
@@ -98,7 +94,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
-import kotlin.math.abs
 
 class WatchActivity : ComponentActivity() {
     private lateinit var store: WatchStore
@@ -116,18 +111,8 @@ class WatchActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         store = WatchStore.get(this)
         setContent {
-            val tones = AppearancePalette.accent(accentId).dark
-            MaterialTheme(colorScheme = darkColorScheme(
-                primary = Color(tones.primary), onPrimary = Color(tones.onPrimary),
-                primaryContainer = Color(tones.primaryContainer), onPrimaryContainer = Color(tones.onPrimaryContainer),
-                background = Color(0xFF050705),
-                surface = Color(0xFF192019), onBackground = Color(0xFFF0F4ED),
-                onSurface = Color(0xFFF0F4ED),
-            )) {
-                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
-                    contentColor = MaterialTheme.colorScheme.onBackground) {
-                    WatchCodes(snapshot, secure, syncedAt, recentIds, onOpened = ::markUsed, copy = ::copyCode)
-                }
+            WatchTheme(AppearancePalette.accent(accentId).dark) {
+                WatchCodes(snapshot, secure, syncedAt, recentIds, onOpened = ::markUsed, copy = ::copyCode)
             }
         }
     }
@@ -189,6 +174,22 @@ class WatchActivity : ComponentActivity() {
 private const val RECENT = "Recent"
 private val CodeSoon = Color(0xFFFFC94D)
 private val CodeExpiring = Color(0xFFFFB4AB)
+private val WatchBackground = Color(0xFF050705)
+private val WatchSurface = Color(0xFF192019)
+private val WatchText = Color(0xFFF0F4ED)
+
+/** Cards and chips use the Nuvori 8dp control corner (NuvoriShapes.Control on the phone). */
+private val WatchControlShape = RoundedCornerShape(8.dp)
+
+/** Wear Material theme in the accent chosen on the phone. */
+@Composable
+internal fun WatchTheme(tones: AccentTones = AppearancePalette.accent(null).dark, content: @Composable () -> Unit) {
+    MaterialTheme(colors = Colors(
+        primary = Color(tones.primary), primaryVariant = Color(tones.primaryContainer), onPrimary = Color(tones.onPrimary),
+        background = WatchBackground, surface = WatchSurface,
+        onBackground = WatchText, onSurface = WatchText, onSurfaceVariant = WatchText.copy(alpha = .72f),
+    ), content = content)
+}
 
 @Composable
 internal fun WatchCodes(snapshot: WatchSnapshot?, secure: Boolean, syncedAt: Long = 0L, recentIds: List<String> = emptyList(),
@@ -205,37 +206,71 @@ internal fun WatchCodes(snapshot: WatchSnapshot?, secure: Boolean, syncedAt: Lon
     }
     val opened = openId?.let { id -> accounts.firstOrNull { it.id == id } }
     val open: (WatchAccount) -> Unit = { onOpened(it); openId = it.id }
-    when {
-        !secure || snapshot == null || accounts.isEmpty() -> WatchEmptyState(secure, snapshot, syncedAt)
-        opened != null -> {
-            BackHandler { openId = null }
-            WatchCodeDetail(opened, copy)
-        }
-        // A short list is quicker to scroll than to search by letter.
-        accounts.size <= WatchDisplay.DIRECT_LIST_LIMIT -> WatchCodeList(null, sorted, syncedAt, open, back = null)
-        group == null -> WatchLetterIndex(accounts.size, recent.size, letters, syncedAt) { group = it }
-        else -> {
-            BackHandler { group = null }
-            val shown = when (group) {
-                "All" -> sorted
-                RECENT -> recent
-                else -> sorted.filter { watchLetter(it) == group }
+    if (!secure || snapshot == null || accounts.isEmpty()) {
+        WatchScreen(null) { WatchEmptyState(secure, snapshot, syncedAt) }
+        return
+    }
+    // The list the detail screen returns to. `background` is true while it shows behind a swipe.
+    val listScreen: @Composable (background: Boolean) -> Unit = { background ->
+        when {
+            // A short list is quicker to scroll than to search by letter.
+            accounts.size <= WatchDisplay.DIRECT_LIST_LIMIT -> WatchCodeList(null, sorted, syncedAt, open)
+            group == null -> WatchLetterIndex(accounts.size, recent.size, letters, syncedAt) { group = it }
+            else -> {
+                val current = group!!
+                val shown = when (current) {
+                    "All" -> sorted
+                    RECENT -> recent
+                    else -> sorted.filter { watchLetter(it) == current }
+                }
+                SwipeBack("letter:$current", handleBack = !background, onBack = { group = null },
+                    background = { WatchLetterIndex(accounts.size, recent.size, letters, syncedAt) { group = it } }) {
+                    WatchCodeList(current, shown, syncedAt, open)
+                }
             }
-            WatchCodeList(group, shown, syncedAt, open) { group = null }
         }
     }
+    if (opened != null) SwipeBack("code:${opened.id}", handleBack = true, onBack = { openId = null },
+        background = { listScreen(true) }) { WatchCodeDetail(opened, copy) }
+    else listScreen(false)
+}
+
+/**
+ * Swipe right (or the back button) returns to [background]. Without this the system swipe closes the
+ * whole app instead of going back one screen.
+ */
+@Composable
+private fun SwipeBack(contentKey: String, handleBack: Boolean, onBack: () -> Unit,
+    background: @Composable () -> Unit, content: @Composable () -> Unit) {
+    key(contentKey) {
+        val state = rememberSwipeToDismissBoxState()
+        SwipeToDismissBox(onDismissed = onBack, state = state, backgroundKey = "$contentKey:background", contentKey = contentKey) { isBackground ->
+            if (isBackground) background() else content()
+        }
+    }
+    // Registered after the background so the screen in front owns the back button.
+    BackHandler(enabled = handleBack, onBack = onBack)
+}
+
+/** Time at the top, a scroll indicator at the edge, and the screen's background. */
+@Composable
+private fun WatchScreen(listState: ScalingLazyListState?, content: @Composable () -> Unit) {
+    Scaffold(
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colors.background),
+        timeText = { TimeText() },
+        positionIndicator = listState?.let { state -> { PositionIndicator(scalingLazyListState = state) } },
+    ) { content() }
 }
 
 private fun watchLetter(account: WatchAccount): String = account.name.trim().firstOrNull()?.uppercaseChar()
     ?.takeIf { it in 'A'..'Z' }?.toString() ?: "#"
 
-/** Round screens clip their corners, so content keeps a margin proportional to the display. */
+/** Round screens clip their corners, so list rows keep a side margin proportional to the display. */
 @Composable
 private fun watchContentPadding(): PaddingValues {
     val configuration = LocalConfiguration.current
-    return if (configuration.isScreenRound) PaddingValues(horizontal = (configuration.screenWidthDp * .1f).dp,
-        vertical = (configuration.screenHeightDp * .12f).dp)
-    else PaddingValues(horizontal = 12.dp, vertical = 14.dp)
+    return if (configuration.isScreenRound) PaddingValues(horizontal = (configuration.screenWidthDp * .08f).dp, vertical = 24.dp)
+    else PaddingValues(horizontal = 10.dp, vertical = 24.dp)
 }
 
 private fun urgencyColor(remaining: Int, calm: Color): Color = when (WatchDisplay.urgency(remaining)) {
@@ -259,14 +294,14 @@ private fun rememberEpochSeconds(): Long {
 
 @Composable
 private fun WatchEmptyState(secure: Boolean, snapshot: WatchSnapshot?, syncedAt: Long) {
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp),
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colors.background).padding(24.dp),
         verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         WatchBrand()
         Text(when {
             !secure -> "Set a screen lock and unlock your watch to view codes."
             snapshot == null -> "Open Nuvori on your phone, then choose Watch codes to connect."
             else -> "No codes on this watch yet. Codes you add on your phone appear here."
-        }, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center,
+        }, color = MaterialTheme.colors.onBackground, textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 12.dp))
         if (secure && snapshot != null) WatchSyncedLabel(syncedAt, Modifier.padding(top = 8.dp))
     }
@@ -277,9 +312,9 @@ private fun WatchBrand() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Image(painterResource(R.drawable.nuvori_logo_transparent), contentDescription = null, modifier = Modifier.size(32.dp))
         Column {
-            Text("Nuvori", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-            Text("Authenticator", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = .72f))
+            Text("Nuvori", style = MaterialTheme.typography.title2, color = MaterialTheme.colors.primary)
+            Text("Authenticator", style = MaterialTheme.typography.caption2,
+                color = MaterialTheme.colors.onBackground.copy(alpha = .72f))
         }
     }
 }
@@ -288,117 +323,72 @@ private fun WatchBrand() {
 @Composable
 private fun WatchSyncedLabel(syncedAt: Long, modifier: Modifier = Modifier) {
     val label = WatchDisplay.syncedLabel(System.currentTimeMillis(), syncedAt) ?: return
-    Text(label, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center,
-        color = MaterialTheme.colorScheme.onBackground.copy(alpha = .6f), modifier = modifier.fillMaxWidth())
+    Text(label, style = MaterialTheme.typography.caption2, textAlign = TextAlign.Center,
+        color = MaterialTheme.colors.onBackground.copy(alpha = .6f), modifier = modifier.fillMaxWidth())
 }
 
+/** Letters to jump to. The crown only scrolls; a tap opens a letter. */
 @Composable
 private fun WatchLetterIndex(count: Int, recentCount: Int, letters: List<Pair<String, Int>>, syncedAt: Long, open: (String) -> Unit) {
     val options = (if (recentCount > 0) listOf(RECENT to recentCount) else emptyList()) + listOf("All" to count) + letters
-    val listState = rememberLazyListState()
-    val focus = remember { FocusRequester() }
-    val scope = rememberCoroutineScope()
-    val haptics = LocalHapticFeedback.current
-    val threshold = with(LocalDensity.current) { 28.dp.toPx() }
-    val accessibilityEnabled = (LocalContext.current.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager)
-        .isTouchExplorationEnabled
-    var selected by remember(letters, recentCount) { mutableIntStateOf(0) }
-    var dialMoved by remember { mutableStateOf(false) }
-    var dialTick by remember { mutableIntStateOf(0) }
-    var dialPixels by remember { mutableFloatStateOf(0f) }
-    var progress by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(Unit) { focus.requestFocus() }
-    LaunchedEffect(selected, dialTick, dialMoved, accessibilityEnabled) {
-        progress = 0f
-        if (dialMoved && !accessibilityEnabled) {
-            repeat(20) { delay(100); progress = (it + 1) / 20f }
-            open(options[selected].first)
-            dialMoved = false
-        }
-    }
-    LazyColumn(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-            .onRotaryScrollEvent { event ->
-                dialPixels += event.verticalScrollPixels
-                while (abs(dialPixels) >= threshold) {
-                    val next = (selected + if (dialPixels > 0) 1 else -1).coerceIn(options.indices)
-                    if (next != selected) {
-                        selected = next
-                        dialMoved = true
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        scope.launch { listState.animateScrollToItem(next + 2) }
-                    }
-                    dialPixels += if (dialPixels > 0) -threshold else threshold
+    val listState = rememberScalingLazyListState()
+    WatchScreen(listState) {
+        ScalingLazyColumn(
+            Modifier.fillMaxSize().testTag("letterIndex"),
+            state = listState,
+            contentPadding = watchContentPadding(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { WatchBrand() } }
+            item {
+                Column(Modifier.fillMaxWidth()) {
+                    Text("Find a code", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                        color = MaterialTheme.colors.onBackground.copy(alpha = .72f))
+                    WatchSyncedLabel(syncedAt)
                 }
-                if (dialMoved) dialTick++
-                true
             }
-            .pointerInput(Unit) { awaitPointerEventScope { while (true) {
-                if (awaitPointerEvent().changes.any { it.pressed }) dialMoved = false
-            } } }
-            .focusRequester(focus).focusable().testTag("letterIndex"),
-        state = listState,
-        contentPadding = watchContentPadding(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { WatchBrand() } }
-        item {
-            Column(Modifier.fillMaxWidth()) {
-                Text("Find a code", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = .72f))
-                WatchSyncedLabel(syncedAt)
-            }
-        }
-        itemsIndexed(options, key = { _, item -> item.first }) { index, (letter, total) ->
-            val active = dialMoved && selected == index
-            Card(Modifier.fillMaxWidth().heightIn(min = 52.dp)
-                .clickable(onClickLabel = "Open $letter codes", role = Role.Button) { open(letter) }
-                .semantics { contentDescription = "$letter, $total ${if (total == 1) "code" else "codes"}" },
-                colors = CardDefaults.cardColors(containerColor = if (active) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surface)) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(letter, style = MaterialTheme.typography.titleLarge, color = if (active) MaterialTheme.colorScheme.onPrimaryContainer
-                            else MaterialTheme.colorScheme.onSurface)
-                        Text("$total", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                    }
-                    if (active && !accessibilityEnabled) {
-                        Text("Pause to open", style = MaterialTheme.typography.labelSmall)
-                        LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
-                    }
-                }
+            items(options, key = { it.first }) { (letter, total) ->
+                Chip(
+                    label = { Text(letter, style = MaterialTheme.typography.title2, modifier = Modifier.weight(1f)) },
+                    secondaryLabel = null,
+                    icon = null,
+                    onClick = { open(letter) },
+                    colors = ChipDefaults.secondaryChipColors(backgroundColor = MaterialTheme.colors.surface),
+                    shape = WatchControlShape,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                        .semantics { contentDescription = "$letter, $total ${if (total == 1) "code" else "codes"}" },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun WatchCodeList(group: String?, accounts: List<WatchAccount>, syncedAt: Long, open: (WatchAccount) -> Unit,
-    back: (() -> Unit)?) {
+private fun WatchCodeList(group: String?, accounts: List<WatchAccount>, syncedAt: Long, open: (WatchAccount) -> Unit) {
     val seconds = rememberEpochSeconds()
-    val listState = rememberLazyListState()
-    val focus = remember { FocusRequester() }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(group) { focus.requestFocus() }
-    LazyColumn(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-            .onRotaryScrollEvent { event ->
-                scope.launch { listState.scrollBy(event.verticalScrollPixels) }
-                true
-            }
-            .focusRequester(focus).focusable().testTag("codeList"),
-        state = listState,
-        contentPadding = watchContentPadding(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (back != null) item { TextButton(onClick = back, modifier = Modifier.heightIn(min = 48.dp)) { Text("‹ Letters") } }
-        if (group == null) item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { WatchBrand() } }
-        else item { Text(when (group) { "All" -> "All codes"; RECENT -> "Recent codes"; else -> "$group codes" },
-            style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
-        items(accounts, key = { it.id }) { account -> WatchCodeRow(account, seconds) { open(account) } }
-        item { WatchSyncedLabel(syncedAt, Modifier.padding(top = 4.dp)) }
+    val listState = rememberScalingLazyListState()
+    WatchScreen(listState) {
+        ScalingLazyColumn(
+            Modifier.fillMaxSize().testTag("codeList"),
+            state = listState,
+            contentPadding = watchContentPadding(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (group == null) item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { WatchBrand() } }
+            else item { Text(when (group) { "All" -> "All codes"; RECENT -> "Recent codes"; else -> "$group codes" },
+                style = MaterialTheme.typography.title2, color = MaterialTheme.colors.primary,
+                modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
+            items(accounts, key = { it.id }) { account -> WatchCodeRow(account, seconds) { open(account) } }
+            item { WatchSyncedLabel(syncedAt, Modifier.padding(top = 4.dp)) }
+        }
+    }
+}
+
+/** A thin countdown bar (Wear Material has no linear progress indicator). */
+@Composable
+private fun CountdownBar(fraction: Float, color: Color, modifier: Modifier = Modifier) {
+    Box(modifier.height(4.dp).clip(RoundedCornerShape(2.dp)).background(color.copy(alpha = .24f))) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f)).background(color))
     }
 }
 
@@ -408,19 +398,19 @@ private fun WatchCodeRow(account: WatchAccount, seconds: Long, open: () -> Unit)
     val code = remember(account, seconds / account.period) {
         Totp.code(account.secret, account.algorithm, account.digits, account.period, seconds)
     }
-    val accent = urgencyColor(remaining, MaterialTheme.colorScheme.primary)
-    Card(Modifier.fillMaxWidth().clickable(onClickLabel = "Show ${account.name} code", role = Role.Button, onClick = open),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(account.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (account.account.isNotBlank()) Text(account.account, style = MaterialTheme.typography.labelSmall, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .72f))
+    val accent = urgencyColor(remaining, MaterialTheme.colors.primary)
+    Card(onClick = open, modifier = Modifier.fillMaxWidth(),
+        backgroundPainter = ColorPainter(MaterialTheme.colors.surface), contentColor = MaterialTheme.colors.onSurface,
+        shape = WatchControlShape) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(account.name, style = MaterialTheme.typography.title3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (account.account.isNotBlank()) Text(account.account, style = MaterialTheme.typography.caption2, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, color = MaterialTheme.colors.onSurface.copy(alpha = .72f))
             Text(WatchDisplay.groupCode(code), fontSize = if (account.digits == 8) 22.sp else 26.sp, fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace, maxLines = 1, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LinearProgressIndicator(progress = remaining.toFloat() / account.period, color = accent,
-                    modifier = Modifier.weight(1f))
-                Text("${remaining}s", style = MaterialTheme.typography.labelSmall, color = accent)
+                CountdownBar(remaining.toFloat() / account.period, accent, Modifier.weight(1f))
+                Text("${remaining}s", style = MaterialTheme.typography.caption2, color = accent)
             }
         }
     }
@@ -438,26 +428,32 @@ private fun WatchCodeDetail(account: WatchAccount, copy: (WatchAccount) -> Unit)
     val next = if (WatchDisplay.showNextCode(remaining)) remember(account, seconds / account.period) {
         Totp.code(account.secret, account.algorithm, account.digits, account.period, seconds + account.period)
     } else null
-    val accent = urgencyColor(remaining, MaterialTheme.colorScheme.primary)
+    val accent = urgencyColor(remaining, MaterialTheme.colors.primary)
     val grouped = WatchDisplay.groupCode(code)
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("codeDetail"), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator(progress = remaining.toFloat() / account.period, color = accent, strokeWidth = 4.dp,
+    // The countdown ring takes the screen edge, so this screen has no time text.
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colors.background).testTag("codeDetail"), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(progress = remaining.toFloat() / account.period, indicatorColor = accent, strokeWidth = 4.dp,
             modifier = Modifier.fillMaxSize().padding(3.dp).semantics { contentDescription = "$remaining seconds left" })
         Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(account.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            Text(account.name, style = MaterialTheme.typography.title3, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center)
-            if (account.account.isNotBlank()) Text(account.account, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+            if (account.account.isNotBlank()) Text(account.account, style = MaterialTheme.typography.caption2, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = .72f))
+                color = MaterialTheme.colors.onBackground.copy(alpha = .72f))
             Text(grouped, fontSize = if (account.digits == 8) 28.sp else 34.sp, fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace, maxLines = 1, color = accent, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(vertical = 4.dp).semantics { contentDescription = "Code $grouped" })
             Text(if (next != null) "Next ${WatchDisplay.groupCode(next)}" else "${remaining}s left",
-                style = MaterialTheme.typography.labelMedium, fontFamily = if (next != null) FontFamily.Monospace else null,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = .8f))
-            TextButton(onClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); copy(account) },
-                modifier = Modifier.heightIn(min = 48.dp)) { Text("Copy code") }
+                style = MaterialTheme.typography.caption1, fontFamily = if (next != null) FontFamily.Monospace else null,
+                color = MaterialTheme.colors.onBackground.copy(alpha = .8f))
+            Chip(
+                label = { Text("Copy code") },
+                onClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); copy(account) },
+                colors = ChipDefaults.primaryChipColors(),
+                shape = WatchControlShape,
+                modifier = Modifier.heightIn(min = 48.dp),
+            )
         }
     }
 }

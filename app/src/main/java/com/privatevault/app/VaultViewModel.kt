@@ -819,9 +819,18 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun unlock(password: CharArray) = viewModelScope.launch {
         if (_checkingPassword.value) { password.fill('\u0000'); return@launch }
+        val failures = preferences.getInt(UNLOCK_FAILURES, 0)
+        val wait = com.privatevault.app.security.UnlockThrottle.waitMillis(failures,
+            preferences.getLong(UNLOCK_FAILED_AT, 0L), System.currentTimeMillis())
+        if (wait > 0) {
+            password.fill('\u0000')
+            notify("Too many wrong passwords. Try again in ${com.privatevault.app.security.UnlockThrottle.describe(wait)}.", StatusKind.ERROR)
+            return@launch
+        }
         _checkingPassword.value = true
         runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.unlock(password) } }
             .onSuccess {
+                preferences.edit().remove(UNLOCK_FAILURES).remove(UNLOCK_FAILED_AT).apply()
                 // An earlier wrong-password error must not stay on screen inside the unlocked vault.
                 _notice.value?.takeIf { n -> n.text == wrongMasterPassword }?.let(::clearNotice)
                 open(it)
@@ -830,6 +839,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             }
             .onFailure {
                 val newer = it is com.privatevault.app.security.UnsupportedVaultFormatException
+                // Security review L-03: wrong passwords in a row slow down later tries, across restarts.
+                if (!newer) preferences.edit().putInt(UNLOCK_FAILURES, (failures + 1).coerceAtMost(1000))
+                    .putLong(UNLOCK_FAILED_AT, System.currentTimeMillis()).commit()
                 notify(if (newer) it.message.orEmpty() else wrongMasterPassword, StatusKind.ERROR)
             }
         password.fill('\u0000')
@@ -837,6 +849,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private val wrongMasterPassword = "The master password is incorrect."
+    private companion object {
+        const val UNLOCK_FAILURES = "unlock_failures"
+        const val UNLOCK_FAILED_AT = "unlock_failed_at"
+    }
 
     /** In the background after an unlock: moves an older Drive backup key to the timed settings. */
     private fun strengthenDriveBackupKey(password: CharArray, vaultKey: ByteArray) = viewModelScope.launch {

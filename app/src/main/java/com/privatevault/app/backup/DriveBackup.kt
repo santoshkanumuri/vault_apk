@@ -93,9 +93,22 @@ internal object DriveBackupPlan {
     fun available(files: List<CloudFile>): List<DriveBackupFile> =
         files.mapNotNull(DriveBackupNames::parse).sortedWith(compareByDescending<DriveBackupFile> { it.createdAt }.thenBy { it.fileId })
 
-    /** This phone's backups beyond the newest [KEEP]; other phones' backups are never touched. */
-    fun obsolete(files: List<CloudFile>, backupId: String): List<DriveBackupFile> =
-        available(files).filter { it.backupId == backupId }.drop(KEEP)
+    /**
+     * This phone's backups beyond the newest [KEEP], and (security review L-16) this phone's backups
+     * made before [passwordChangedAt], which open with the old master password. [keep] is the backup
+     * just uploaded, which is never removed, even when the clock went backwards. Other phones'
+     * backups are never touched.
+     */
+    fun obsolete(files: List<CloudFile>, backupId: String, passwordChangedAt: Long = 0L, keep: String? = null): List<DriveBackupFile> {
+        val own = available(files).filter { it.backupId == backupId }
+        return own.filterIndexed { index, file ->
+            file.fileId != keep && (index >= KEEP || file.createdAt < passwordChangedAt)
+        }
+    }
+
+    /** True while this phone still has a backup made before [passwordChangedAt], other than [keep]. */
+    fun oldPasswordBackupsLeft(files: List<CloudFile>, backupId: String, passwordChangedAt: Long, keep: String?): Boolean =
+        passwordChangedAt > 0 && available(files).any { it.backupId == backupId && it.fileId != keep && it.createdAt < passwordChangedAt }
 }
 
 /** The Drive operations a backup needs. [GoogleBackupDrive] implements it; tests use one in memory. */
@@ -117,10 +130,11 @@ internal class GoogleBackupDrive(private val drive: GoogleDrive) : BackupDrive {
 internal object DriveBackupPass {
     /**
      * Writes the backup into [temporary] with [write], uploads it as a new file, and then deletes
-     * this phone's backups beyond the newest [DriveBackupPlan.KEEP]. Older copies stay when any
-     * step fails, so a failed backup never removes a good one. [temporary] is always deleted.
+     * this phone's backups beyond the newest [DriveBackupPlan.KEEP], and those made before
+     * [passwordChangedAt] (L-16). Older copies stay when any step fails, so a failed backup never
+     * removes a good one. [temporary] is always deleted.
      */
-    suspend fun run(drive: BackupDrive, backupId: String, now: Long, temporary: File,
+    suspend fun run(drive: BackupDrive, backupId: String, now: Long, temporary: File, passwordChangedAt: Long = 0L,
         write: suspend (OutputStream) -> Unit): DriveBackupFile {
         try {
             FileOutputStream(temporary).use { write(it) }
@@ -130,7 +144,9 @@ internal object DriveBackupPass {
             val uploaded = FileInputStream(temporary).use { drive.upload(name, size, it) }
             if (uploaded.size != size || uploaded.name != name) throw CloudException(CloudError.OTHER, "upload incomplete")
             // Best effort: a copy left behind is removed after the next backup.
-            runCatching { DriveBackupPlan.obsolete(drive.list(), backupId).forEach { drive.delete(it.fileId) } }
+            runCatching {
+                DriveBackupPlan.obsolete(drive.list(), backupId, passwordChangedAt, uploaded.id).forEach { drive.delete(it.fileId) }
+            }
             return DriveBackupFile(uploaded.id, backupId, now, size)
         } finally {
             temporary.delete()
@@ -210,6 +226,8 @@ data class DriveBackupStatus(
 internal object DriveBackupRunner {
     private const val PREFERENCES = "drive_backup"
     private const val KEY_FILE = "drive-backup-key.bin"
+    /** When the master password last changed while this phone may still have backups with the old one (L-16). */
+    private const val PASSWORD_CHANGED_AT = "password_changed_at"
     /** A backup may be large (photos); a download above this is refused. */
     private const val MAX_DOWNLOAD = 4L * 1024 * 1024 * 1024
 
@@ -269,12 +287,16 @@ internal object DriveBackupRunner {
     }
 
     /**
-     * After a master password change: the next backups open with [password]. The backups already in
-     * the Drive keep the old password until the newer backups replace them.
+     * After a master password change: the next backups open with [password], and (security review
+     * L-16) once one of them is in the Drive, this phone's backups that open with the old password
+     * are deleted. The time is kept even while backups are off, so turning them on later still
+     * removes the old files after the first new backup.
      */
     suspend fun changePassword(context: Context, password: CharArray, vaultKey: ByteArray) = withContext(Dispatchers.Default) {
-        if (!status.value.enabled) return@withContext
-        mutex.withLock { BackupCipher.create(password, vaultKdf(context)).use { key -> keyFile(context).save(key, vaultKey) } }
+        mutex.withLock {
+            preferences(context).edit().putLong(PASSWORD_CHANGED_AT, System.currentTimeMillis()).commit()
+            if (status.value.enabled) BackupCipher.create(password, vaultKdf(context)).use { key -> keyFile(context).save(key, vaultKey) }
+        }
     }
 
     /**
@@ -345,10 +367,17 @@ internal object DriveBackupRunner {
                 error = KEY_MISSING
             } else key.use {
                 val temporary = File(app.cacheDir, "drive-backup-${java.util.UUID.randomUUID()}.tmp")
-                DriveBackupPass.run(GoogleBackupDrive(GoogleDrive(GoogleDriveAccess(app))), backupId, now, temporary) { output ->
+                val drive = GoogleBackupDrive(GoogleDrive(GoogleDriveAccess(app)))
+                val changedAt = saved.getLong(PASSWORD_CHANGED_AT, 0L)
+                val uploaded = DriveBackupPass.run(drive, backupId, now, temporary, changedAt) { output ->
                     manager.export(output, it, vaultKey)
                 }
                 finishedAt = now
+                // Forget the change once no backup with the old password is left; a failed delete
+                // is tried again after the next backup.
+                if (changedAt > 0 && runCatching { !DriveBackupPlan.oldPasswordBackupsLeft(drive.list(), backupId, changedAt, uploaded.fileId) }.getOrDefault(false)) {
+                    saved.edit().remove(PASSWORD_CHANGED_AT).apply()
+                }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: CloudException) {

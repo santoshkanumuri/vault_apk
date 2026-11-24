@@ -22,8 +22,11 @@ internal class WatchStore private constructor(private val context: Context) {
 
     fun isSecure(): Boolean = (context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isDeviceSecure
 
-    @Synchronized fun pair(vaultId: String, key: ByteArray) {
-        require(isSecure() && vaultId.length in 1..100 && key.size == 32)
+    /** The Data Layer node of the phone that paired this watch (M-02), or null for a pairing made before this check. */
+    fun pairedNode(): String? = prefs.getString(PAIRED_NODE, null)
+
+    @Synchronized fun pair(vaultId: String, key: ByteArray, node: String) {
+        require(isSecure() && vaultId.length in 1..100 && key.size == 32 && node.length in 1..200)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, wrappingKey())
         val wrapped = cipher.doFinal(key)
@@ -31,7 +34,7 @@ internal class WatchStore private constructor(private val context: Context) {
         val previousKey = readKey()
         val keyChanged = previousKey?.contentEquals(key) != true
         previousKey?.fill(0)
-        require(prefs.edit().putString("vault_id", vaultId)
+        require(prefs.edit().putString("vault_id", vaultId).putString(PAIRED_NODE, node)
             .putString("wrapped_key", android.util.Base64.encodeToString(cipher.iv + wrapped, android.util.Base64.NO_WRAP)).commit())
         if (previous != vaultId) {
             snapshotFile.delete()
@@ -127,6 +130,7 @@ internal class WatchStore private constructor(private val context: Context) {
     companion object {
         private const val SYNCED_AT = "synced_at"
         private const val RECENT_IDS = "recent_ids"
+        private const val PAIRED_NODE = "paired_node"
         @Volatile private var instance: WatchStore? = null
         fun get(context: Context): WatchStore = instance ?: synchronized(this) {
             instance ?: WatchStore(context.applicationContext).also { instance = it }

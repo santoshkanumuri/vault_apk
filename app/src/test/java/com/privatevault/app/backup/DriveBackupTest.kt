@@ -214,6 +214,36 @@ class DriveBackupTest {
         assertArrayEquals("new backup".toByteArray(), drive.files.entries.first { it.key.id == made.fileId }.value)
     }
 
+    @Test fun afterAPasswordChangeTheNewBackupReplacesEveryBackupWithTheOldPassword() = runBlocking {
+        // Security review L-16: backups made before the change open with the old password.
+        val drive = MemoryDrive()
+        listOf(100L, 200L).forEach { drive.put(DriveBackupNames.name(phone, it), byteArrayOf(1)) }
+        drive.put(DriveBackupNames.name(otherPhone, 50L), byteArrayOf(2))
+        val made = DriveBackupPass.run(drive, phone, 300L, folder.newFile("backup.tmp"), passwordChangedAt = 250L) {
+            it.write("new password".toByteArray())
+        }
+        assertEquals("another phone's backup is never touched",
+            setOf(DriveBackupNames.name(phone, 300L), DriveBackupNames.name(otherPhone, 50L)), drive.files.keys.map { it.name }.toSet())
+        assertFalse(DriveBackupPlan.oldPasswordBackupsLeft(drive.list(), phone, 250L, made.fileId))
+    }
+
+    @Test fun theNewBackupIsKeptEvenWhenTheClockWentBackwards() = runBlocking {
+        val drive = MemoryDrive()
+        drive.put(DriveBackupNames.name(phone, 100L), byteArrayOf(1))
+        val made = DriveBackupPass.run(drive, phone, 150L, folder.newFile("backup.tmp"), passwordChangedAt = 400L) {
+            it.write("new password".toByteArray())
+        }
+        assertEquals(listOf(made.fileId), drive.files.keys.map { it.id })
+    }
+
+    @Test fun oldPasswordBackupsStayWhenTheNewBackupFails() = runBlocking {
+        val drive = MemoryDrive().apply { failUpload = true }
+        listOf(100L, 200L).forEach { drive.put(DriveBackupNames.name(phone, it), byteArrayOf(1)) }
+        runCatching { DriveBackupPass.run(drive, phone, 300L, folder.newFile("backup.tmp"), passwordChangedAt = 250L) { it.write(1) } }
+        assertEquals(2, drive.files.size)
+        assertTrue(DriveBackupPlan.oldPasswordBackupsLeft(drive.list(), phone, 250L, null))
+    }
+
     @Test fun aFailedUploadKeepsTheOldBackups() = runBlocking {
         val drive = MemoryDrive().apply { failUpload = true }
         listOf(100L, 200L).forEach { drive.put(DriveBackupNames.name(phone, it), byteArrayOf(1)) }

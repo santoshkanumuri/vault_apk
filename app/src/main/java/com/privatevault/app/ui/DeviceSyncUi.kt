@@ -571,8 +571,13 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         }
     }
 
+    val integrityWarning = remember {
+        com.privatevault.app.security.DeviceIntegrity.warning(com.privatevault.app.security.DeviceIntegrity.check(context))
+    }
     val addDeviceCard: @Composable () -> Unit = {
         SettingsSection("Add a device") {
+            // Security review L-12: a warning only; pairing still works on a rooted phone.
+            integrityWarning?.let { StatusBanner(kind = StatusKind.WARNING, title = "Check this phone", message = it) }
             if (devices.isEmpty() && (state.stage == "idle" || state.stage == "failed")) {
                 Text(if (joiningExisting) "Scan the QR code from the device that manages your vault."
                     else "Connect another Android device or a Windows PC to sync over Wi-Fi.",

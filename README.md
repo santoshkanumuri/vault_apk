@@ -37,9 +37,9 @@ Open the download on your phone and allow installation from your browser or file
 
 **Moving from v1.5.2 or earlier:** v1.6.0 uses the new package `com.application.private_vault` and installs as a separate app. Export an encrypted backup from the old app, restore it into the new app, and check your records before removing the old installation. Later updates using the same package and signing identity can install over this version.
 
-For Google Play, use the [2.3.3 phone AAB](downloads/nuvori-v2.3.3-phone.aab?raw=true) and [release build guide](docs/PUBLISHING.md). An AAB is for store upload; install the APK directly on a phone.
+For Google Play, build the AAB as the [release build guide](docs/PUBLISHING.md) describes. AABs and R8 mapping files are kept private, because they would undo the app's obfuscation; install the APK directly on a phone.
 
-Wear OS companion version 2.1.2, code 360012: [watch APK](downloads/nuvori-v2.1.2-watch.apk?raw=true), [watch AAB](downloads/nuvori-v2.1.2-watch.aab?raw=true), and [setup guide](docs/WATCH-COMPANION.md). Install the watch APK on the watch. For local setup, the phone and watch apps must share the package name and signing certificate; these download builds match.
+Wear OS companion version 2.1.2, code 360012: [watch APK](downloads/nuvori-v2.1.2-watch.apk?raw=true), and [setup guide](docs/WATCH-COMPANION.md). Install the watch APK on the watch. For local setup, the phone and watch apps must share the package name and signing certificate; these download builds match.
 
 ## Features
 

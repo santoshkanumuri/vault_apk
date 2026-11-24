@@ -1488,15 +1488,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             biometricGate.clearDailySession()
             _requestDailyBiometric.value = true
             val driveBackup = com.privatevault.app.backup.DriveBackupRunner.status.value.enabled
-            if (driveBackup) {
-                // Later Drive backups open with the new password; one runs now to replace an old one soon.
-                val key = requireNotNull(sessionKey).copyOf()
-                try { com.privatevault.app.backup.DriveBackupRunner.changePassword(getApplication(), replacement, key) }
-                finally { key.fill(0) }
-                requestDriveBackup(force = true)
-            }
-            notify(if (driveBackup) "Master password changed. New Google Drive backups use it. Backup files you saved yourself keep their original password."
-                else "Master password changed. Existing backups still use their original password.", StatusKind.SUCCESS)
+            // Later Drive backups open with the new password. Once one is saved, this phone's Drive
+            // backups with the old password are deleted (L-16); one runs now so that happens soon.
+            val key = requireNotNull(sessionKey).copyOf()
+            try { com.privatevault.app.backup.DriveBackupRunner.changePassword(getApplication(), replacement, key) }
+            finally { key.fill(0) }
+            if (driveBackup) requestDriveBackup(force = true)
+            notify(if (driveBackup) "Master password changed. Nuvori makes a new Google Drive backup now and then deletes this phone's Drive backups that use the old password. Backup files you saved yourself keep their original password."
+                else "Master password changed. Backup files you saved yourself keep their original password.", StatusKind.SUCCESS)
         } finally {
             current.fill('\u0000'); replacement.fill('\u0000')
         }

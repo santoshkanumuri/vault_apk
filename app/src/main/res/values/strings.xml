@@ -259,6 +259,6 @@
         <item quantity="other">Waiting for %2$s to confirm %1$d changes.</item>
     </plurals>
     <string name="sync_peer_detail_silent">Hasn\'t synced in %1$d days. Open Nuvori on it to catch up.</string>
-    <string name="sync_peer_detail_not_checked">Linked to your vault. Waiting for the first check.</string>
+    <string name="sync_peer_detail_not_checked">Linked to your vault, but it has not synced yet. If pairing did not finish on it, remove it here and pair it again.</string>
     <string name="sync_peer_wifi_failed">Wi-Fi couldn\'t reach it on the last check.</string>
 </resources>

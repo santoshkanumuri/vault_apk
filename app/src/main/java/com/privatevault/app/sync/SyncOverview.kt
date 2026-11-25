@@ -79,17 +79,24 @@ internal object SyncOverviewRules {
         return (written - (peer?.applied?.get(localId)?.sequence ?: 0L)).coerceAtLeast(0L)
     }
 
+    /**
+     * A device never heard from (no verified progress, no contact) is [PeerAck.NOT_CHECKED], whatever
+     * [PeerSyncFacts.unconfirmed] says: before its first report that count is every change this device
+     * ever wrote, not changes it misses (a joiner gets them in its vault copy). A device whose pairing
+     * never finished stays here, so it never makes changes look stuck; its card offers to remove it.
+     */
     fun peerAck(peer: PeerSyncFacts, now: Long): PeerAck = when {
+        peer.lastSeen == 0L && !peer.reported -> PeerAck.NOT_CHECKED
         peer.unconfirmed > 0 -> if (peer.lastSeen > 0 && now - peer.lastSeen > STALE_AFTER_MS) PeerAck.SILENT
             else PeerAck.WAITING
-        peer.lastSeen == 0L && !peer.reported -> PeerAck.NOT_CHECKED
         else -> PeerAck.UP_TO_DATE
     }
 
     fun overview(facts: SyncFacts): SyncOverview {
         val now = facts.now
         val acks = facts.peers.associate { it.deviceId to peerAck(it, now) }
-        val waitingFor = facts.peers.filter { it.unconfirmed > 0 }.sortedBy { if (it.lastSeen == 0L) Long.MAX_VALUE else it.lastSeen }
+        val waitingFor = facts.peers.filter { it.unconfirmed > 0 && acks[it.deviceId] != PeerAck.NOT_CHECKED }
+            .sortedBy { if (it.lastSeen == 0L) Long.MAX_VALUE else it.lastSeen }
         val waitingChanges = waitingFor.maxOfOrNull { it.unconfirmed } ?: 0L
         val lastHeard = facts.peers.maxOfOrNull { it.lastSeen } ?: 0L
         val lastSynced = maxOf(lastHeard, facts.lastDriveSync)

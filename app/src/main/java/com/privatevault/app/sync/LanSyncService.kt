@@ -633,6 +633,13 @@ class LanSyncService : Service() {
             signals.trySend(Unit)
         } catch (_: LanSyncExchange.MembershipMessageServed) {
             return true
+        } catch (refused: PeerRefused) {
+            // M12: the other device refused what this one sent and said so ([SyncRefusal]). Not a Wi-Fi
+            // problem and not retried at once; shown on that device's card.
+            lastFailureRefused = true
+            android.util.Log.w(TAG, "A paired device refused this device's session (${refused.code})")
+            peerId?.let { setPeerStatus(it, DeviceSyncPhase.ATTENTION, PEER_REFUSED_OURS) }
+            setStatus(DeviceSyncPhase.ATTENTION, DEVICE_REFUSED_OURS)
         } catch (failure: Exception) {
             // M12: a refusal (signature, forked history, bad frame) is not a Wi-Fi problem, and retrying
             // at once changes nothing; it is shown on that device's card.
@@ -881,6 +888,9 @@ class LanSyncService : Service() {
         /** M12: a device sent something this one refuses; updating or re-pairing fixes it, not Wi-Fi. */
         const val DEVICE_REFUSED = "A paired device sent changes Nuvori here can't accept. Update Nuvori on both devices."
         const val PEER_REFUSED = "Sent changes this device can't accept. Update Nuvori on both. If it keeps happening, pair it again."
+        /** M12: the other device refused what this one sent, and said so ([SyncRefusal]). */
+        const val DEVICE_REFUSED_OURS = "A paired device can't accept changes from this device. Update Nuvori on both devices."
+        const val PEER_REFUSED_OURS = "Can't accept changes from this device. Update Nuvori on both. If it keeps happening, pair it again."
         private const val FOLLOW_UP_DEBOUNCE_MS = 750L
         private const val LEAVE_RETRY_MS = 60_000L
         private const val TRANSFER_LOCK_MS = 15L * 60 * 1000

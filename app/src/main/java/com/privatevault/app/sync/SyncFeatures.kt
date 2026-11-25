@@ -45,7 +45,13 @@ internal object SyncFeatures {
      */
     const val SYNC_PORTS = SyncPorts.FEATURE
 
+    /** M12: this build tells a peer when it refuses what the peer sent, and reads the peer's refusal ([SyncRefusal]). */
+    const val SYNC_REFUSAL = SyncRefusal.FEATURE
+
+    /** M11: this build confirms received photo bytes as they arrive, and waits for those receipts ([PhotoReceipts]). */
+    const val PHOTO_RECEIPTS = PhotoReceipts.FEATURE
+
     /** Everything this build announces, in one list for the handshake. */
     val ANNOUNCED: List<String> = listOf(RemovalCutoff.FEATURE, APPEARANCE, SITE_ICONS, CHECKPOINT_ENROLL, SIGN_IN_METHODS,
-        MERGE_JOIN, EPOCH_KEYS, HISTORY_COMPACTION, SYNC_PORTS)
+        MERGE_JOIN, EPOCH_KEYS, HISTORY_COMPACTION, SYNC_PORTS, SYNC_REFUSAL, PHOTO_RECEIPTS)
 }

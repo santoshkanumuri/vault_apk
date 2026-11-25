@@ -28,11 +28,26 @@ opens with the password of check E.
 Any other entity id, a delete, an unknown key or a value out of range makes the change invalid.
 
 The current check is the one with the highest epoch, then the highest membership sequence, then the
-highest change hash (UTF-8 order), among the checks whose M is not beyond the membership head and
-whose author was the managing device once membership event M applied. A check from any other device
-is ignored. A device still has to switch while the current check exists and the device is not its
-author, has not said it switched to that epoch or a later one, and was not added after M (its newest
-ADD or GENESIS event has a sequence above M: the pairing proved the then current password).
+highest change hash (UTF-8 order), among the checks whose M is from 1 to the membership head and
+whose author is the managing device now (after the newest membership event). A check from any other
+device is ignored, a former managing device's included, whatever M it names.
+
+A managing-role transfer carries the current check over: the device that accepts the role first
+signs a copy of the current check (the same payload, M included) under its own device ID, and the
+managing device completes the transfer only once it holds that copy. So after the transfer the copy
+is current, and nothing changes for any device. A device whose own checks are these (the managing
+device's, or its copy) holds their password, as if it had switched to their epoch.
+
+While the managing device has no check of its own yet (the transfer reached a device before the copy
+did), a device that still had to switch keeps being asked for the check it was last asked for, by its
+change hash, if that check is held and its M is from 1 to the head ("held"). That hash was only ever
+recorded while its check was current, so no other device's check can take its place.
+
+A device still has to switch while the current check exists and the device is not its author, has
+not switched to that epoch or a later one (its own switches and its own checks both count), and was
+not added after M (its newest ADD or GENESIS event has a sequence above M: the pairing proved the then
+current password). A device that was asked to switch to a check keeps being asked for that check
+while the managing device has no check of its own yet (a transfer that arrived before its copy).
 """
 import base64
 import hashlib
@@ -148,32 +163,42 @@ def records() -> list:
 
 
 def current_cases() -> list:
-    # managers[i] is the managing device once membership event i + 1 applied.
+    # managers[i] is the managing device once membership event i + 1 applied. phone-b receives the
+    # role at event 5. The managing device now is managers[head - 1].
     managers = ["phone-a", "phone-a", "phone-a", "phone-a", "phone-b", "phone-b"]
 
     def candidate(author, hash_, epoch, sequence):
         return {"author": author, "hash": hash_, "epoch": epoch, "membershipSequence": sequence}
 
+    def case(name, head, candidates, expected, roles=managers, held=None):
+        return {"name": name, "head": head, "managers": roles, "candidates": candidates, "held": held,
+                "expected": expected}
+
     return [
-        {"name": "none", "head": 6, "managers": managers, "candidates": [], "expected": None},
-        {"name": "highest-epoch", "head": 6, "managers": managers,
-         "candidates": [candidate("phone-a", "h1", 1, 2), candidate("phone-a", "h2", 2, 3)], "expected": "h2"},
-        {"name": "not-the-manager", "head": 6, "managers": managers,
-         "candidates": [candidate("phone-a", "h1", 1, 2), candidate("dev-pc", "h2", 5, 3)], "expected": "h1"},
-        {"name": "manager-before-transfer-still-counts", "head": 6, "managers": managers,
-         "candidates": [candidate("phone-a", "h1", 3, 4)], "expected": "h1"},
-        {"name": "former-manager-after-transfer", "head": 6, "managers": managers,
-         "candidates": [candidate("phone-a", "h1", 3, 4), candidate("phone-a", "h2", 4, 5)], "expected": "h1"},
-        {"name": "new-manager", "head": 6, "managers": managers,
-         "candidates": [candidate("phone-a", "h1", 3, 4), candidate("phone-b", "h2", 4, 6)], "expected": "h2"},
-        {"name": "beyond-head", "head": 4, "managers": managers,
-         "candidates": [candidate("phone-a", "h1", 1, 2), candidate("phone-a", "h2", 2, 5)], "expected": "h1"},
-        {"name": "same-epoch-higher-sequence", "head": 6, "managers": managers,
-         "candidates": [candidate("phone-b", "h9", 4, 6), candidate("phone-a", "h1", 4, 3)], "expected": "h9"},
-        {"name": "same-epoch-same-sequence-higher-hash", "head": 6, "managers": managers,
-         "candidates": [candidate("phone-a", "ab", 2, 3), candidate("phone-a", "b", 2, 3)], "expected": "b"},
-        {"name": "sequence-zero", "head": 6, "managers": managers,
-         "candidates": [candidate("phone-a", "h1", 1, 0)], "expected": None},
+        case("none", 6, [], None),
+        case("highest-epoch", 4, [candidate("phone-a", "h1", 1, 2), candidate("phone-a", "h2", 2, 3)], "h2"),
+        case("not-the-manager", 4, [candidate("phone-a", "h1", 1, 2), candidate("dev-pc", "h2", 5, 3)], "h1"),
+        case("before-the-transfer-the-old-manager-counts", 4,
+             [candidate("phone-a", "h1", 3, 4), candidate("phone-b", "h2", 3, 4)], "h1"),
+        case("former-manager-is-refused", 6, [candidate("phone-a", "h1", 3, 4)], None),
+        case("former-manager-cannot-name-an-earlier-event", 6,
+             [candidate("phone-a", "h9", 99, 3), candidate("phone-b", "h2", 3, 4)], "h2"),
+        case("copy-carried-over-by-the-new-manager", 6,
+             [candidate("phone-a", "h1", 3, 4), candidate("phone-b", "h2", 3, 4)], "h2"),
+        case("new-manager-changes-it", 6, [candidate("phone-b", "h2", 3, 4), candidate("phone-b", "h3", 4, 6)], "h3"),
+        case("beyond-head", 4, [candidate("phone-a", "h1", 1, 2), candidate("phone-a", "h2", 2, 5)], "h1"),
+        case("same-epoch-higher-sequence", 6, [candidate("phone-b", "h9", 4, 6), candidate("phone-b", "h1", 4, 3)], "h9"),
+        case("same-epoch-same-sequence-higher-hash", 4,
+             [candidate("phone-a", "ab", 2, 3), candidate("phone-a", "b", 2, 3)], "b"),
+        case("sequence-zero", 4, [candidate("phone-a", "h1", 1, 0)], None),
+        case("role-came-back", 4, [candidate("phone-a", "h1", 1, 1), candidate("phone-b", "h2", 2, 3),
+             candidate("phone-a", "h3", 2, 3)], "h3", ["phone-a", "phone-a", "phone-b", "phone-a"]),
+        # "held" is the check the device was last asked for (currentOrHeld).
+        case("held-while-the-new-manager-has-none", 6, [candidate("phone-a", "h1", 3, 4)], "h1", held="h1"),
+        case("held-gives-way-to-the-new-manager", 6,
+             [candidate("phone-a", "h1", 3, 4), candidate("phone-b", "h2", 3, 4)], "h2", held="h1"),
+        case("held-must-be-a-check-held-here", 6, [candidate("phone-a", "h1", 3, 4)], None, held="h7"),
+        case("held-beyond-head", 4, [candidate("phone-a", "h5", 9, 5)], None, held="h5"),
     ]
 
 

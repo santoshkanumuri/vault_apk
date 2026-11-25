@@ -179,15 +179,28 @@ internal object MasterPasswordRules {
 
     /**
      * The check every device must hold: the highest epoch, then the highest membership sequence, then the
-     * highest change hash (UTF-8 order), among the checks whose membership sequence is within [head] and whose
-     * author was the managing device once that membership event applied ([managerAfter]). Checks of any other
-     * device are ignored, so a former manager's check from before a transfer still counts and one it wrote
-     * afterwards does not.
+     * highest change hash (UTF-8 order), among the checks whose membership sequence is from 1 to [head] and whose
+     * author is [manager], the managing device after the newest membership event. Every other device's check is
+     * ignored, a former managing device's included, whatever membership event it names. A transfer carries the
+     * current check over: the device accepting the role signs a copy of it first ([isCopyOf]).
      */
-    fun current(candidates: List<Candidate>, head: Long, managerAfter: (Long) -> String?): Candidate? =
-        candidates.filter { it.check.membershipSequence in 1..head && managerAfter(it.check.membershipSequence) == it.author }
+    fun current(candidates: List<Candidate>, head: Long, manager: String?): Candidate? =
+        candidates.filter { it.check.membershipSequence in 1..head && it.author == manager }
             .maxWithOrNull(compareBy<Candidate>({ it.check.epoch }, { it.check.membershipSequence })
                 .then(SyncCheckpoints.utf8Order { it.hash }))
+
+    /**
+     * [current], or while [manager] has no check of its own yet (a transfer that arrived here before the new
+     * managing device's copy), the check this device was last asked to switch to ([heldHash]). That hash was
+     * recorded only while its check was current, so no other device's check can take its place.
+     */
+    fun currentOrHeld(candidates: List<Candidate>, head: Long, manager: String?, heldHash: String?): Candidate? =
+        current(candidates, head, manager) ?: heldHash?.let { held ->
+            candidates.firstOrNull { it.hash == held && it.check.membershipSequence in 1..head }
+        }
+
+    /** True when [copy] carries [original] over to another author: the same payload, membership sequence included. */
+    fun isCopyOf(copy: Check, original: Check): Boolean = copy == original
 
     /**
      * True when [deviceId] holds the password of [current]: it wrote the check, it switched to that epoch or a

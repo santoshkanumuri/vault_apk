@@ -34,21 +34,33 @@ internal object MasterPasswordSync {
      * The group as this phone sees it: the current check (null before any change while shared), the switch
      * this phone owes (null when none), and the newest membership event, which a new check names.
      */
-    class State(val vaultId: String, val localDeviceId: String, val managerDeviceId: String, val transferPending: Boolean,
-        val current: MasterPasswordRules.Candidate?, val pending: Pending?, val membershipSequence: Long) {
+    class State(val vaultId: String, val localDeviceId: String, val managerDeviceId: String, val transferTarget: String?,
+        val current: MasterPasswordRules.Candidate?, val pending: Pending?, val membershipSequence: Long,
+        private val candidates: List<MasterPasswordRules.Candidate>) {
         val manages: Boolean get() = managerDeviceId == localDeviceId
+        val transferPending: Boolean get() = transferTarget != null
         val nextEpoch: Long get() = (current?.check?.epoch ?: 0L) + 1L
+
+        /** True when [deviceId] signed a copy of the current check (or there is none to carry over). */
+        fun carriedOverBy(deviceId: String): Boolean {
+            val check = current?.check ?: return true
+            return candidates.any { it.author == deviceId && MasterPasswordRules.isCopyOf(it.check, check) }
+        }
     }
 
-    /** Null when this vault has no sync group. Decrypts the checks and switches this phone holds. */
-    suspend fun state(database: VaultDatabase, vaultKey: ByteArray, localDeviceId: String): State? {
+    /**
+     * Null when this vault has no sync group. Decrypts the checks and switches this phone holds. [heldHash] is the
+     * check this phone was last asked to switch to ([LockedSyncStore.masterPasswordSwitchHeld]), which still
+     * counts while the managing device has no check of its own yet ([MasterPasswordRules.currentOrHeld]).
+     */
+    suspend fun state(database: VaultDatabase, vaultKey: ByteArray, localDeviceId: String,
+        heldHash: (vaultId: String) -> String? = { null }): State? {
         val syncDao = database.syncDao()
         val vaultId = database.dao().settings()?.vaultId ?: return null
         val events = syncDao.membershipEvents(vaultId).map { it.toEvent() }
         if (events.isEmpty()) return null
         val membership = SyncMembershipManager.verify(events)
         val steps = events.map { it.action.name to it.subjectDeviceId }
-        val managers = MasterPasswordRules.managersAfter(steps)
         val candidates = mutableListOf<MasterPasswordRules.Candidate>()
         var switched: Long? = null
         val operations = (syncDao.operationsForEntity(MasterPasswordRules.ENTITY_TYPE, vaultId) +
@@ -64,21 +76,26 @@ internal object MasterPasswordSync {
                         plaintext.toString(Charsets.UTF_8))
                 } finally { plaintext.fill(0) }
                 when (record) {
-                    is MasterPasswordRules.Record.CheckRecord ->
+                    is MasterPasswordRules.Record.CheckRecord -> {
                         candidates += MasterPasswordRules.Candidate(operation.deviceId, operation.hash, record.check)
+                        // This phone's own check (written as managing device, or carried over at a transfer)
+                        // holds its password as much as a switch does.
+                        if (operation.deviceId == localDeviceId) switched = maxOf(switched ?: 0L, record.check.epoch)
+                    }
                     is MasterPasswordRules.Record.Switched ->
                         if (operation.deviceId == localDeviceId) switched = maxOf(switched ?: 0L, record.epoch)
                     null -> Unit
                 }
             }
         } finally { keyring.wipe() }
-        val current = MasterPasswordRules.current(candidates, events.size.toLong()) { managers.getOrNull(it.toInt() - 1) }
+        val current = MasterPasswordRules.currentOrHeld(candidates, events.size.toLong(), membership.managerDeviceId,
+            runCatching { heldHash(vaultId) }.getOrNull())
         val active = membership.members.any { it.deviceId == localDeviceId && it.status == MemberStatus.ACTIVE.name }
         val pending = current?.takeIf {
             active && !MasterPasswordRules.satisfied(localDeviceId, it, switched, MasterPasswordRules.addedAt(steps, localDeviceId))
         }?.let { Pending(vaultId, it, syncDao.membership(vaultId, it.author)?.displayName.orEmpty()) }
-        return State(vaultId, localDeviceId, membership.managerDeviceId, membership.pendingTransferDeviceId != null, current, pending,
-            events.size.toLong())
+        return State(vaultId, localDeviceId, membership.managerDeviceId, membership.pendingTransferDeviceId,
+            current, pending, events.size.toLong(), candidates)
     }
 
     /**
@@ -91,6 +108,18 @@ internal object MasterPasswordSync {
             "Only the managing device changes the shared master password"
         }
         require(check.membershipSequence == membership.events.size.toLong()) { "The sync group changed. Try again." }
+    }
+
+    /**
+     * Signs a copy of the current [check] under this phone's own device ID, before it accepts the managing role
+     * offered to it ([MasterPasswordRules.isCopyOf]), so the check stays current once the role moves here.
+     */
+    suspend fun writeCarryOver(database: VaultDatabase, identityStore: AndroidDeviceIdentityStore, vaultKey: ByteArray,
+        check: MasterPasswordRules.Check) = write(database, identityStore, vaultKey, check.toPayload(), forVault = true) { membership, deviceId ->
+        require(membership.pendingTransferDeviceId == deviceId && !membership.transferAccepted) {
+            "No managing-role transfer is offered to this device"
+        }
+        require(check.membershipSequence in 1..membership.events.size.toLong()) { "The sync group changed. Try again." }
     }
 
     /** Writes this phone's switch to check [epoch]: its vault now opens with that check's password. */

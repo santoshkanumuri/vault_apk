@@ -87,16 +87,34 @@ class MasterPasswordRulesTest {
         value.get("hash")?.asString ?: "hash", MasterPasswordRules.Check(value.get("epoch").asLong,
             value.get("membershipSequence").asLong, ByteArray(16), MasterPasswordRules.MIN_ITERATIONS, ByteArray(32)))
 
-    @Test fun theCurrentCheckComesFromTheManagerOfItsTime() {
+    @Test fun onlyTheCurrentManagingDevicesCheckCounts() {
         vectors.getAsJsonArray("current").map { it.asJsonObject }.forEach { case ->
-            val managers = case.getAsJsonArray("managers").map { it.asString }
+            val head = case.get("head").asLong
+            val manager = case.getAsJsonArray("managers").map { it.asString }.getOrNull(head.toInt() - 1)
             val candidates = case.getAsJsonArray("candidates").map { it.asJsonObject }
                 // The checked constructor refuses sequence 0, as parsing does: such a check never exists here.
                 .filter { it.get("membershipSequence").asLong >= 1 }.map(::candidate)
-            val chosen = MasterPasswordRules.current(candidates, case.get("head").asLong) { managers.getOrNull(it.toInt() - 1) }
+            val held = case.get("held")?.takeUnless { it.isJsonNull }?.asString
+            val chosen = MasterPasswordRules.currentOrHeld(candidates, head, manager, held)
             val expected = case.get("expected").takeUnless { it.isJsonNull }?.asString
             assertEquals(case.text("name"), expected, chosen?.hash)
+            if (held == null) assertEquals(case.text("name"), expected, MasterPasswordRules.current(candidates, head, manager)?.hash)
         }
+    }
+
+    @Test fun aFormerManagingDevicesNewCheckIsRefused() {
+        // phone-a managed until event 5 moved the role to phone-b. Still paired, it writes a check for a
+        // password of its choosing, naming an event from when it managed and a higher epoch.
+        val genuine = MasterPasswordRules.Candidate("phone-b", "copy", MasterPasswordRules.Check(3, 4, ByteArray(16), 3, ByteArray(32)))
+        val forged = MasterPasswordRules.Candidate("phone-a", "forged", MasterPasswordRules.Check(99, 4, ByteArray(16), 3, ByteArray(32) { 1 }))
+        assertEquals("copy", MasterPasswordRules.current(listOf(genuine, forged), 6, "phone-b")?.hash)
+        assertNull(MasterPasswordRules.current(listOf(forged), 6, "phone-b"))
+        // Nor can it replace the check a device was asked for while phone-b has none yet.
+        assertNull(MasterPasswordRules.currentOrHeld(listOf(forged), 6, "phone-b", "earlier"))
+        // The copy carried over at the transfer is the same payload; anything else is not a copy.
+        assertTrue(MasterPasswordRules.isCopyOf(genuine.check, MasterPasswordRules.Check(3, 4, ByteArray(16), 3, ByteArray(32))))
+        assertFalse(MasterPasswordRules.isCopyOf(forged.check, genuine.check))
+        assertFalse(MasterPasswordRules.isCopyOf(genuine.check, MasterPasswordRules.Check(3, 5, ByteArray(16), 3, ByteArray(32))))
     }
 
     @Test fun aDeviceHoldsThePasswordOnceItSwitchedOrJoinedAfter() {

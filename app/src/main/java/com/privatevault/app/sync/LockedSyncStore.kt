@@ -1142,20 +1142,29 @@ internal class LockedSyncStore(private val context: Context,
     /**
      * Set by the unlocked app while this phone still has to switch to the managing device's new master password,
      * for the group of [vaultId], and cleared with null: Wi-Fi and Drive sync wait until it switches, locked or not.
+     * [checkHash] is the change hash of the check it was asked for ([masterPasswordSwitchHeld]).
      */
-    @Synchronized fun setMasterPasswordSwitchPending(vaultId: String?) {
+    @Synchronized fun setMasterPasswordSwitchPending(vaultId: String?, checkHash: String? = null) {
         if (vaultId == null) { AtomicFile(masterPasswordFile).delete(); return }
-        if (masterPasswordSwitchVault() != vaultId) writeProtected(masterPasswordFile, vaultId.toByteArray(Charsets.UTF_8))
+        val marker = listOfNotNull(vaultId, checkHash).joinToString("\n")
+        if (masterPasswordSwitchMarker() != marker) writeProtected(masterPasswordFile, marker.toByteArray(Charsets.UTF_8))
     }
+
+    /**
+     * The check this phone was last asked to switch to in the group of [vaultId]: it stays asked for while the
+     * managing device has no check of its own yet ([MasterPasswordRules.currentOrHeld]). Null when none.
+     */
+    @Synchronized fun masterPasswordSwitchHeld(vaultId: String): String? =
+        masterPasswordSwitchMarker()?.split('\n')?.takeIf { it.size == 2 && it[0] == vaultId }?.get(1)?.ifBlank { null }
 
     /** True while sync waits for this phone's master password switch. A marker that can't be read counts. */
     @Synchronized fun masterPasswordSwitchPending(): Boolean {
         if (!masterPasswordFile.exists() && !File(masterPasswordFile.path + ".bak").exists()) return false
-        val vaultId = masterPasswordSwitchVault() ?: return true
+        val vaultId = masterPasswordSwitchMarker()?.substringBefore('\n') ?: return true
         return snapshot()?.vaultId?.let { it == vaultId } ?: true
     }
 
-    private fun masterPasswordSwitchVault(): String? = runCatching {
+    private fun masterPasswordSwitchMarker(): String? = runCatching {
         if (!masterPasswordFile.exists() && !File(masterPasswordFile.path + ".bak").exists()) return@runCatching null
         val bytes = readProtected(masterPasswordFile)
         try { bytes.toString(Charsets.UTF_8) } finally { bytes.fill(0) }

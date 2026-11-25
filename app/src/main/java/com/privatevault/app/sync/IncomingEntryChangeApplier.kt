@@ -43,7 +43,9 @@ internal class UnsupportedSyncEntityException(val entityType: String) : Exceptio
 /**
  * The kinds of change this app version applies. Anything else is stored without applying (M4,
  * [IncomingResult.DEFERRED]). A build writes a new kind only when every other active member announced
- * the feature that reads it ([SyncFeatures]), as appearance, site icons and sign-in methods do.
+ * the feature that reads it ([SyncFeatures]), as appearance, site icons and sign-in methods do. The
+ * version that adds a kind must also apply held changes of that kind after a pairing snapshot: an
+ * older host stored them without applying them.
  */
 internal val SUPPORTED_ENTITY_TYPES = setOf("entry", "group", "passkey", "photo", "photo_cover", "device_name",
     AppearanceSyncRules.ENTITY_TYPE, SiteIconSyncRules.ENTITY_TYPE, SignInMethodSyncRules.ENTITY_TYPE)

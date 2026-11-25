@@ -23,6 +23,17 @@ class LocalSyncRouteTest {
         assertSame(upstream, routeToPeer(listOf(hotspot, upstream), InetAddress.getByName("192.168.1.30")))
     }
 
+    @Test fun aHeldSyncPortFallsBackToTheSameSecondPortAsWindows() {
+        // Windows' fallback_sync_port("android-vault") is 38492 for its sync port 23492.
+        assertEquals(38492, fallbackSyncPort(23492))
+        assertEquals(20_000, fallbackSyncPort(35_000))
+        assertEquals(49_999, fallbackSyncPort(34_999))
+        // Another app holds the vault's port: the listener takes the second port, not a random one.
+        val held = (21_000..21_200).firstNotNullOf { runCatching { java.net.ServerSocket(it) }.getOrNull() }
+        held.use { openSyncListener(it.localPort).use { listener ->
+            assertEquals(fallbackSyncPort(it.localPort), listener.localPort) } }
+    }
+
     @Test fun hotspotWorksWithoutAWifiClientNetwork() {
         val hotspot = route("192.168.43.1", 24)
         assertSame(hotspot, routeToPeer(listOf(hotspot), InetAddress.getByName("192.168.43.10")))

@@ -263,12 +263,16 @@ internal object LanSyncExchange {
      */
     internal fun exchangeChanges(channel: EncryptedSyncChannel, store: SyncSessionStore, server: Boolean,
         peerDeviceId: String, relayRemoved: Boolean = false, beforeRound: () -> Unit = {}): Boolean {
+        // H2: per author, the highest change the peer acknowledged in this session. A peer on an older
+        // build that set a change aside reports less than it acknowledged; nothing it acknowledged goes
+        // again in this session, so the session ends instead of resending until the round limit.
+        val acknowledged = HashMap<String, Long>()
         repeat(MAX_ROUNDS) {
             beforeRound()
             val sent: Int
             val received: Int
-            if (server) { sent = sendBatch(channel, store, peerDeviceId, relayRemoved); received = receiveBatch(channel, store) }
-            else { received = receiveBatch(channel, store); sent = sendBatch(channel, store, peerDeviceId, relayRemoved) }
+            if (server) { sent = sendBatch(channel, store, peerDeviceId, relayRemoved, acknowledged); received = receiveBatch(channel, store) }
+            else { received = receiveBatch(channel, store); sent = sendBatch(channel, store, peerDeviceId, relayRemoved, acknowledged) }
             if (sent == 0 && received == 0) return true
         }
         return false
@@ -286,15 +290,18 @@ internal object LanSyncExchange {
     }
 
     private fun sendBatch(channel: EncryptedSyncChannel, store: SyncSessionStore, peerDeviceId: String,
-        relayRemoved: Boolean): Int {
+        relayRemoved: Boolean, acknowledged: MutableMap<String, Long> = HashMap()): Int {
         val progress = SyncProgress.parse(channel.receive())
         store.recordLivePeerProgress(peerDeviceId, progress)
-        val frontier = SyncFrontier(progress.received.mapValues { it.value.sequence })
+        val reported = progress.received.mapValues { it.value.sequence }
+        val frontier = SyncFrontier((reported.keys + acknowledged.keys).associateWith {
+            maxOf(reported[it] ?: 0L, acknowledged[it] ?: 0L) })
         val pending = store.pending(frontier, relayRemoved).take(MAX_BATCH)
         channel.send(pending.size.toString().toByteArray())
         pending.forEach { operation ->
             channel.send(gson.toJson(operation).toByteArray(Charsets.UTF_8))
             require(channel.receive().contentEquals(operation.hash.toByteArray(Charsets.US_ASCII)))
+            acknowledged[operation.deviceId] = maxOf(acknowledged[operation.deviceId] ?: 0L, operation.sequence)
         }
         return pending.size
     }

@@ -57,9 +57,24 @@ internal fun bindSyncSocket(manager: ConnectivityManager, socket: Socket, peer: 
     else socket.bind(InetSocketAddress(route.address, 0))
 }
 
-internal fun openSyncListener(port: Int): ServerSocket = ServerSocket().apply {
-    reuseAddress = true
-    try { bind(InetSocketAddress(port)) }
-    catch (_: BindException) { bind(InetSocketAddress(0)) }
-    soTimeout = 1000
+/**
+ * L5: the port the listener takes when another app holds [port]: half the range away, the same on
+ * every start and the same as on Windows. Devices find it through discovery, as before, and remember
+ * the port they reached; nothing on the wire changes.
+ */
+internal fun fallbackSyncPort(port: Int): Int = 20_000 + Math.floorMod(port - 20_000 + 15_000, 30_000)
+
+internal fun openSyncListener(port: Int): ServerSocket {
+    for (candidate in listOf(port, fallbackSyncPort(port))) {
+        val listener = ServerSocket().apply { reuseAddress = true }
+        try {
+            listener.bind(InetSocketAddress(candidate))
+            return listener.apply { soTimeout = 1000 }
+        } catch (_: BindException) { listener.close() }
+    }
+    return ServerSocket().apply {
+        reuseAddress = true
+        bind(InetSocketAddress(0))
+        soTimeout = 1000
+    }
 }

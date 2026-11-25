@@ -881,16 +881,23 @@ internal class LockedSyncStore(private val context: Context,
         val authors = relayableAuthors(mirror.members)
         val cutoffs = if (relayRemoved) RemovalCutoff.cutoffsOf(mirror.membershipEvents) else emptyMap()
         val pointers = outgoingPointers().filter { it.vaultId == vaultId }
-        val byHash = pointers.associateBy { it.hash }
-        return RelayRetention.gapFree(pointers.map { ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) },
-            frontier.counters, { it.deviceId in authors || RemovalCutoff.allows(cutoffs[it.deviceId], it.sequence, it.hash) },
+        val held = pointers.mapTo(hashSetOf()) { it.hash }
+        // M1: changes stored here but not applied yet go on too, so a locked device passes on what it
+        // received. Each passed the signature, membership and chain checks when it was stored ([queue]).
+        val queued = incomingPointers().filter { it.vaultId == vaultId && it.link.hash !in held }
+        val byHash = pointers.associate { it.hash to Triple(outgoing, it.deviceId, it.sequence) } +
+            queued.associate { it.link.hash to Triple(incoming, it.link.deviceId, it.link.sequence) }
+        // gapFree reads each author's run in sequence order.
+        val links = (pointers.map { ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) } + queued.map { it.link })
+            .sortedWith(compareBy({ it.deviceId }, { it.sequence }))
+        return RelayRetention.gapFree(links, frontier.counters, { it.deviceId in authors || RemovalCutoff.allows(cutoffs[it.deviceId], it.sequence, it.hash) },
             100).map { link ->
-            val pointer = byHash.getValue(link.hash)
-            val bytes = readProtected(File(outgoing, pointer.hash))
+            val (folder, deviceId, sequence) = byHash.getValue(link.hash)
+            val bytes = readProtected(File(folder, link.hash))
             try {
                 gson.fromJson(bytes.toString(Charsets.UTF_8), SyncOperationEntity::class.java).also {
-                    require(it.vaultId == pointer.vaultId && it.deviceId == pointer.deviceId &&
-                        it.sequence == pointer.sequence && it.hash == pointer.hash) { "Outgoing index changed" }
+                    require(it.vaultId == vaultId && it.deviceId == deviceId &&
+                        it.sequence == sequence && it.hash == link.hash) { "Relay index changed" }
                 }
             } finally { bytes.fill(0) }
         }.toList()

@@ -67,6 +67,28 @@ class SyncSessionResumeTest {
         assertEquals(0, receiver.duplicates)
     }
 
+    /**
+     * H2: a peer on an older build that set a change aside reports less than it acknowledged. The
+     * session takes the lower report, sends nothing twice and ends normally, not at the round limit.
+     */
+    @Test fun aPeerReportingLessThanItAcknowledgedEndsTheSessionNormally() {
+        val pc = MemoryStore(File(folder.root, "a")).apply { own(chain("pc", 5)) }
+        val oldPhone = MemoryStore(File(folder.root, "b"))
+        val first = session(pc, oldPhone)
+        assertEquals(true, first.serverFinished)
+        assertEquals(5, oldPhone.held.size)
+        assertEquals(0, oldPhone.duplicates)
+        // After unlock the older build sets change 2 aside and drops it from its report.
+        oldPhone.hidden = { it.sequence == 2L }
+        val next = session(pc, oldPhone)
+        assertEquals(true, next.serverFinished)
+        assertEquals(true, next.clientFinished)
+        // The lost ground goes once in the session, not again every round.
+        assertEquals(4, oldPhone.duplicates)
+        assertEquals(true, session(pc, oldPhone).serverFinished)
+        assertEquals(8, oldPhone.duplicates)
+    }
+
     @Test fun changesFlowBothWaysInOneSession() {
         val phone = MemoryStore(File(folder.root, "a")).apply { own(chain("phone", 40)) }
         val pc = MemoryStore(File(folder.root, "b")).apply { own(chain("pc", 25)) }
@@ -176,12 +198,14 @@ class SyncSessionResumeTest {
         var duplicates = 0
         var onQueued: (Int) -> Unit = {}
         val frontiersSeen = mutableListOf<Long>()
+        /** Held changes this store leaves out of its report, as a pre-2.3.5 build did with a set-aside change. */
+        var hidden: (SyncOperationEntity) -> Boolean = { false }
         override val photoBlobs = PhotoSyncBlobs(blobDirectory)
 
         fun own(operations: List<SyncOperationEntity>) = operations.forEach { held[it.hash] = it }
 
         override fun progress(): SyncProgress = SyncProgress(IncomingChain.received(emptyMap(), emptyList(),
-            held.values.map { ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) }), emptyMap())
+            held.values.filterNot(hidden).map { ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) }), emptyMap())
 
         override fun recordPeerProgress(deviceId: String, progress: SyncProgress) { progress.validate() }
 

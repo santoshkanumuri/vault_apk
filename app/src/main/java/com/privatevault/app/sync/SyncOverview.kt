@@ -16,7 +16,16 @@ internal data class PeerSyncFacts(val deviceId: String, val name: String, val un
     /** The newest Wi-Fi contact or signed Drive progress report; 0 = never. */
     val lastSeen: Long,
     /** The last Wi-Fi attempt to reach this device failed. */
-    val wifiFailed: Boolean = false)
+    val wifiFailed: Boolean = false,
+    /**
+     * This device's own changes that another device already applied but that have not arrived here
+     * (H1): a session ended early, or a file or change in its chain is stuck.
+     */
+    val missingHere: Long = 0L,
+    /** Its changes stored here that wait for an app update: the next one is a newer kind of change (M4). */
+    val needsUpdate: Long = 0L,
+    /** Its changes stored here that wait behind one that couldn't apply (H2). */
+    val blocked: Long = 0L)
 
 internal data class SyncFacts(
     val now: Long,
@@ -42,7 +51,9 @@ internal enum class PeerAck { UP_TO_DATE, WAITING, SILENT, NOT_CHECKED }
 
 internal enum class OverallSync { SYNCING, ATTENTION, KEYS, CONFLICTS, WAITING, WAITING_HERE, STALE, NOT_YET, UP_TO_DATE }
 
-internal enum class AttentionCause { BOTH_FAILED, WIFI_ONLY_FAILED, DRIVE_ONLY_FAILED, LOCAL_PROBLEM, REJECTED, DEVICE_SILENT }
+internal enum class AttentionCause { BOTH_FAILED, WIFI_ONLY_FAILED, DRIVE_ONLY_FAILED, LOCAL_PROBLEM, REJECTED, DEVICE_SILENT,
+    /** Changes from another device wait for this app to be updated (M4). */
+    APP_UPDATE }
 
 /** The quiet line under the headline. */
 internal enum class TransportNote {
@@ -64,7 +75,11 @@ internal data class SyncOverview(
     val days: Long = 0L,
     val note: TransportNote? = null,
     /** The devices a [note] is about; empty means "your devices". */
-    val noteDevices: List<String> = emptyList()) {
+    val noteDevices: List<String> = emptyList(),
+    /** Devices with changes another device applied that have not arrived here, the most first. */
+    val missingFrom: List<PeerSyncFacts> = emptyList(),
+    /** Devices with changes that wait here for an app update. */
+    val updateFrom: List<PeerSyncFacts> = emptyList()) {
     val needsAttention get() = state == OverallSync.ATTENTION
 }
 
@@ -116,8 +131,10 @@ internal object SyncOverviewRules {
             else -> null
         }
         val noteDevices = if (note in WIFI_NOTES) failedNames else emptyList()
+        val missingFrom = facts.peers.filter { it.missingHere > 0 }.sortedByDescending { it.missingHere }
+        val updateFrom = facts.peers.filter { it.needsUpdate > 0 }.sortedByDescending { it.needsUpdate }
         fun result(state: OverallSync, cause: AttentionCause? = null, days: Long = 0L) = SyncOverview(state, cause, acks,
-            waitingFor, waitingChanges, lastSynced, days, note, noteDevices)
+            waitingFor, waitingChanges, lastSynced, days, note, noteDevices, missingFrom, updateFrom)
 
         // No transport is left to carry waiting changes: one failed and the other is off or failed too.
         val noTransport = (wifiFailed || driveFailed) && facts.wifi != TransportHealth.OK && facts.drive != TransportHealth.OK
@@ -126,13 +143,15 @@ internal object SyncOverviewRules {
             wifiFailed && driveFailed -> result(OverallSync.ATTENTION, AttentionCause.BOTH_FAILED)
             facts.localProblem != null -> result(OverallSync.ATTENTION, AttentionCause.LOCAL_PROBLEM)
             facts.rejected > 0 -> result(OverallSync.ATTENTION, AttentionCause.REJECTED)
+            updateFrom.isNotEmpty() -> result(OverallSync.ATTENTION, AttentionCause.APP_UPDATE)
             silent != null -> result(OverallSync.ATTENTION, AttentionCause.DEVICE_SILENT, (now - silent.lastSeen) / DAY_MS)
             noTransport && !inStep -> result(OverallSync.ATTENTION,
                 if (wifiFailed) AttentionCause.WIFI_ONLY_FAILED else AttentionCause.DRIVE_ONLY_FAILED)
             facts.waitingForKeys -> result(OverallSync.KEYS)
             facts.conflicts > 0 -> result(OverallSync.CONFLICTS)
             !inStep -> result(OverallSync.WAITING)
-            facts.waitingHere -> result(OverallSync.WAITING_HERE)
+            // "Up to date" only when this device also holds everything any device applied (H1).
+            facts.waitingHere || missingFrom.isNotEmpty() -> result(OverallSync.WAITING_HERE)
             lastSynced == 0L -> result(OverallSync.NOT_YET)
             facts.peers.isNotEmpty() && lastHeard > 0 && now - lastHeard > STALE_AFTER_MS ->
                 result(OverallSync.STALE, days = (now - lastHeard) / DAY_MS)
@@ -152,7 +171,8 @@ internal object SyncOverviewRules {
     fun facts(now: Long, devices: List<Pair<String, String>>, localId: String, local: SyncProgress?,
         peerProgress: Map<String, SyncProgress>, lastContact: Map<String, Long>, lastExchange: Map<String, Long>,
         lan: DeviceSyncStatus, peerStatus: Map<String, DevicePeerStatus>, cloud: CloudSyncStatus,
-        conflicts: Int = 0, rejected: Int = 0, waitingForKeys: Boolean = false, queueWaiting: Boolean = false): SyncFacts {
+        conflicts: Int = 0, rejected: Int = 0, waitingForKeys: Boolean = false, queueWaiting: Boolean = false,
+        waitingForUpdate: Map<String, Long> = emptyMap(), blockedBehindSetAside: Map<String, Long> = emptyMap()): SyncFacts {
         val reachFailed = lan.phase == DeviceSyncPhase.ATTENTION && isReachFailure(lan.detail)
         val wifi = when {
             reachFailed -> TransportHealth.FAILED
@@ -164,12 +184,15 @@ internal object SyncOverviewRules {
             cloud.needsSignIn || cloud.lastError != null -> TransportHealth.FAILED
             else -> TransportHealth.OK
         }
-        val peers = devices.filter { it.first != localId }.map { (id, name) ->
+        val others = devices.filter { it.first != localId }
+        val peers = others.map { (id, name) ->
             val progress = peerProgress[id]
             val status = peerStatus[id]
             PeerSyncFacts(id, name, local?.let { unconfirmed(localId, it, progress) } ?: 0L, progress != null,
                 maxOf(lastContact[id] ?: 0L, lastExchange[id] ?: 0L),
-                status?.phase == DeviceSyncPhase.ATTENTION && isReachFailure(status.detail))
+                status?.phase == DeviceSyncPhase.ATTENTION && isReachFailure(status.detail),
+                local?.let { missingHere(id, it, others.mapNotNull { (peer, _) -> peerProgress[peer] }) } ?: 0L,
+                waitingForUpdate[id] ?: 0L, blockedBehindSetAside[id] ?: 0L)
         }
         return SyncFacts(now, peers,
             busy = lan.phase == DeviceSyncPhase.CONNECTING || lan.phase == DeviceSyncPhase.TRANSFERRING,
@@ -178,6 +201,15 @@ internal object SyncOverviewRules {
             localProblem = lan.detail.takeIf { lan.phase == DeviceSyncPhase.ATTENTION && !reachFailed && it.isNotBlank() },
             conflicts = conflicts, rejected = rejected, waitingForKeys = waitingForKeys,
             waitingHere = queueWaiting || lan.phase == DeviceSyncPhase.RECEIVED)
+    }
+
+    /**
+     * Changes by [author] that an active device reports applied but this device has not received:
+     * the highest head any of them applied, less what is here.
+     */
+    fun missingHere(author: String, local: SyncProgress, peers: Collection<SyncProgress>): Long {
+        val best = peers.maxOfOrNull { it.applied[author]?.sequence ?: 0L } ?: 0L
+        return (best - (local.received[author]?.sequence ?: 0L)).coerceAtLeast(0L)
     }
 
     /** True for a Wi-Fi failure to reach a device, as [LanSyncService] reports it; other problems stay errors. */

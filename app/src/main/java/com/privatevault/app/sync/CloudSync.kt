@@ -269,10 +269,21 @@ internal data class CloudSyncState(
     /** When this device last wrote its progress report; 0 in files from before the heartbeat. */
     @SerializedName("progressWrittenAt") val progressWrittenAt: Long = 0L,
     /** When this device last cleaned up old drive files ([DriveCompaction]); 0 when never. */
-    @SerializedName("driveCompactedAt") val driveCompactedAt: Long = 0L) {
+    @SerializedName("driveCompactedAt") val driveCompactedAt: Long = 0L,
+    /**
+     * The drive holds less than it did (its folder was emptied, or another account), or Drive was just
+     * connected: the unlocked app rebuilds the relay folder from the vault ([LockedSyncStore.refillRelayIfNeeded])
+     * so changes it dropped while the drive held them can be uploaded again.
+     */
+    @SerializedName("relayRefill") val relayRefill: Boolean = false,
+    /** Per author, when this device last uploaded a range again for a device stuck below it (M6). */
+    @SerializedName("reuploadedAt") val reuploadedAt: Map<String, Long> = emptyMap(),
+    /** When this device last listed the whole folder; an incremental listing can miss a late file (L3). */
+    @SerializedName("fullListedAt") val fullListedAt: Long = 0L) {
     @Suppress("USELESS_ELVIS", "SENSELESS_COMPARISON")
     fun normalized() = CloudSyncState(enabled, account ?: "", vaultId ?: "", covered ?: emptyMap(),
-        cursor ?: "", progressDigest ?: "", lastSyncAt, progressWrittenAt, driveCompactedAt)
+        cursor ?: "", progressDigest ?: "", lastSyncAt, progressWrittenAt, driveCompactedAt, relayRefill,
+        reuploadedAt ?: emptyMap(), fullListedAt)
 
     /** The same connection with the pass state of another group cleared. */
     fun forGroup(groupVaultId: String) = if (vaultId == groupVaultId) this
@@ -357,7 +368,16 @@ internal data class CloudPassReport(val received: Int = 0, val sent: Int = 0, va
     val photosSent: Int = 0, val complete: Boolean = true, val queueFull: Boolean = false,
     val removed: RemovalNotice.Removed? = null,
     /** This device waits for its new keys and only read ([TransportMirror.stranded]). */
-    val stranded: Boolean = false)
+    val stranded: Boolean = false,
+    /**
+     * Authors whose changes this device holds above a gap in the drive's copy that it could not
+     * fill: another device that still holds the missing changes uploads them.
+     */
+    val stuckAuthors: List<String> = emptyList(),
+    /** The drive's copy shrank: the unlocked app should rebuild the relay folder ([CloudSyncState.relayRefill]). */
+    val relayRefill: Boolean = false,
+    /** Drive files this device could not use in this pass (unreadable, or a download error). */
+    val unusableFiles: Int = 0)
 
 internal class NotCloudMemberException : Exception("This device is no longer in the sync group.")
 
@@ -404,21 +424,30 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
             if (newer(file.modified, state.cursor)) state = state.copy(cursor = file.modified)
             files += file
         }
-        fun save(finished: Boolean) {
+        // Set when this pass finds the drive's copy smaller than before; only the unlocked app clears it.
+        var refillRequested = false
+        // The listing cursor moves on only when a pass gets to its end (L3): a pass that stops part way
+        // lists from the old cursor again. The files it saw stay in the saved list either way.
+        val startCursor = if (stored.vaultId == mirror.vaultId) state.cursor else ""
+        fun save(finished: Boolean, end: Boolean = finished) {
             store.saveCloudFiles(files.toList())
             val saved = state
             store.updateCloudState { current -> current.normalized().copy(vaultId = saved.vaultId, covered = saved.covered,
-                cursor = saved.cursor, progressDigest = saved.progressDigest, progressWrittenAt = saved.progressWrittenAt,
-                driveCompactedAt = saved.driveCompactedAt,
+                cursor = if (end) saved.cursor else startCursor, fullListedAt = saved.fullListedAt,
+                progressDigest = saved.progressDigest, progressWrittenAt = saved.progressWrittenAt,
+                driveCompactedAt = saved.driveCompactedAt, reuploadedAt = saved.reuploadedAt,
+                relayRefill = refillRequested || (current.relayRefill && current.vaultId == saved.vaultId),
                 lastSyncAt = if (finished) now() else if (current.vaultId == saved.vaultId) current.lastSyncAt else 0L) }
         }
         fun parsed(): List<Pair<CloudFile, CloudName>> = files.mapNotNull { file -> keysFor(file.name)?.parse(file.name)?.let { file to it } }
         fun open(file: CloudFile, maxBytes: Long): ByteArray? = keysFor(file.name)?.open(file.name, drive.downloadBytes(file.id, maxBytes))
 
-        // 1. List.
-        val since = if (!full && files.isNotEmpty()) relistFrom(state.cursor) else null
+        // 1. List: the whole folder at app start, on request, and every [FULL_LIST_INTERVAL_MS], since a
+        // file can turn up in the listing later than its time says.
+        val since = if (!full && files.isNotEmpty() && now() - state.fullListedAt in 0 until FULL_LIST_INTERVAL_MS)
+            relistFrom(state.cursor) else null
         var listed = drive.list(since).filter { keysFor(it.name)?.parse(it.name) != null }
-        if (since == null) { files.clear(); state = state.copy(cursor = "") }
+        if (since == null) { files.clear(); state = state.copy(cursor = "", fullListedAt = now()) }
         listed.forEach(::remember)
         save(false)
 
@@ -570,21 +599,31 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
 
         // 3. Download what this device lacks. Every change passes the same checks as over Wi-Fi.
         val unusable = mutableSetOf<String>()
+        // Authors whose changes can't go on here: a file holds the next change but none can be used
+        // (M6), or this device's own changes can't reach the drive (C1).
+        val stuck = mutableListOf<String>()
         var queueFull = false
         downloads@ for ((author, candidates) in segments.toSortedMap()) {
             if (author == local) continue
             while (true) {
                 val head = store.progress().received[author]?.sequence ?: 0L
-                val (first, last, file) = candidates.filter { (first, last, file) ->
-                    first <= head + 1 && last > head && file.id !in unusable
-                }.maxByOrNull { it.second } ?: break
+                val next = candidates.filter { (first, last, _) -> first <= head + 1 && last > head }
+                val usable = next.filter { it.third.id !in unusable }.maxByOrNull { it.second }
+                if (usable == null) {
+                    // Every file with the next change failed: not in sync, whatever the other authors say.
+                    // A device that holds the range uploads it again ([DriveRefill.reupload]).
+                    if (next.isNotEmpty()) { stuck += author; complete = false }
+                    break
+                }
+                val (first, last, file) = usable
                 val sealed = try { drive.downloadBytes(file.id, DOWNLOAD_BYTES) }
-                catch (gone: CloudException) {
-                    if (gone.error != CloudError.NOT_FOUND) throw gone
-                    // The file list is stale: list everything on the next pass.
-                    files.removeAll { it.id == file.id }
+                catch (failure: CloudException) {
+                    // Sign-in, connection, quota and rate limits stop the pass; they are not about this file.
+                    if (failure.error != CloudError.NOT_FOUND && failure.error != CloudError.OTHER) throw failure
+                    // The file list is stale: list everything on the next pass. A file that fails for
+                    // another reason (too large, unreadable) is skipped, and the uploads still run.
+                    if (failure.error == CloudError.NOT_FOUND) { files.removeAll { it.id == file.id }; complete = false }
                     unusable += file.id
-                    complete = false
                     continue
                 }
                 val operations = runCatching {
@@ -630,21 +669,30 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
             markers[author] = maxOf(markers[author] ?: 0L, marker.floor)
         }
         val ownFloors = DriveCompaction.floors(current, store.progress().applied.mapValues { it.value.sequence })
-        val counted = markers.mapValues { (author, floor) -> DriveCompaction.countedFloor(floor, ownFloors[author] ?: 0L) }
+        val counted = markers.mapValues { (author, floor) -> DriveCompaction.countedFloor(floor, ownFloors[author] ?: 0L) }.toMutableMap()
         val covered = (segments.keys + counted.keys).associateWith { author ->
             DriveCompaction.coverage(segments[author].orEmpty().map { it.first to it.second }, counted[author] ?: 0L)
         }.toMutableMap()
+        // The drive holds less of an author than at the last pass (its folder was emptied, or files
+        // went): the unlocked app rebuilds the relay folder from the vault, so the dropped changes it
+        // still has go up again ([LockedSyncStore.refillRelayIfNeeded]).
+        if (state.covered.any { (author, was) -> (covered[author] ?: 0L) < was }) refillRequested = true
+        fun writeMarker(author: String, floor: Long, hash: String) {
+            val name = keys.floorName(author)
+            val body = gson.toJson(DriveCompaction.Marker(author, floor, hash, local, now())).toByteArray(Charsets.UTF_8)
+            val existing = files.firstOrNull { it.name == name }
+            remember(if (existing == null) drive.uploadBytes(name, keys.seal(name, body))
+                else runCatching { drive.replace(existing.id, keys.seal(name, body)) }.getOrElse { drive.uploadBytes(name, keys.seal(name, body)) })
+        }
         var uploadedFiles = 0
-        uploads@ for (member in current.members.sortedBy { it.deviceId }) {
-            if (stranded) break
-            val author = member.deviceId
-            val cutoff = if (member.status == MemberStatus.ACTIVE.name) null else cutoffs[author] ?: continue
-            var reach = covered[author] ?: 0L
-            while (true) {
-                val batch = uploadBatch(store.heldOperations(author, reach, UPLOAD_OPERATIONS), reach, cutoff)
+        fun uploadRange(author: String, from: Long, through: Long, cutoff: SyncChainHead?): Long {
+            var reach = from
+            while (reach < through) {
+                val limit = minOf(UPLOAD_OPERATIONS.toLong(), through - reach).toInt()
+                val batch = uploadBatch(store.heldOperations(author, reach, limit), reach, cutoff)
                 // A gap (an older change already pruned here): another device or a later publish fills it.
                 if (batch.isEmpty()) break
-                if (uploadedFiles >= UPLOAD_FILES_PER_PASS) { complete = false; break@uploads }
+                if (uploadedFiles >= UPLOAD_FILES_PER_PASS) { complete = false; break }
                 val plain = batch.joinToString(",", "[", "]") { gson.toJson(it) }.toByteArray(Charsets.UTF_8)
                 val name = keys.operationsName(author, batch.first().sequence, batch.last().sequence)
                 remember(drive.uploadBytes(name, keys.seal(name, plain)))
@@ -652,6 +700,29 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
                 reach = batch.last().sequence
                 sent += batch.size
             }
+            return reach
+        }
+        for (member in current.members.sortedBy { it.deviceId }) {
+            if (stranded) break
+            val author = member.deviceId
+            val cutoff = if (member.status == MemberStatus.ACTIVE.name) null else cutoffs[author] ?: continue
+            var reach = covered[author] ?: 0L
+            // The drive's copy ends below the oldest change this device still holds ([DriveRefill.plan]).
+            val oldest = store.heldOperations(author, reach, 1).firstOrNull()
+            when (DriveRefill.plan(reach, oldest?.sequence, ownFloors[author] ?: 0L, markers[author] ?: 0L)) {
+                DriveRefill.Step.MARK -> {
+                    val below = requireNotNull(oldest).sequence - 1
+                    writeMarker(author, below, oldest.previousHash)
+                    markers[author] = below
+                    counted[author] = below
+                    reach = below
+                }
+                // This device's own changes can't reach the drive until the others catch up: not complete.
+                // Another author's gap is filled by a device that still holds those changes.
+                DriveRefill.Step.STUCK -> if (author == local) { stuck += author; complete = false }
+                DriveRefill.Step.NONE -> Unit
+            }
+            reach = uploadRange(author, reach, Long.MAX_VALUE, cutoff)
             if (reach > 0) covered[author] = reach
         }
         state = state.copy(covered = covered.toMap())
@@ -720,6 +791,7 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
             remember(file)
             state = state.copy(progressDigest = digest, progressWrittenAt = writtenAt)
         }
+        val reports = mutableListOf<Pair<Pair<String, DriveRefill.PeerReport>, SyncProgress>>()
         for (file in listed) {
             val device = (keysFor(file.name)?.parse(file.name) as? CloudName.Progress)?.device ?: continue
             val peer = authors[device]?.takeIf { it != local } ?: continue
@@ -735,6 +807,7 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
             val signed = if (epochOf(file.name) == keysEpoch)
                 DriveProgress.verify(body, current.vaultId, peer, member.identityPublicKey, keysEpoch) else null
             if (signed == null) continue
+            reports += peer to DriveRefill.PeerReport(0L, runCatching { body.get("updatedAt").asLong }.getOrDefault(0L)) to signed.progress
             runCatching { store.recordPeerProgress(peer, signed.progress) }
             runCatching { signed.features?.let { store.recordPeerFeatures(peer, it) } }
             // Only a report the member signed proves it synced: an unsigned one may come from a removed
@@ -747,6 +820,21 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
             }
         }
 
+        // 6b. A device that stays below a range the drive holds goes on from a new copy of it ([DriveRefill.reupload]).
+        var reuploaded = state.reuploadedAt
+        if (!stranded) for (member in current.members.sortedBy { it.deviceId }) {
+            val author = member.deviceId
+            val reach = covered[author] ?: continue
+            val peers = reports.filter { (peer, _) -> peer.first != author }.map { (peer, progress) ->
+                peer.second.copy(received = progress.received[author]?.sequence ?: 0L) }
+            val (after, through) = DriveRefill.reupload(reach, peers, segments[author].orEmpty().map {
+                DriveRefill.Segment(it.first, it.second, parseTime(it.third.modified)) }, reuploaded[author] ?: 0L, now()) ?: continue
+            if (store.heldOperations(author, after, 1).firstOrNull()?.sequence != after + 1) continue
+            val cutoff = if (member.status == MemberStatus.ACTIVE.name) null else cutoffs[author] ?: continue
+            if (uploadRange(author, after, through, cutoff) > after) reuploaded = reuploaded + (author to now())
+        }
+        state = state.copy(reuploadedAt = reuploaded)
+
         // 7. Drive cleanup ([DriveCompaction]), at most once a day, after a complete pass, and only
         // when every active member reads floor markers.
         if (!stranded && complete && DriveCompaction.gateOpen(current) &&
@@ -757,13 +845,13 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
                 val floor = ownFloors[author] ?: continue
                 val (newFloor, gone) = DriveCompaction.cleanup(list.map { it.first to it.second }, counted[author] ?: 0L, floor)
                 if (gone.isEmpty()) continue
-                // The marker first: a stop before the deletes leaves extra files, never a gap.
-                val name = keys.floorName(author)
-                val hash = store.heldOperations(author, newFloor - 1, 1).firstOrNull { it.sequence == newFloor }?.hash.orEmpty()
-                val body = gson.toJson(DriveCompaction.Marker(author, newFloor, hash, local, now())).toByteArray(Charsets.UTF_8)
-                val existing = files.firstOrNull { it.name == name }
-                remember(if (existing == null) drive.uploadBytes(name, keys.seal(name, body))
-                    else runCatching { drive.replace(existing.id, keys.seal(name, body)) }.getOrElse { drive.uploadBytes(name, keys.seal(name, body)) })
+                // The marker first: a stop before the deletes leaves extra files, never a gap. A marker
+                // already at or above the new floor stays: lowering it would have devices upload again.
+                if (newFloor > (markers[author] ?: 0L)) {
+                    writeMarker(author, newFloor,
+                        store.heldOperations(author, newFloor - 1, 1).firstOrNull { it.sequence == newFloor }?.hash.orEmpty())
+                    markers[author] = newFloor
+                }
                 for ((first, last) in gone) {
                     if (deletes >= DriveCompaction.MAX_DELETES) break
                     list.filter { it.first == first && it.second == last }.forEach { (_, _, file) ->
@@ -783,9 +871,10 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
             state = state.copy(driveCompactedAt = now())
         }
 
-        save(complete)
+        save(complete, end = true)
         root.fill(0)
-        return CloudPassReport(received, sent, photosReceived, photosSent, complete, queueFull, stranded = stranded)
+        return CloudPassReport(received, sent, photosReceived, photosSent, complete, queueFull, stranded = stranded,
+            stuckAuthors = stuck.distinct(), relayRefill = refillRequested, unusableFiles = unusable.size)
     }
 
     /**
@@ -819,6 +908,8 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
         /** An unchanged progress report is rewritten after this long, as a sign of life. */
         const val PROGRESS_HEARTBEAT_MS = 60 * 60 * 1000L
         const val UPLOAD_FILES_PER_PASS = 64
+        /** A pass lists the whole folder at least this often (L3). */
+        const val FULL_LIST_INTERVAL_MS = 6L * 60 * 60 * 1000
         const val PHOTOS_PER_PASS = 32
         /** Blobs under a rotated prefix are sealed in memory; larger ones travel over Wi-Fi only. */
         const val SEALED_BLOB_BYTES = 32L * 1024 * 1024
@@ -827,6 +918,9 @@ internal class CloudSyncPass(private val store: CloudSyncStore, private val driv
         /** A relisting starts this long before the newest file seen, to cover drive clock skew. */
         private val LIST_OVERLAP: Duration = Duration.ofMinutes(10)
         private val HASH = Regex("[a-f0-9]{64}")
+
+        /** A drive time as epoch milliseconds; 0 when it can't be read. */
+        fun parseTime(value: String): Long = runCatching { Instant.parse(value).toEpochMilli() }.getOrDefault(0L)
 
         /** The time to list from: a little before the newest file already seen, or null for a full listing. */
         fun relistFrom(cursor: String): String? = runCatching { Instant.parse(cursor).minus(LIST_OVERLAP).toString() }.getOrNull()

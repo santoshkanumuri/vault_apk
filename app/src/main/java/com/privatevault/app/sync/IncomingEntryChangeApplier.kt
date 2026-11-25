@@ -32,6 +32,12 @@ import javax.crypto.spec.SecretKeySpec
 enum class IncomingResult { APPLIED, REPLAY, CONFLICT, OBSOLETE }
 internal class MissingPhotoDependencyException : Exception("Cover photo is still waiting for its image")
 internal class MissingRecordDependencyException : Exception("A linked item is still waiting to sync")
+/** A change of a kind this app version doesn't know: it waits for an app update ([SUPPORTED_ENTITY_TYPES]). */
+internal class UnsupportedSyncEntityException(val entityType: String) : Exception("Update this app to apply a newer kind of change")
+
+/** The kinds of change this app version applies. Anything else waits ([UnsupportedSyncEntityException]). */
+internal val SUPPORTED_ENTITY_TYPES = setOf("entry", "group", "passkey", "photo", "photo_cover", "device_name",
+    AppearanceSyncRules.ENTITY_TYPE, SiteIconSyncRules.ENTITY_TYPE, SignInMethodSyncRules.ENTITY_TYPE)
 
 internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
     private val photoBlobs: PhotoSyncBlobs? = null, private val context: Context? = null,
@@ -58,19 +64,15 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
         // "Mark as lost" on this device: nothing after the lost device's last known change.
         require(LostManagerFreeze.allowsChange(LostManagerFreeze.of(database.syncDao().lostManager(operation.vaultId)),
             operation.deviceId, operation.sequence, operation.hash)) { "That device was marked as lost" }
-        require(operation.entityType == "entry" || operation.entityType == "group" ||
-            operation.entityType == "passkey" || operation.entityType == "photo" ||
-            operation.entityType == "photo_cover" || operation.entityType == "device_name" ||
-            operation.entityType == AppearanceSyncRules.ENTITY_TYPE || operation.entityType == SiteIconSyncRules.ENTITY_TYPE ||
-            operation.entityType == SignInMethodSyncRules.ENTITY_TYPE) {
-            "Unsupported sync entity"
-        }
         val change = operation.toChangeRecord()
         change.validate()
         val signature = Base64.getUrlDecoder().decode(change.deviceSignature)
         require(DeviceIdentityCrypto.verify(Base64.getUrlDecoder().decode(member.identityPublicKey), change.signingBytes(), signature)) {
             "Invalid device signature"
         }
+        // A kind of change a newer app version made: it waits here until this app is updated, on
+        // Android and on Windows alike (M4). Setting it aside would drop it for good.
+        if (operation.entityType !in SUPPORTED_ENTITY_TYPES) throw UnsupportedSyncEntityException(operation.entityType)
         // Entity-ID HMACs use the epoch-1 key; the payload uses the key of its own epoch ([SyncKeyring]).
         val contentKey = database.syncContentKey(vaultKey)
         val keyring = database.syncKeyring(vaultKey)

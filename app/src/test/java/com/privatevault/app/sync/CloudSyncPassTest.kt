@@ -22,6 +22,7 @@ import com.privatevault.app.sync.MembershipVectors as V
 
 /** Cloud passes between devices of one group through a drive in memory, as Windows `cloud_sync.rs` tests. */
 class CloudSyncPassTest {
+    private companion object { const val HOUR = 60 * 60 * 1000L }
     @get:Rule val folder = TemporaryFolder()
     private val keys = requireNotNull(CloudKeys.derive(Base64.getUrlDecoder().decode(V.rootSecret), V.VAULT_ID))
 
@@ -488,6 +489,177 @@ class CloudSyncPassTest {
         assertEquals(3, b.mirror.membershipEvents.size)
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Sync audit fixes (C1, M6, L3): the drive's copy of every author stays readable.
+    // ---------------------------------------------------------------------------------------------
+
+    private fun applied(sequence: Long, history: List<SyncOperationEntity>) = SyncChainHead(sequence, history[(sequence - 1).toInt()].hash)
+
+    private fun marker(drive: MemoryDrive, author: String): DriveCompaction.Marker? {
+        val name = keys.floorName(author)
+        val bytes = drive.files.firstOrNull { it.first.name == name }?.second ?: return null
+        return com.google.gson.Gson().fromJson(String(requireNotNull(keys.open(name, bytes))), DriveCompaction.Marker::class.java)
+    }
+
+    @Test fun historyTrimmedWhileDriveWasOffGoesOnFromAFloorMarker() {
+        // Wi-Fi only for a while: every device applied A's 20 changes and trimmed 1..10. Then Drive is turned on.
+        val history = chain(V.MANAGER_ID, V.managerSeed, 21)
+        val all = SyncProgress(mapOf(V.MANAGER_ID to applied(20, history)), mapOf(V.MANAGER_ID to applied(20, history)))
+        fun trimmed(id: String) = device(id).apply {
+            own(history.subList(10, 20)); base = mapOf(V.MANAGER_ID to applied(10, history))
+            mirror = mirror.copy(peerProgress = (listOf(V.MANAGER_ID, V.CLIENT_ID, V.OTHER_ID) - id).associateWith { all })
+        }
+        val a = trimmed(V.MANAGER_ID)
+        val c = trimmed(V.OTHER_ID)
+        val drive = MemoryDrive()
+        val first = a.pass(drive)
+        assertEquals(10, first.sent)
+        assertTrue(first.complete)
+        assertEquals(listOf(10L, V.MANAGER_ID), marker(drive, V.MANAGER_ID)!!.let { listOf(it.floor, it.author) })
+        // A's next change reaches the device that only meets A through the drive.
+        a.own(listOf(history[20]))
+        assertEquals(1, a.pass(drive).sent)
+        val received = c.pass(drive)
+        assertEquals(1, received.received)
+        assertTrue(received.complete)
+        assertEquals(21L, c.progress().received[V.MANAGER_ID]?.sequence)
+        // A device whose own floor is lower doesn't count the marker but holds nothing below it either: no gap upload.
+        assertEquals(0, a.pass(drive).sent)
+    }
+
+    @Test fun aMarkerWaitsUntilEveryActiveMemberAppliedBelowIt() {
+        val history = chain(V.MANAGER_ID, V.managerSeed, 20)
+        val a = device(V.MANAGER_ID).apply {
+            own(history.subList(10, 20)); base = mapOf(V.MANAGER_ID to applied(10, history))
+            // The third device applied only 5 of A's changes: 6..10 may still be needed from the drive.
+            mirror = mirror.copy(peerProgress = mapOf(
+                V.CLIENT_ID to SyncProgress(mapOf(V.MANAGER_ID to applied(20, history)), mapOf(V.MANAGER_ID to applied(20, history))),
+                V.OTHER_ID to SyncProgress(mapOf(V.MANAGER_ID to applied(5, history)), mapOf(V.MANAGER_ID to applied(5, history)))))
+        }
+        val drive = MemoryDrive()
+        val report = a.pass(drive)
+        assertEquals(0, report.sent)
+        assertNull(marker(drive, V.MANAGER_ID))
+        // This device's own changes can't reach the drive: the pass is not complete, and it says which.
+        assertFalse(report.complete)
+        assertEquals(listOf(V.MANAGER_ID), report.stuckAuthors)
+        assertEquals(0L, a.state.lastSyncAt)
+    }
+
+    @Test fun anEmptiedDriveFolderIsRefilledFromWhatTheDevicesHold() {
+        val history = chain(V.MANAGER_ID, V.managerSeed, 21)
+        val drive = MemoryDrive()
+        val a = device(V.MANAGER_ID).apply { own(history.take(20)) }
+        val c = device(V.OTHER_ID)
+        assertEquals(20, a.pass(drive).sent)
+        assertEquals(20, c.pass(drive).received)
+        c.apply()
+        // History trimmed below 11 on both, then the app folder is emptied ("Delete hidden app data", another account).
+        val all = SyncProgress(mapOf(V.MANAGER_ID to applied(20, history)), mapOf(V.MANAGER_ID to applied(20, history)))
+        listOf(a, c).forEach { device ->
+            history.take(10).forEach { device.held.remove(it.hash) }
+            device.base = mapOf(V.MANAGER_ID to applied(10, history))
+            device.mirror = device.mirror.copy(peerProgress = (listOf(V.MANAGER_ID, V.CLIENT_ID, V.OTHER_ID) - device.mirror.localDeviceId)
+                .associateWith { all })
+        }
+        drive.files.clear()
+        a.own(listOf(history[20]))
+        val refill = a.pass(drive, full = true)
+        // The drive holds less than before: the unlocked app is asked to rebuild the relay folder.
+        assertTrue(refill.relayRefill)
+        assertTrue(a.state.relayRefill)
+        assertEquals(11, refill.sent)
+        assertEquals(10L, marker(drive, V.MANAGER_ID)!!.floor)
+        val received = c.pass(drive, full = true)
+        assertEquals(1, received.received)
+        assertEquals(21L, c.progress().received[V.MANAGER_ID]?.sequence)
+    }
+
+    @Test fun anUnreadableFileIsUploadedAgainForTheDeviceStuckBelowIt() {
+        val history = chain(V.MANAGER_ID, V.managerSeed, 15)
+        val drive = MemoryDrive()
+        // Sealed correctly, but 9 changes under a name for 10: no reader can use it, and writers count it as coverage.
+        val bad = keys.operationsName(V.MANAGER_ID, 1, 10)
+        drive.put(bad, keys.seal(bad, wire(history.take(9))))
+        val start = 1_790_000_000_000L
+        val a = device(V.MANAGER_ID).apply { own(history); now = { start + 30 * HOUR } }
+        val c = device(V.OTHER_ID).apply { now = { start + 30 * HOUR } }
+        assertEquals(5, a.pass(drive).sent)
+        val stuck = c.pass(drive)
+        assertEquals(0, stuck.received)
+        assertFalse(stuck.complete)
+        assertEquals(listOf(V.MANAGER_ID), stuck.stuckAuthors)
+        // The writer sees in the reader's signed report that it stays below a file the drive got long ago.
+        val again = a.pass(drive, full = true)
+        assertEquals(10, again.sent)
+        val recovered = c.pass(drive)
+        assertEquals(15, recovered.received)
+        assertTrue(recovered.complete)
+        // At most once a day per author.
+        assertEquals(0, a.pass(drive, full = true).sent)
+    }
+
+    @Test fun anOversizedFileIsSkippedAndThePassStillUploads() {
+        val drive = MemoryDrive()
+        val big = keys.operationsName(V.MANAGER_ID, 1, 1)
+        drive.put(big, ByteArray((CloudSyncPass.DOWNLOAD_BYTES + 1).toInt()))
+        val c = device(V.OTHER_ID).apply { own(chain(V.OTHER_ID, V.otherSeed, 3)) }
+        val report = c.pass(drive)
+        assertEquals(3, report.sent)
+        assertFalse(report.complete)
+        assertEquals(1, report.unusableFiles)
+    }
+
+    @Test fun aLateListedFileIsFoundByThePeriodicFullListing() {
+        val history = chain(V.MANAGER_ID, V.managerSeed, 3)
+        val drive = MemoryDrive()
+        var clock = 1_790_000_000_000L
+        val c = device(V.OTHER_ID).apply { own(chain(V.OTHER_ID, V.otherSeed, 1)); now = { clock } }
+        c.pass(drive)
+        val cursor = Instant.parse(c.state.cursor)
+        // A file the listing shows later than its time says, beyond the 10-minute overlap.
+        val late = keys.operationsName(V.MANAGER_ID, 1, 3)
+        drive.putAt(late, keys.seal(late, wire(history)), cursor.minusSeconds(11 * 60).toString())
+        assertEquals(0, c.pass(drive).received)
+        clock += CloudSyncPass.FULL_LIST_INTERVAL_MS
+        assertEquals(3, c.pass(drive).received)
+        assertEquals(null, drive.listings.last())
+    }
+
+    @Test fun aPassThatStopsPartWayKeepsTheOldListingCursor() {
+        val drive = MemoryDrive()
+        val c = device(V.OTHER_ID).apply { own(chain(V.OTHER_ID, V.otherSeed, 1)) }
+        c.pass(drive)
+        val cursor = c.state.cursor
+        c.own(chain(V.OTHER_ID, V.otherSeed, 2).drop(1))
+        drive.put(keys.operationsName(V.MANAGER_ID, 5, 5), ByteArray(10))
+        drive.failUploads = true
+        assertEquals(CloudError.OFFLINE, (runCatching { c.pass(drive) }.exceptionOrNull() as CloudException).error)
+        assertEquals(cursor, c.state.cursor)
+        drive.failUploads = false
+        assertEquals(1, c.pass(drive).sent)
+        assertNotEquals(cursor, c.state.cursor)
+    }
+
+    @Test fun driveRefillPlansAndReuploadsByTheSharedRules() {
+        assertEquals(DriveRefill.Step.NONE, DriveRefill.plan(10, 11, 20, 0))
+        assertEquals(DriveRefill.Step.NONE, DriveRefill.plan(10, null, 20, 0))
+        assertEquals(DriveRefill.Step.MARK, DriveRefill.plan(0, 11, 10, 0))
+        assertEquals(DriveRefill.Step.STUCK, DriveRefill.plan(0, 11, 9, 0))
+        // An existing marker is never lowered.
+        assertEquals(DriveRefill.Step.STUCK, DriveRefill.plan(0, 11, 20, 10))
+        assertEquals(DriveRefill.Step.MARK, DriveRefill.plan(5, 11, 20, 5))
+        val file = DriveRefill.Segment(1, 10, 1_000L)
+        val day = DriveRefill.REUPLOAD_INTERVAL_MS
+        val stuck = DriveRefill.PeerReport(0, 1_000L + DriveRefill.STUCK_AFTER_MS)
+        assertEquals(0L to 10L, DriveRefill.reupload(15, listOf(stuck), listOf(file), 0, 10 * day))
+        // Not yet stuck long enough, already re-uploaded today, a gap rather than a file, or nobody behind.
+        assertNull(DriveRefill.reupload(15, listOf(stuck.copy(reportedAt = 2_000L)), listOf(file), 0, 10 * day))
+        assertNull(DriveRefill.reupload(15, listOf(stuck), listOf(file), 10 * day - 1, 10 * day))
+        assertNull(DriveRefill.reupload(15, listOf(stuck), listOf(DriveRefill.Segment(2, 10, 1_000L)), 0, 10 * day))
+        assertNull(DriveRefill.reupload(15, listOf(stuck.copy(received = 15)), listOf(file), 0, 10 * day))
+    }
+
     private class Rotation(val set: PackageSet, val secret: ByteArray, val remove: SyncMembershipEvent)
 
     /** The manager removes OTHER at epoch 2 with a random S(2) and a package for the client, as [EpochKeyRotation.rotate]. */
@@ -542,11 +714,17 @@ class CloudSyncPassTest {
         val files = mutableListOf<Pair<CloudFile, ByteArray>>()
         val listings = mutableListOf<String?>()
         private var clock = 0L
+        /** Uploads fail as when the connection drops. */
+        var failUploads = false
 
         private fun stamp(): String = Instant.ofEpochSecond(1_790_000_000L + 3600 * ++clock).toString()
 
         fun put(name: String, bytes: ByteArray): CloudFile =
             CloudFile(UUID.randomUUID().toString(), name, bytes.size.toLong(), stamp()).also { files += it to bytes }
+
+        /** A file whose listing time is [modified]: one that shows up in the listing later than its time says. */
+        fun putAt(name: String, bytes: ByteArray, modified: String): CloudFile =
+            CloudFile(UUID.randomUUID().toString(), name, bytes.size.toLong(), modified).also { files += it to bytes }
 
         override fun list(modifiedAfter: String?): List<CloudFile> {
             listings += modifiedAfter
@@ -560,6 +738,7 @@ class CloudSyncPassTest {
         }
 
         override fun upload(name: String, size: Long, content: InputStream): CloudFile {
+            if (failUploads) throw CloudException(CloudError.OFFLINE)
             val bytes = content.readBytes()
             assertEquals(size, bytes.size.toLong())
             return put(name, bytes)
@@ -593,6 +772,8 @@ class CloudSyncPassTest {
         val blobs = File(directory, "blobs")
         override val photoBlobs = PhotoSyncBlobs(blobs)
         var now: () -> Long = System::currentTimeMillis
+        /** Applied heads below what [held] starts at: history this device trimmed ([HistoryCompaction]). */
+        var base: Map<String, SyncChainHead> = emptyMap()
         /** Refuses every peer progress report, as a report older than one received over Wi-Fi is. */
         var refuseProgress = false
         /** This device's Ed25519 seed: it signs progress reports and key statements. */
@@ -611,7 +792,7 @@ class CloudSyncPassTest {
             mirrorWithMembership(mirror, events)?.let { mirror = it }
         }
         override fun progress(): SyncProgress {
-            val applied = IncomingChain.received(emptyMap(), links(held.values), emptyList())
+            val applied = IncomingChain.received(base, links(held.values), emptyList())
             return SyncProgress(IncomingChain.received(applied, emptyList(), links(queued.values)), applied)
         }
         override fun recordPeerProgress(deviceId: String, progress: SyncProgress) {

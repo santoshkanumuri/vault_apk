@@ -218,6 +218,14 @@
         <item quantity="other">%1$d changes aren\'t on every device yet.</item>
     </plurals>
     <string name="sync_detail_waiting_here">Changes arrived and are waiting to apply on this device.</string>
+    <plurals name="sync_detail_missing_from">
+        <item quantity="one">%1$d change from %2$s hasn\'t arrived here yet.</item>
+        <item quantity="other">%1$d changes from %2$s haven\'t arrived here yet.</item>
+    </plurals>
+    <plurals name="sync_detail_missing_many">
+        <item quantity="one">%1$d change from your other devices hasn\'t arrived here yet.</item>
+        <item quantity="other">%1$d changes from your other devices haven\'t arrived here yet.</item>
+    </plurals>
     <string name="sync_detail_stale_drive">Open Nuvori on your other device so it syncs with Google Drive.</string>
     <string name="sync_detail_stale_wifi">Open Nuvori on your other device on the same Wi-Fi.</string>
     <string name="sync_detail_not_yet">Waiting for the first sync with your devices.</string>
@@ -232,6 +240,14 @@
         <item quantity="other">Wi-Fi couldn\'t reach %1$s. Your changes wait until they connect.</item>
     </plurals>
     <string name="sync_detail_drive_only_failed">Google Drive didn\'t finish the last sync. Your changes wait on this device.</string>
+    <plurals name="sync_detail_rejected_from">
+        <item quantity="one">%1$d change from %2$s can\'t apply here. Update both devices, then retry.</item>
+        <item quantity="other">%1$d changes from %2$s can\'t apply here. Update both devices, then retry.</item>
+    </plurals>
+    <plurals name="sync_detail_app_update">
+        <item quantity="one">Update Nuvori to apply %1$d change from %2$s.</item>
+        <item quantity="other">Update Nuvori to apply %1$d changes from %2$s.</item>
+    </plurals>
     <plurals name="sync_detail_rejected">
         <item quantity="one">%1$d incoming change couldn\'t apply. Update both devices, then retry.</item>
         <item quantity="other">%1$d incoming changes couldn\'t apply. Update both devices, then retry.</item>

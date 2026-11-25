@@ -1019,6 +1019,11 @@ internal class LockedSyncStore(private val context: Context,
                 progress = true
             }
         } while (progress)
+        // M2: concurrent edits of different fields of one item merge into one signed change, sent with
+        // the publish below. A conflict that can't merge stays for the user. Never stops the pass.
+        if (database.syncDao().conflicts().any { it.resolvedAtUtc.isEmpty() && it.entityType in EntryFieldMerge.ENTITY_TYPES })
+            runCatching { SyncConflictResolver(database, AndroidDeviceIdentityStore(context), photoBlobs, context).autoMerge(localKey) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         // M13: every queued photo's image is asked for now, not only the first one each device's chain
         // stops at, so N photos arrive in one session instead of N.
         val queuedPhotos = synchronized(this) { readOperations(incoming) }.filter { it.entityType == "photo" && it.kind == "upsert" }

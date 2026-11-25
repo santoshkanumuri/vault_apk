@@ -108,9 +108,26 @@ class SyncOverviewTest {
         val result = overview(peer("Pixel 8", seenAgo = null, reported = false))
         assertEquals(OverallSync.NOT_YET, result.state)
         assertEquals(PeerAck.NOT_CHECKED, result.peers["id-Pixel 8"])
-        // Changes made here before its first report wait for it.
-        assertEquals(PeerAck.WAITING, SyncOverviewRules.peerAck(peer("Pixel 8", unconfirmed = 1, seenAgo = null,
+        // Before its first report the count is every change this device wrote, not what it misses.
+        assertEquals(PeerAck.NOT_CHECKED, SyncOverviewRules.peerAck(peer("Pixel 8", unconfirmed = 1, seenAgo = null,
             reported = false), now))
+    }
+
+    /** A PC whose pairing never finished: the phone signed its ADD, but it never synced. */
+    @Test fun aDeviceThatNeverFinishedPairingNeverMakesChangesWaitForever() {
+        val halfAdded = peer("Windows device", unconfirmed = 1303, seenAgo = null, reported = false)
+        val alone = overview(halfAdded)
+        assertEquals(OverallSync.NOT_YET, alone.state)
+        assertEquals(0L, alone.waitingChanges)
+        assertTrue(alone.waitingFor.isEmpty())
+        // Beside a device that is in step, the status follows that device; the half-added one stays "not checked".
+        val withPhone = overview(peer("Pixel 8"), halfAdded)
+        assertEquals(OverallSync.UP_TO_DATE, withPhone.state)
+        assertEquals(PeerAck.NOT_CHECKED, withPhone.peers["id-Windows device"])
+        // Once it reports, its real backlog counts again.
+        val reported = overview(peer("Windows device", unconfirmed = 3, seenAgo = minute, reported = true))
+        assertEquals(OverallSync.WAITING, reported.state)
+        assertEquals(3L, reported.waitingChanges)
     }
 
     @Test fun pausedSyncIsAQuietNote() {

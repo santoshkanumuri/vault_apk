@@ -14,6 +14,8 @@ import javax.crypto.spec.SecretKeySpec
 internal object LanSyncExchange {
     class PeerBusy : Exception("The device is finishing another sync")
     class BatchLimitReached : Exception("More changes remain after this sync pass")
+    /** This phone owes a switch to its managing device's new master password, so it doesn't sync ([MasterPasswordSync]). */
+    class MasterPasswordSwitchPending : Exception(MasterPasswordSync.SWITCH_FIRST)
     /** A verified, signed REMOVE of this device arrived. The caller leaves the group locally. */
     class RemovedFromGroup(val notice: RemovalNotice.Removed) : Exception("This device was removed from the sync group")
     /** A newer signed history (a later key epoch) was adopted; reconnect to use it. */
@@ -65,6 +67,7 @@ internal object LanSyncExchange {
      */
     fun run(frames: SyncFrames, store: LockedSyncStore, server: Boolean, checked: ClientFirst? = null,
         onAuthenticated: (String, String) -> Unit = { _, _ -> }) {
+        if (store.masterPasswordSwitchPending()) throw MasterPasswordSwitchPending()
         val mirror = requireNotNull(store.snapshot())
         val currentSecret = mirror.epochSecret(mirror.keyEpoch)
         require(Base64.getUrlDecoder().decode(currentSecret).size == 32) { "Invalid transport credential" }

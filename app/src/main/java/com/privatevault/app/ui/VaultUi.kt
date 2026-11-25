@@ -511,6 +511,7 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
     val appContext = LocalContext.current
     SyncAcknowledgementEffect(viewModel)
     MembershipNoticesEffect(viewModel)
+    MasterPasswordSwitchPrompt(viewModel)
     val navigate: (() -> Unit) -> Unit = { action ->
         if (editorOpen) pendingNavigation = action else action()
     }
@@ -600,7 +601,8 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
                 sync = homeSync, membershipNotice = membershipNotice,
                 dismissMembershipNotice = { membershipNotice?.let { dismissMembershipNotice(viewModel, it, appContext) } }, listState = listStates.getValue(VaultTab.HOME),
                 openDevices = { openSettings("Android devices") }, copy = onCopySecret, authenticate = onBiometricAction,
-                onAdd = { navigate { showQuickAdd = true } }, onSyncNow = syncNow, onScanImport = { showScanImport = true })
+                onAdd = { navigate { showQuickAdd = true } }, onSyncNow = syncNow, onScanImport = { showScanImport = true },
+                switchBanner = { MasterPasswordSwitchBanner(viewModel) })
             else {
                 val results = remember(entries, searchQuery) { entriesForTab(entries, VaultTab.HOME, searchQuery, "Default") }
                 GlobalSearchResults(results, groups.filter { it.folderType != null &&

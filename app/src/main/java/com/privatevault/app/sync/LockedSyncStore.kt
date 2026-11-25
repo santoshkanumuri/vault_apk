@@ -184,6 +184,8 @@ internal class LockedSyncStore(private val context: Context,
     private val rejected = File(directory, "rejected")
     private val leaveNoticeFile = File(directory, "leave-notice")
     private val removalNoticeFile = File(directory, "removal-notice")
+    /** Present while this phone owes a switch to its managing device's new master password ([MasterPasswordSync]). */
+    private val masterPasswordFile = File(directory, "master-password-switch")
     private val cloudStateFile = File(directory, "cloud-state")
     private val cloudFilesFile = File(directory, "cloud-files")
     /** The sealed chain coordinates of the relay folder ([outgoingPointers]). */
@@ -1127,11 +1129,48 @@ internal class LockedSyncStore(private val context: Context,
             File(directory, name).let { if (it.exists()) check(it.delete()) }
         }
         AtomicFile(relayIndexFile).delete()
+        AtomicFile(masterPasswordFile).delete()
         outgoingIndex = null
         incomingIndex = null
         rejectedIndex = null
         generation++
         fullScanFor = null
+    }
+
+    // Master password switch (MasterPasswordSync).
+
+    /**
+     * Set by the unlocked app while this phone still has to switch to the managing device's new master password,
+     * for the group of [vaultId], and cleared with null: Wi-Fi and Drive sync wait until it switches, locked or not.
+     */
+    @Synchronized fun setMasterPasswordSwitchPending(vaultId: String?) {
+        if (vaultId == null) { AtomicFile(masterPasswordFile).delete(); return }
+        if (masterPasswordSwitchVault() != vaultId) writeProtected(masterPasswordFile, vaultId.toByteArray(Charsets.UTF_8))
+    }
+
+    /** True while sync waits for this phone's master password switch. A marker that can't be read counts. */
+    @Synchronized fun masterPasswordSwitchPending(): Boolean {
+        if (!masterPasswordFile.exists() && !File(masterPasswordFile.path + ".bak").exists()) return false
+        val vaultId = masterPasswordSwitchVault() ?: return true
+        return snapshot()?.vaultId?.let { it == vaultId } ?: true
+    }
+
+    private fun masterPasswordSwitchVault(): String? = runCatching {
+        if (!masterPasswordFile.exists() && !File(masterPasswordFile.path + ".bak").exists()) return@runCatching null
+        val bytes = readProtected(masterPasswordFile)
+        try { bytes.toString(Charsets.UTF_8) } finally { bytes.fill(0) }
+    }.getOrNull()
+
+    /**
+     * The other active members that did not announce [SyncFeatures.MASTER_PASSWORD] (Wi-Fi handshake or Drive
+     * progress file), by name: the managing device changes the shared master password only when none is left,
+     * because an older build would never learn the new one. Null when this phone has no sync mirror to tell.
+     */
+    @Synchronized fun devicesWithoutMasterPasswordSync(): List<String>? {
+        val mirror = snapshot() ?: return null
+        val others = mirror.members.filter { it.status == MemberStatus.ACTIVE.name && it.deviceId != mirror.localDeviceId }
+        val missing = MasterPasswordRules.devicesWithoutFeature(others.map { it.deviceId }, mirror.peerFeatures)
+        return others.filter { it.deviceId in missing }.map { it.displayName.ifBlank { "A paired device" } }
     }
 
     // Leave and removal notices.

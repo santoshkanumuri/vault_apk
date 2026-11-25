@@ -197,6 +197,18 @@
     <string name="you_may_not_need_a_password_here_use_tha">You may not need a password here: use that button on the site.</string>
     <string name="dismiss">Dismiss</string>
     <string name="nothing_to_copy_add_details_in_nuvori">Nothing to copy. Add details in Nuvori.</string>
+    <!-- Shared master password: the managing device changed it and this phone hasn't switched yet. -->
+    <string name="master_password_switch_title">Enter the new master password</string>
+    <string name="master_password_switch_body">%1$s changed the master password for your synced devices. Enter the new password to use it on this phone too.</string>
+    <string name="master_password_switch_field">New master password</string>
+    <string name="master_password_switch_note">Sync is paused on this phone until then. Until you switch, this phone still opens with its current password.</string>
+    <string name="master_password_switch_confirm">Use new password</string>
+    <string name="master_password_switch_checking">Checking…</string>
+    <string name="master_password_switch_later">Not now</string>
+    <string name="master_password_switch_banner_title">New master password</string>
+    <string name="master_password_switch_banner">%1$s changed the master password. Sync is paused on this phone until you enter it.</string>
+    <string name="master_password_switch_banner_action">Enter password</string>
+    <string name="master_password_switch_manager_fallback">Your managing device</string>
     <!-- Sync status over Wi-Fi and Google Drive together (sync/SyncOverview.kt). Same words as Windows src/strings.ts syncStatusText. -->
     <string name="sync_state_syncing">Syncing changes</string>
     <string name="sync_state_attention">Sync needs attention</string>

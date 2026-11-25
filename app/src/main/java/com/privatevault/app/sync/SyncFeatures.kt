@@ -38,7 +38,14 @@ internal object SyncFeatures {
     /** This build reads drive floor markers; drive cleanup needs it from every active member ([DriveCompaction]). */
     const val HISTORY_COMPACTION = DriveCompaction.FEATURE
 
+    /**
+     * Password checks from the managing device and each device's switch to them, entity type
+     * [MasterPasswordRules.ENTITY_TYPE]. The managing device changes its master password while it shares the
+     * vault only when every other active member announced it ([MasterPasswordRules.devicesWithoutFeature]).
+     */
+    const val MASTER_PASSWORD = MasterPasswordRules.FEATURE
+
     /** Everything this build announces, in one list for the handshake. */
     val ANNOUNCED: List<String> = listOf(RemovalCutoff.FEATURE, APPEARANCE, SITE_ICONS, CHECKPOINT_ENROLL, SIGN_IN_METHODS,
-        MERGE_JOIN, EPOCH_KEYS, HISTORY_COMPACTION)
+        MERGE_JOIN, EPOCH_KEYS, HISTORY_COMPACTION, MASTER_PASSWORD)
 }

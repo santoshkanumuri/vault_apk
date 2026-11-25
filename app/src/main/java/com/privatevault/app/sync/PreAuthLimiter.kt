@@ -13,16 +13,22 @@ internal class PreAuthLimiter(
     private val maxFailures: Int = 5,
     private val windowMillis: Long = 120_000,
     private val blockMillis: Long = 120_000,
+    /** M7: slots only a known device's address may take, so strangers can't fill every slot. */
+    private val reservedForKnown: Int = 2,
 ) {
     private val active = HashMap<String, Int>()
     private val failures = HashMap<String, ArrayDeque<Long>>()
     private val blockedUntil = HashMap<String, Long>()
 
-    /** True when a new connection from [source] may start its check now; call [finish] afterwards. */
-    @Synchronized fun tryStart(source: String, now: Long): Boolean {
+    /**
+     * True when a new connection from [source] ([sourceKey] of its address) may start its check now;
+     * call [finish] afterwards. [known]: the address a paired device last proved membership from.
+     */
+    @Synchronized fun tryStart(source: String, now: Long, known: Boolean = false): Boolean {
         blockedUntil[source]?.let { if (now < it) return false else blockedUntil.remove(source) }
         val mine = active[source] ?: 0
-        if (mine >= perSource || active.values.sum() >= total) return false
+        val limit = if (known) total else total - reservedForKnown
+        if (mine >= perSource || active.values.sum() >= limit) return false
         active[source] = mine + 1
         return true
     }
@@ -46,3 +52,12 @@ internal class PreAuthLimiter(
         if (blockedUntil.size > 256) blockedUntil.values.removeAll { it <= now }
     }
 }
+
+/**
+ * M7: the [PreAuthLimiter] source for [address]. An IPv6 host can hold a whole /64, so its addresses
+ * count as one source; an IPv4 address is its own.
+ */
+internal fun sourceKey(address: java.net.InetAddress): String =
+    if (address is java.net.Inet6Address && !address.isLoopbackAddress)
+        address.address.copyOf(8).joinToString("") { "%02x".format(it) } + "/64"
+    else address.hostAddress.orEmpty()

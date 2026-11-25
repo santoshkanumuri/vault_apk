@@ -54,9 +54,11 @@ data class DeviceSyncStatus(val phase: DeviceSyncPhase, val detail: String)
  */
 internal enum class SyncRun { STOP, ONE_PASS, AUTO }
 
-internal fun syncRun(action: String?, paused: Boolean, notificationsOn: Boolean): SyncRun {
+internal fun syncRun(action: String?, paused: Boolean, notificationsOn: Boolean, autoRunning: Boolean = false): SyncRun {
     val oneTime = action == LanSyncService.SYNC_NOW || action == LanSyncService.SYNC_ON_OPEN
     return when {
+        // M10: a check asked for while Auto sync runs joins it, and never turns it into a one-time pass.
+        oneTime && autoRunning -> SyncRun.AUTO
         oneTime && (paused || !notificationsOn) -> SyncRun.ONE_PASS
         paused -> SyncRun.STOP
         else -> SyncRun.AUTO
@@ -91,6 +93,12 @@ class LanSyncService : Service() {
     @Volatile private var quietAttempt = false
     @Volatile private var manualCompleted = false
     @Volatile private var manualProgressAt = 0L
+    /** M10: when the current one-time pass started; devices proved since then were reached. */
+    @Volatile private var manualStartedAt = 0L
+    /** M8: when the exchange lock was last taken; 0 while it is free. */
+    @Volatile private var exchangeSince = 0L
+    /** M12: the last session failed because the other device sent something refused, not a dropped link. */
+    @Volatile private var lastFailureRefused = false
     private val instanceName = "nuvori-" + UUID.randomUUID().toString()
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = networkChanged()
@@ -194,6 +202,7 @@ class LanSyncService : Service() {
         if (run == SyncRun.ONE_PASS) {
             // A Sync now during a quiet pass makes it a normal one, with its messages.
             quietAttempt = opened && (!manualAttempt || quietAttempt)
+            if (!manualAttempt) manualStartedAt = android.os.SystemClock.elapsedRealtime()
             manualAttempt = true
             manualCompleted = false
             manualProgressAt = android.os.SystemClock.elapsedRealtime()
@@ -205,7 +214,10 @@ class LanSyncService : Service() {
                         (if (quietAttempt) QUIET_ATTEMPT_MS else 35_000)) continue
                     val searching = mutableStatus.value.phase in setOf(DeviceSyncPhase.WAITING,
                         DeviceSyncPhase.SEARCHING, DeviceSyncPhase.FOUND, DeviceSyncPhase.CONNECTING)
-                    if (searching && quietAttempt) {
+                    // M10: devices reached in this attempt keep their result; only a pass that reached none says so.
+                    val reachedAny = lastAuthenticated.values.any { it >= manualStartedAt }
+                    if (searching && reachedAny) settleStatus()
+                    else if (searching && quietAttempt) {
                         if (isPaused(this@LanSyncService)) setStatus(DeviceSyncPhase.PAUSED, "Tap Resume to check paired devices again.")
                     } else if (searching) setStatus(DeviceSyncPhase.ATTENTION, NO_DEVICE_ANSWERED)
                     stopSelf()
@@ -241,14 +253,18 @@ class LanSyncService : Service() {
                         // attempts), so a busy reply before the challenge, which every version
                         // understands, can't be caused by a stranger.
                         if (exchange.isLocked) {
+                            closeOverdueExchange()
                             socket.use {
                                 runCatching { SyncFrames(socket.getInputStream(), socket.getOutputStream())
                                     .send(MembershipWire.BUSY.toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME) }
                             }
                             continue
                         }
-                        val source = socket.inetAddress.hostAddress.orEmpty()
-                        if (!preAuth.tryStart(source, android.os.SystemClock.elapsedRealtime())) { socket.close(); continue }
+                        // M7: an IPv6 host's whole /64 is one source; a paired device's last address has reserved slots.
+                        val source = sourceKey(socket.inetAddress)
+                        val known = runCatching { store(this@LanSyncService).snapshot()?.peerAddresses?.values
+                            ?.contains(socket.inetAddress.hostAddress) == true }.getOrDefault(false)
+                        if (!preAuth.tryStart(source, android.os.SystemClock.elapsedRealtime(), known)) { socket.close(); continue }
                         launch { serveIncoming(socket, source) }
                     }
                 }
@@ -287,16 +303,18 @@ class LanSyncService : Service() {
                             .getOrNull() ?: return@forEach
                         if (!isPrivateAddress(peerAddress) || peerAddress.isLinkLocalAddress) return@forEach
                         // Prefer a confirmed address; discovery remains a fallback if its address or port changed.
-                        exchange.withLock {
+                        lastFailureRefused = false
+                        exchanged {
                             val socket = Socket()
                             connections.add(socket)
                             try {
                                 setStatus(DeviceSyncPhase.CONNECTING, "Trying the last confirmed Wi-Fi address.")
                                 setPeerStatus(deviceId, DeviceSyncPhase.CONNECTING, "Trying its saved Wi-Fi address.")
                                 bindSyncSocket(connectivity, socket, peerAddress)
-                                socket.connect(InetSocketAddress(peerAddress, syncPort(mirror.vaultId)), 3000)
+                                socket.connect(InetSocketAddress(peerAddress,
+                                    peerPort(this@LanSyncService, deviceId) ?: syncPort(mirror.vaultId)), 3000)
                                 if (!transfer(socket, false)) {
-                                    needsRetry = true
+                                    needsRetry = !lastFailureRefused
                                     if (mutablePeerStatus.value[deviceId]?.phase == DeviceSyncPhase.CONNECTING)
                                         setPeerStatus(deviceId, DeviceSyncPhase.SEARCHING,
                                             "Saved address did not complete a check. Looking on Wi-Fi.")
@@ -346,7 +364,8 @@ class LanSyncService : Service() {
                         if (instanceName > name) delay(1_000 + kotlin.random.Random.nextLong(1_000))
                         var completed = false
                         for (endpoint in candidates) {
-                            exchange.withLock {
+                            lastFailureRefused = false
+                            exchanged {
                                 val socket = Socket()
                                 connections.add(socket)
                                 try {
@@ -364,13 +383,16 @@ class LanSyncService : Service() {
                                 endpoints[name] = listOf(endpoint) + candidates.filter { it != endpoint }
                                 break
                             }
+                            // M12: the device answered and refused; its other addresses would only repeat that.
+                            if (lastFailureRefused) break
                         }
                         if (!completed) {
-                            needsRetry = true
+                            needsRetry = needsRetry || !lastFailureRefused
                             if (!peerBusy) endpoints.remove(name, candidates)
                         }
                     }
                     deliverPendingLeave()
+                    finishOneTimePassIfDone(activePeers.map { it.deviceId })
                     activePeers.forEach { peer ->
                         if ((lastAuthenticated[peer.deviceId] ?: -1L) < passStartedAt &&
                             mutablePeerStatus.value[peer.deviceId]?.phase in setOf(
@@ -408,9 +430,10 @@ class LanSyncService : Service() {
      */
     private suspend fun serveIncoming(socket: Socket, source: String) {
         connections.add(socket)
+        val watch = SessionWatch({ android.os.SystemClock.elapsedRealtime() })
         val checked = try {
             socket.soTimeout = PRE_AUTH_TIMEOUT_MS
-            val frames = SyncFrames(socket.getInputStream(), socket.getOutputStream())
+            val frames = SyncFrames(watch.input(socket.getInputStream()), watch.output(socket.getOutputStream()))
             val deadline = closeUnlessProved(socket)
             try { frames to LanSyncExchange.checkClient(frames, store(this)) } finally { deadline.cancel() }
         } catch (failure: Exception) {
@@ -422,15 +445,82 @@ class LanSyncService : Service() {
         preAuth.finish(source, true, android.os.SystemClock.elapsedRealtime())
         val (frames, first) = checked
         // A proved device waits briefly for another exchange to finish, then gets a busy reply.
-        if (withTimeoutOrNull(LOCK_WAIT_MS) { exchange.lock() } == null) {
+        // M8: tryLock never leaves the lock taken by a wait that timed out, as withTimeoutOrNull { lock() } could.
+        if (!lockExchangeWithin(LOCK_WAIT_MS)) {
             runCatching { frames.send(MembershipWire.BUSY.toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME) }
             connections.remove(socket); runCatching { socket.close() }
             return
         }
         try {
             setStatus(DeviceSyncPhase.CONNECTING, "A device answered. Checking that it belongs to your vault.")
-            transfer(socket, true, frames, first)
-        } finally { exchange.unlock() }
+            transfer(socket, true, frames, first, watch)
+        } finally { exchangeSince = 0L; exchange.unlock() }
+    }
+
+    /** M8: takes the exchange lock within [waitMs], polling, so a timed-out wait never holds it. */
+    private suspend fun lockExchangeWithin(waitMs: Long): Boolean {
+        val until = android.os.SystemClock.elapsedRealtime() + waitMs
+        while (true) {
+            if (exchange.tryLock()) { exchangeSince = android.os.SystemClock.elapsedRealtime(); return true }
+            if (android.os.SystemClock.elapsedRealtime() >= until) return false
+            delay(LOCK_POLL_MS)
+        }
+    }
+
+    /** Runs [block] holding the exchange lock, noting when it was taken for [closeOverdueExchange]. */
+    private suspend inline fun <T> exchanged(block: () -> T): T = exchange.withLock {
+        exchangeSince = android.os.SystemClock.elapsedRealtime()
+        try { block() } finally { exchangeSince = 0L }
+    }
+
+    /**
+     * M8: an exchange can't legitimately hold the lock longer than a session's deadline. If one does,
+     * its sockets close, which ends it and frees the lock for the other devices.
+     */
+    private fun closeOverdueExchange() {
+        val since = exchangeSince
+        if (since == 0L || android.os.SystemClock.elapsedRealtime() - since <= SESSION_DEADLINE_MS + LOCK_WAIT_MS) return
+        android.util.Log.w(TAG, "An exchange held the sync lock past its deadline; closing it")
+        connections.forEach { runCatching { it.close() } }
+    }
+
+    /** M10: ends a one-time pass once every active paired device was reached since it started. */
+    private fun finishOneTimePassIfDone(activePeers: List<String>) {
+        if (!manualAttempt || manualCompleted) return
+        val reached = lastAuthenticated.filterValues { it >= manualStartedAt }.keys
+        if (!oneTimePassDone(activePeers, reached)) return
+        manualCompleted = true
+        stopSelf()
+    }
+
+    /** The status after a finished exchange: what arrived and waits here, or that the check finished. */
+    private fun settleStatus(peerId: String? = null) {
+        when {
+            store(this).missingPhotos().isNotEmpty() -> {
+                peerId?.let { setPeerStatus(it, DeviceSyncPhase.RECEIVED, "Photo data is still waiting.") }
+                setStatus(DeviceSyncPhase.RECEIVED, "Photo data is still waiting. Keep both devices on Wi-Fi.")
+            }
+            store(this).queuedCount() > 0 -> {
+                peerId?.let { setPeerStatus(it, DeviceSyncPhase.RECEIVED, "Changes received; unlock to apply them.") }
+                setStatus(DeviceSyncPhase.RECEIVED, "Encrypted changes arrived and are waiting to apply on this device.")
+            }
+            else -> {
+                peerId?.let { setPeerStatus(it, DeviceSyncPhase.CHECKED, "Encrypted exchange completed.") }
+                setStatus(DeviceSyncPhase.CHECKED,
+                    "Encrypted exchange finished. Device cards show what was received and applied.")
+            }
+        }
+    }
+
+    /** M11: closes [socket] when its session stops moving or runs past its deadline. */
+    private fun watchSession(socket: Socket, watch: SessionWatch): Job = scope.launch {
+        while (isActive) {
+            delay(WATCH_EVERY_MS)
+            if (watch.expired(android.os.SystemClock.elapsedRealtime(), SESSION_TIMEOUT_MS.toLong(), SESSION_DEADLINE_MS)) {
+                runCatching { socket.close() }
+                break
+            }
+        }
     }
 
     /** Closes [socket] unless it is cancelled within [PRE_AUTH_DEADLINE_MS] (L-06). */
@@ -440,17 +530,21 @@ class LanSyncService : Service() {
     }
 
     private fun transfer(socket: Socket, server: Boolean, frames: SyncFrames? = null,
-        checked: LanSyncExchange.ClientFirst? = null): Boolean {
+        checked: LanSyncExchange.ClientFirst? = null,
+        watch: SessionWatch = SessionWatch({ android.os.SystemClock.elapsedRealtime() })): Boolean {
         connections.add(socket)
         var peerId: String? = null
+        lastFailureRefused = false
         val locks = TransferLocks()
         // L-06: an exchange that hasn't proved membership within the deadline is closed.
         val deadline = closeUnlessProved(socket)
+        // M11: a session that stops moving (a write to a device that left) is closed too.
+        val stall = watchSession(socket, watch)
         try {
             socket.use {
                 // Until the peer proves group membership, keep the exchange lock only briefly.
                 socket.soTimeout = PRE_AUTH_TIMEOUT_MS
-                LanSyncExchange.run(frames ?: SyncFrames(socket.getInputStream(), socket.getOutputStream()),
+                LanSyncExchange.run(frames ?: SyncFrames(watch.input(socket.getInputStream()), watch.output(socket.getOutputStream())),
                     store(this), server, checked) { authenticatedId, platform ->
                     deadline.cancel()
                     socket.soTimeout = SESSION_TIMEOUT_MS
@@ -462,28 +556,18 @@ class LanSyncService : Service() {
                     store(this).recordPeerContact(authenticatedId, completed = false)
                     if (!socket.inetAddress.isLinkLocalAddress)
                         runCatching { store(this).recordPeerAddress(authenticatedId, socket.inetAddress.hostAddress!!) }
+                    // L5: the port this device was reached on. When its usual port was taken it listens on
+                    // another one, which only discovery would otherwise find.
+                    if (!server) rememberPeerPort(this, authenticatedId, socket.port)
                     setPeerStatus(authenticatedId, DeviceSyncPhase.TRANSFERRING, "Encrypted changes are being exchanged.")
                     setStatus(DeviceSyncPhase.TRANSFERRING, "Connected securely. Sending and receiving encrypted changes.")
                 }
                 peerId?.let { store(this).recordPeerContact(it, completed = true) }
-                when {
-                    store(this).missingPhotos().isNotEmpty() -> {
-                        setPeerStatus(requireNotNull(peerId), DeviceSyncPhase.RECEIVED, "Photo data is still waiting.")
-                        setStatus(DeviceSyncPhase.RECEIVED, "Photo data is still waiting. Keep both devices on Wi-Fi.")
-                    }
-                    store(this).queuedCount() > 0 -> {
-                        setPeerStatus(requireNotNull(peerId), DeviceSyncPhase.RECEIVED, "Changes received; unlock to apply them.")
-                        setStatus(DeviceSyncPhase.RECEIVED, "Encrypted changes arrived and are waiting to apply on this device.")
-                    }
-                    else -> {
-                        setPeerStatus(requireNotNull(peerId), DeviceSyncPhase.CHECKED, "Encrypted exchange completed.")
-                        setStatus(DeviceSyncPhase.CHECKED,
-                            "Encrypted exchange finished. Device cards show what was received and applied.")
-                    }
-                }
+                settleStatus(requireNotNull(peerId))
+                // M10: a one-time pass goes on to the other devices; [finishOneTimePassIfDone] ends it.
                 if (manualAttempt) {
-                    manualCompleted = true
-                    stopSelf()
+                    manualProgressAt = android.os.SystemClock.elapsedRealtime()
+                    finishOneTimePassIfDone(activeDeviceIds())
                 }
             }
             return true
@@ -512,13 +596,27 @@ class LanSyncService : Service() {
             signals.trySend(Unit)
         } catch (_: LanSyncExchange.MembershipMessageServed) {
             return true
-        } catch (_: Exception) {
-            setStatus(DeviceSyncPhase.ATTENTION, CONNECTION_CLOSED)
-            peerId?.let { setPeerStatus(it, DeviceSyncPhase.ATTENTION, PEER_CONNECTION_CLOSED) }
+        } catch (failure: Exception) {
+            // M12: a refusal (signature, forked history, bad frame) is not a Wi-Fi problem, and retrying
+            // at once changes nothing; it is shown on that device's card.
+            if (SessionFailure.of(failure) == SessionFailure.REFUSED && peerId != null) {
+                lastFailureRefused = true
+                android.util.Log.w(TAG, "A paired device's session was refused: ${failure.javaClass.simpleName}")
+                setPeerStatus(peerId!!, DeviceSyncPhase.ATTENTION, PEER_REFUSED)
+                setStatus(DeviceSyncPhase.ATTENTION, DEVICE_REFUSED)
+            } else {
+                setStatus(DeviceSyncPhase.ATTENTION, CONNECTION_CLOSED)
+                peerId?.let { setPeerStatus(it, DeviceSyncPhase.ATTENTION, PEER_CONNECTION_CLOSED) }
+            }
         }
-        finally { deadline.cancel(); connections.remove(socket); locks.release() }
+        finally { deadline.cancel(); stall.cancel(); connections.remove(socket); locks.release() }
         return false
     }
+
+    private fun activeDeviceIds(): List<String> = runCatching {
+        val mirror = requireNotNull(store(this).snapshot())
+        mirror.members.filter { it.status == MemberStatus.ACTIVE.name && it.deviceId != mirror.localDeviceId }.map { it.deviceId }
+    }.getOrDefault(emptyList())
 
     private fun recordRemoval(notice: RemovalNotice.Removed) = recordRemoval(this, notice)
 
@@ -539,7 +637,7 @@ class LanSyncService : Service() {
                 ?.takeIf { isPrivateAddress(it) && !it.isLinkLocalAddress }?.let { it to notice.port }
         }
         for ((address, port) in targets.distinct()) {
-            val reply = exchange.withLock {
+            val reply = exchanged {
                 val socket = Socket()
                 connections.add(socket)
                 try {
@@ -714,12 +812,29 @@ class LanSyncService : Service() {
         const val CONNECTION_CLOSED = "The connection closed before the check finished. Retrying on Wi-Fi."
         const val PEER_CONNECTION_CLOSED = "Connection closed before the check finished."
         internal fun syncPort(vaultId: String): Int = 20_000 + Math.floorMod(vaultId.hashCode(), 30_000)
+
+        /** L5: the port a paired device was last reached on, when it differs from [syncPort]. */
+        private fun peerPort(context: Context, deviceId: String): Int? =
+            context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).getInt("peer_port_$deviceId", 0).takeIf { it in 1024..65535 }
+
+        private fun rememberPeerPort(context: Context, deviceId: String, port: Int) {
+            if (port !in 1024..65535 || peerPort(context, deviceId) == port) return
+            context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putInt("peer_port_$deviceId", port).apply()
+        }
         private const val PRE_AUTH_TIMEOUT_MS = 15_000
         /** L-06: the whole check before a device proves membership, however slowly it sends. */
         private const val PRE_AUTH_DEADLINE_MS = 20_000L
         /** L-06: how long a proved device waits for another exchange; below the peers' 15 s read timeout. */
         private const val LOCK_WAIT_MS = 8_000L
         private const val SESSION_TIMEOUT_MS = 30_000
+        /** M11: the longest a whole Wi-Fi session may take; a batch limit splits longer transfers. */
+        private const val SESSION_DEADLINE_MS = 10L * 60 * 1000
+        private const val WATCH_EVERY_MS = 5_000L
+        private const val LOCK_POLL_MS = 50L
+        private const val TAG = "NuvoriSync"
+        /** M12: a device sent something this one refuses; updating or re-pairing fixes it, not Wi-Fi. */
+        const val DEVICE_REFUSED = "A paired device sent changes Nuvori here can't accept. Update Nuvori on both devices."
+        const val PEER_REFUSED = "Sent changes this device can't accept. Update Nuvori on both. If it keeps happening, pair it again."
         private const val FOLLOW_UP_DEBOUNCE_MS = 750L
         private const val LEAVE_RETRY_MS = 60_000L
         private const val TRANSFER_LOCK_MS = 15L * 60 * 1000
@@ -733,8 +848,8 @@ class LanSyncService : Service() {
         internal const val SYNC_NOW = "com.privatevault.app.SYNC_NOW"
         internal const val SYNC_ON_OPEN = "com.privatevault.app.SYNC_ON_OPEN"
         private const val EXTRA_FOREGROUND = "com.privatevault.app.SYNC_FOREGROUND"
-        /** How long a quiet pass on opening looks for a device before it stops. */
-        private const val QUIET_ATTEMPT_MS = 20_000L
+        /** How long a quiet pass (on opening, after an edit) looks for devices before it stops (H3). */
+        private const val QUIET_ATTEMPT_MS = 120_000L
         private const val PREFERENCES = "sync-service"
         private const val NOTIFICATION_ID = 410
         /** The "Device sync paused" notification of 2.2.10 and older. Nuvori no longer posts it. */
@@ -769,7 +884,11 @@ class LanSyncService : Service() {
         /** Starts the service the way [syncRun] says it runs: a one-time pass never becomes a foreground service. */
         private fun launch(context: Context, action: String? = null) {
             val intent = Intent(context, LanSyncService::class.java).setAction(action)
-            if (syncRun(action, isPaused(context), notificationsOn(context)) == SyncRun.ONE_PASS) context.startService(intent)
+            val running = activeInstance
+            val autoRunning = running != null && running.foreground && !running.manualAttempt
+            val run = syncRun(action, isPaused(context), notificationsOn(context), autoRunning)
+            if (run == SyncRun.AUTO && autoRunning) { running!!.signals.trySend(Unit); return }
+            if (run == SyncRun.ONE_PASS) context.startService(intent)
             else context.startForegroundService(intent.putExtra(EXTRA_FOREGROUND, true))
         }
 
@@ -814,11 +933,16 @@ class LanSyncService : Service() {
                 store(context).publish(database)
                 // Cloud sync does not depend on Wi-Fi sync running or being paused.
                 CloudSyncRunner.request(context)
+                val running = activeInstance
                 if (!isPaused(context)) {
-                    val running = activeInstance
                     if (running != null) running.signals.trySend(Unit)
-                    else start(context)
-                }
+                    else try { start(context) }
+                    // L7: Android refuses a start from the background. The change is saved and Drive was
+                    // asked to upload it, so this is not a problem; Wi-Fi sync starts at the next open.
+                    catch (refused: IllegalStateException) {
+                        if (activeInstance == null) mutableStatus.value = DeviceSyncStatus(DeviceSyncPhase.OFF, BACKGROUND_START_REFUSED)
+                    }
+                } else { publishedWhilePaused = true; quietPass(context) }
             }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { mutableStatus.value = DeviceSyncStatus(DeviceSyncPhase.ATTENTION,
@@ -844,6 +968,29 @@ class LanSyncService : Service() {
         fun isPaused(context: Context): Boolean =
             context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).getBoolean("paused", false)
 
+        /**
+         * M9: whether automatic sync is actually running in this process. When it is on but Android
+         * ended it (a reboot, the app killed, a start it refused), the tile says "Not running".
+         */
+        fun isAutoRunning(): Boolean = activeInstance?.let { it.foreground && !it.manualAttempt } == true
+
+        /** This device is active in a group with at least one other active device. */
+        internal fun inPairedGroup(context: Context): Boolean {
+            val mirror = runCatching { store(context).snapshot() }.getOrNull() ?: return false
+            val active = mirror.members.filter { it.status == MemberStatus.ACTIVE.name }.map { it.deviceId }
+            return mirror.localDeviceId in active && active.size >= 2
+        }
+
+        /**
+         * M9: brings automatic sync back after a reboot or an app update, when it was left on. Android
+         * allows a foreground start at those moments. Elsewhere it may refuse; that is not an error.
+         */
+        internal fun restartIfOn(context: Context): Boolean {
+            val app = context.applicationContext
+            if (isPaused(app) || isAutoRunning() || !notificationsOn(app) || !inPairedGroup(app)) return false
+            return runCatching { launch(app) }.isSuccess
+        }
+
         fun allowFutureSync(context: Context) {
             context.getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putBoolean("paused", false).apply()
         }
@@ -864,6 +1011,33 @@ class LanSyncService : Service() {
                 if (running != null && !isPaused(app)) running.signals.trySend(Unit)
                 else runCatching { launch(app, SYNC_ON_OPEN) }
             }.start()
+        }
+
+        /**
+         * H3: with Auto sync paused, an edit (or leaving Nuvori after one) runs one quiet pass that
+         * looks for the paired devices for about two minutes; a pass already running just looks again.
+         */
+        fun quietPass(context: Context) {
+            val app = context.applicationContext
+            Thread {
+                val mirror = runCatching { store(app).snapshot() }.getOrNull() ?: return@Thread
+                val active = mirror.members.filter { it.status == MemberStatus.ACTIVE.name }.map { it.deviceId }
+                if (mirror.localDeviceId !in active || active.size < 2) return@Thread
+                val running = activeInstance
+                if (running != null) running.signals.trySend(Unit)
+                // Android refuses a start from the background; the next open or edit tries again.
+                else runCatching { launch(app, SYNC_ON_OPEN) }
+            }.start()
+        }
+
+        @Volatile private var publishedWhilePaused = false
+        internal const val BACKGROUND_START_REFUSED = "Your change is saved. Wi-Fi sync starts again when you open Nuvori."
+
+        /** H3: leaving Nuvori after a change saved while paused looks for the paired devices once more. */
+        fun onAppLeft(context: Context) {
+            if (!publishedWhilePaused) return
+            publishedWhilePaused = false
+            if (isPaused(context)) quietPass(context)
         }
 
         fun syncNow(context: Context) {

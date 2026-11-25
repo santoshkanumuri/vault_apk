@@ -39,6 +39,7 @@ internal fun syncOverviewText(facts: SyncFacts, overview: SyncOverview, words: S
             AttentionCause.BOTH_FAILED -> words.text(R.string.sync_detail_both_failed)
             AttentionCause.WIFI_ONLY_FAILED -> words.plural(R.plurals.sync_detail_wifi_only_failed, noteCount, noteDevices)
             AttentionCause.DRIVE_ONLY_FAILED -> words.text(R.string.sync_detail_drive_only_failed)
+            AttentionCause.DRIVE_SIGN_IN -> words.text(R.string.sync_detail_drive_sign_in)
             AttentionCause.LOCAL_PROBLEM -> facts.localProblem.orEmpty()
             AttentionCause.REJECTED -> facts.peers.filter { it.blocked > 0 }.maxByOrNull { it.blocked }?.let { peer ->
                 words.plural(R.plurals.sync_detail_rejected_from, peer.blocked.toCount(), peer.blocked, peer.name)
@@ -101,6 +102,7 @@ internal fun peerAckText(peer: PeerSyncFacts, ack: PeerAck, now: Long, words: Sy
         words.text(R.string.sync_peer_detail_not_checked))
 }
 
-private val TRANSPORT_CAUSES = setOf(AttentionCause.BOTH_FAILED, AttentionCause.WIFI_ONLY_FAILED, AttentionCause.DRIVE_ONLY_FAILED)
+private val TRANSPORT_CAUSES = setOf(AttentionCause.BOTH_FAILED, AttentionCause.WIFI_ONLY_FAILED, AttentionCause.DRIVE_ONLY_FAILED,
+    AttentionCause.DRIVE_SIGN_IN)
 
 private fun Long.toCount(): Int = coerceAtMost(Int.MAX_VALUE.toLong()).toInt()

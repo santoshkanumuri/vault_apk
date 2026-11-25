@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.CAMERA" />
@@ -40,6 +41,14 @@
         android:theme="@style/Theme.PrivateVault">
         <service android:name=".sync.LanSyncService" android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <service android:name=".sync.CloudSyncJob" android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+        <receiver android:name=".sync.SyncRestartReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <service android:name=".passkeys.VaultCredentialService" android:exported="true" tools:targetApi="34"
             android:enabled="@bool/passkey_provider_enabled" android:label="Nuvori" android:icon="@mipmap/ic_launcher"
             android:permission="android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE">

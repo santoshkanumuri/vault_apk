@@ -323,7 +323,7 @@ internal object LanSyncExchange {
                 store.photoBlobs.discardPartial(request.hash)
                 return@forEach
             }
-            if (size < 0) return@forEach
+            if (size < 0) { store.photoUnavailable(request.hash); return@forEach }
             val ref = PhotoBlobRef(request.hash, size)
             store.photoBlobs.receive(channel, ref, request.offset)
             store.receivedPhoto(request.hash)

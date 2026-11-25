@@ -46,6 +46,21 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
      * Applies one verified operation. [skipPhotoBlob] records a photo upsert without its image; the
      * caller sets it only when a later operation from the same author removes that image anyway.
      */
+    /**
+     * M13: the image hash a queued photo change will need, read without applying it, so every missing
+     * image can be asked for at once. Null for other changes, or when its key hasn't arrived.
+     */
+    suspend fun photoBlobHash(operation: SyncOperationEntity, vaultKey: ByteArray): String? {
+        if (operation.entityType != "photo" || operation.kind != "upsert") return null
+        require(vaultKey.size == 32) { "Invalid vault key" }
+        val change = operation.toChangeRecord()
+        change.validate()
+        val keyring = database.syncKeyring(vaultKey)
+        val payload = try { decrypt(change, keyring) } finally { keyring.wipe() }
+        return SyncEntryCodec.parsePhoto(payload.getJSONObject("photo").toString(), change.entityId).ref.hash
+            .takeIf { it.matches(Regex("[0-9a-f]{64}")) }
+    }
+
     suspend fun apply(operation: SyncOperationEntity, vaultKey: ByteArray,
         skipPhotoBlob: Boolean = false): IncomingResult {
         require(vaultKey.size == 32) { "Invalid vault key" }

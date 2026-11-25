@@ -816,7 +816,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     if (devices.isNotEmpty()) SettingsSection("Automatic sync",
         description = "Nuvori checks your paired devices while it can reach them on Wi-Fi.") {
         SettingsSwitchRow("Automatic sync", autoOn, setAutomatic,
-            description = if (autoOn) "On. Checks every $intervalLabel." else "Paused. Sync now still checks once.")
+            description = if (autoOn) "On. Checks every $intervalLabel."
+                // H3: what still happens while paused, and what keeps changes moving.
+                else "Paused. Saving a change or tapping Sync now still checks once. Keep it on for one device, or use Google Drive, so changes always reach your other devices.")
         var syncOnOpen by remember { mutableStateOf(SyncOnOpen.enabled(context)) }
         SettingsSwitchRow("Sync when Nuvori opens", syncOnOpen, { on ->
             syncOnOpen = on
@@ -1305,7 +1307,7 @@ internal fun CloudSyncCard(viewModel: VaultViewModel) {
                     }
                 }
                 Text(if (checkInterval == 0L) "Checks when you open or unlock Nuvori and when you tap Sync now. This phone's own changes still upload right away."
-                    else "While Nuvori is open. Shorter means other devices' changes arrive sooner. This phone's own changes upload right away.",
+                    else "While Nuvori is open, and about every 15 minutes in the background. Shorter means other devices' changes arrive sooner. This phone's own changes upload right away.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(stringResource(R.string.your_drive_stores_encrypted_changes_only),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

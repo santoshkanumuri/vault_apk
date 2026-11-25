@@ -12,7 +12,6 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.widget.Toast
 import com.privatevault.app.sync.LanSyncService
-import com.privatevault.app.sync.MemberStatus
 
 class AutoSyncTileService : TileService() {
     override fun onTileAdded() {
@@ -34,22 +33,22 @@ class AutoSyncTileService : TileService() {
         if (LanSyncService.isPaused(this)) {
             runCatching { LanSyncService.start(this, resume = true) }
                 .onFailure { LanSyncService.pause(this); openSyncSettings() }
-        } else LanSyncService.pause(this)
+        }
+        // M9: on, but Android ended it. A tap starts it again rather than pausing it.
+        else if (!LanSyncService.isAutoRunning()) runCatching { LanSyncService.start(this) }.onFailure { openSyncSettings() }
+        else LanSyncService.pause(this)
         updateState()
     }
 
-    private fun hasPairedGroup(): Boolean {
-        val mirror = runCatching { LanSyncService.store(this).snapshot() }.getOrNull() ?: return false
-        val active = mirror.members.filter { it.status == MemberStatus.ACTIVE.name }
-        return active.size > 1 && active.any { it.deviceId == mirror.localDeviceId }
-    }
+    private fun hasPairedGroup(): Boolean = LanSyncService.inPairedGroup(this)
 
     private fun updateState() {
         val tile = qsTile ?: return
         val ready = hasPairedGroup() && getSystemService(NotificationManager::class.java).areNotificationsEnabled()
-        val running = ready && !LanSyncService.isPaused(this)
+        val on = ready && !LanSyncService.isPaused(this)
+        val running = on && LanSyncService.isAutoRunning()
         tile.label = "Auto sync"
-        tile.subtitle = if (!ready) "Set up" else if (running) "On" else "Paused"
+        tile.subtitle = if (!ready) "Set up" else if (running) "On" else if (on) "Not running" else "Paused"
         tile.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.updateTile()
     }

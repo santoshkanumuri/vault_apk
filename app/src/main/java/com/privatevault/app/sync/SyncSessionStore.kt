@@ -26,4 +26,6 @@ internal interface SyncSessionStore {
     fun queue(operation: SyncOperationEntity)
     fun missingPhotos(): List<Pair<String, Long>>
     fun receivedPhoto(hash: String)
+    /** M13: the peer said it doesn't have this image; others are asked first next time. */
+    fun photoUnavailable(hash: String) {}
 }

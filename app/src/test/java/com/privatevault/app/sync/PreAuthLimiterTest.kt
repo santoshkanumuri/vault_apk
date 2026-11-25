@@ -7,7 +7,7 @@ import org.junit.Test
 /** Security review L-06: unproved connections are limited per source and in total. */
 class PreAuthLimiterTest {
     @Test fun oneSourceCannotTakeEverySlot() {
-        val limiter = PreAuthLimiter(total = 4, perSource = 2)
+        val limiter = PreAuthLimiter(total = 4, perSource = 2, reservedForKnown = 0)
         assertTrue(limiter.tryStart("10.0.0.9", 0))
         assertTrue(limiter.tryStart("10.0.0.9", 0))
         assertFalse("a third unproved connection from one source", limiter.tryStart("10.0.0.9", 0))
@@ -17,7 +17,7 @@ class PreAuthLimiterTest {
     }
 
     @Test fun theTotalIsCapped() {
-        val limiter = PreAuthLimiter(total = 3, perSource = 2)
+        val limiter = PreAuthLimiter(total = 3, perSource = 2, reservedForKnown = 0)
         assertTrue(limiter.tryStart("a", 0)); assertTrue(limiter.tryStart("b", 0)); assertTrue(limiter.tryStart("c", 0))
         assertFalse(limiter.tryStart("d", 0))
         limiter.finish("b", proved = true, now = 1)
@@ -39,5 +39,23 @@ class PreAuthLimiterTest {
         assertTrue("old failures expired", limiter.tryStart("s", 5_001)); limiter.finish("s", true, 5_001)
         repeat(2) { limiter.tryStart("s", 5_002); limiter.finish("s", false, 5_002) }
         assertTrue("a proved connection cleared the count", limiter.tryStart("s", 5_003))
+    }
+
+    @Test fun strangersLeaveSlotsForKnownDevices() {
+        val limiter = PreAuthLimiter(total = 4, perSource = 2, reservedForKnown = 1)
+        assertTrue(limiter.tryStart("a", 0)); assertTrue(limiter.tryStart("a", 0)); assertTrue(limiter.tryStart("b", 0))
+        assertFalse("strangers stop short of the reserved slot", limiter.tryStart("c", 0))
+        assertTrue("a known device's address takes it", limiter.tryStart("10.0.0.2", 0, known = true))
+        assertFalse("then the total is reached", limiter.tryStart("10.0.0.3", 0, known = true))
+    }
+
+    @Test fun anIpv6HostCountsAsOneSourcePerSlash64() {
+        fun key(text: String) = sourceKey(java.net.InetAddress.getByName(text))
+        org.junit.Assert.assertEquals(key("fd00:1:2:3::1"), key("fd00:1:2:3:aaaa:bbbb:cccc:dddd"))
+        org.junit.Assert.assertNotEquals(key("fd00:1:2:3::1"), key("fd00:1:2:4::1"))
+        org.junit.Assert.assertEquals("192.168.1.7", key("192.168.1.7"))
+        val limiter = PreAuthLimiter(total = 8, perSource = 2)
+        assertTrue(limiter.tryStart(key("fd00::1"), 0)); assertTrue(limiter.tryStart(key("fd00::2"), 0))
+        assertFalse("a third address in the same /64", limiter.tryStart(key("fd00::3"), 0))
     }
 }

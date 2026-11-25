@@ -38,7 +38,14 @@ internal object SyncFeatures {
     /** This build reads drive floor markers; drive cleanup needs it from every active member ([DriveCompaction]). */
     const val HISTORY_COMPACTION = DriveCompaction.FEATURE
 
+    /**
+     * L5: this build listens on a port in 20000-32767 and tries a device's other ports when one
+     * refuses ([SyncPorts]). Until every other active member announced it, it also listens on the
+     * port older versions use.
+     */
+    const val SYNC_PORTS = SyncPorts.FEATURE
+
     /** Everything this build announces, in one list for the handshake. */
     val ANNOUNCED: List<String> = listOf(RemovalCutoff.FEATURE, APPEARANCE, SITE_ICONS, CHECKPOINT_ENROLL, SIGN_IN_METHODS,
-        MERGE_JOIN, EPOCH_KEYS, HISTORY_COMPACTION)
+        MERGE_JOIN, EPOCH_KEYS, HISTORY_COMPACTION, SYNC_PORTS)
 }

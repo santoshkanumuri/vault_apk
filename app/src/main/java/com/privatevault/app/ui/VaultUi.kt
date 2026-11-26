@@ -850,7 +850,7 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
             } },
             confirmButton = { Button(
                 enabled = preview.items.filter { it.status == PasswordImportStatus.PASSWORD_DIFFERS }.all { it.decision != null },
-                onClick = viewModel::confirmPasswordImport) { Text(stringResource(R.string.continue)) } },
+                onClick = viewModel::confirmPasswordImport) { Text(stringResource(R.string.continue_action)) } },
             dismissButton = { TextButton(onClick = viewModel::cancelPasswordImport) { Text(stringResource(R.string.cancel)) } })
     }
     importMapping?.let { request ->
@@ -2750,7 +2750,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             },
             confirmButton = {
                 Button(enabled = conflictCount == 0 && preview.items.isNotEmpty(),
-                    onClick = viewModel::confirmCredentialTransfer) { Text(stringResource(R.string.import)) }
+                    onClick = viewModel::confirmCredentialTransfer) { Text(stringResource(R.string.import_action)) }
             },
             dismissButton = { TextButton(onClick = viewModel::cancelCredentialTransfer) { Text(stringResource(R.string.cancel)) } }
         )

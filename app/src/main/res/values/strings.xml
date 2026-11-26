@@ -282,7 +282,7 @@
     <string name="use_all_imported">Use all imported</string>
     <string name="ambiguous_accounts_match_more_than_one_s">Ambiguous accounts match more than one saved login. They will not be changed.</string>
     <string name="the_export_file_contains_readable_passwo">The export file contains readable passwords. Delete it after checking the import.</string>
-    <string name="continue">Continue</string>
+    <string name="continue_action">Continue</string>
     <string name="match_password_columns">Match password columns</string>
     <string name="match_each_heading_samples_are_masked_an">Match each heading. Samples are masked, and password samples are always hidden.</string>
     <string name="choose_three_different_required_columns">Choose three different required columns. Optional columns must also be different.</string>
@@ -367,7 +367,7 @@
     <string name="oldest_copy_kept_all_saved_fields_and_re">Oldest copy kept. All saved fields and relationships match.</string>
     <string name="delete_passkey_2">Delete passkey?</string>
     <string name="a_conflicting_credential_id_cannot_be_ov">A conflicting credential ID cannot be overwritten. Cancel this import and remove the conflicting passkey only after confirming you have another sign-in method.</string>
-    <string name="import">Import</string>
+    <string name="import_action">Import</string>
     <string name="change_master_password">Change master password</string>
     <string name="backup_files_you_saved_yourself_still_op">Backup files you saved yourself still open with your old password.</string>
     <string name="change_password">Change password</string>

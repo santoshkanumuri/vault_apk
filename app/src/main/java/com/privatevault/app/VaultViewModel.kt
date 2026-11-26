@@ -402,6 +402,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             }
             imported
         }
+        // L2: imported passkeys go to the other devices now, not at the next unlock.
+        if (result.added > 0) com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         cancelCredentialTransfer()
         refreshPasskeys()
         notify("Imported ${quantity(result.added, "passkey")}. ${result.alreadySaved} already saved.",
@@ -959,8 +961,15 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             if (runCatching { db.reconcileDeviceIdentity(deviceIdentityStore) }.getOrDefault(false))
                 runCatching { lockedSyncStore.publish(db) }
             completeRemovalIfNeeded(db)
+            // H5: changes that arrived while locked apply right after unlock, then as soon as the sync
+            // service queues one (a short pause lets a burst finish), with a 5 s check as a fallback.
+            val queueEvents = com.privatevault.app.sync.LockedSyncStore.queueEvents
+            var seen = -1L
             while (database === db && _status.value is VaultStatus.Unlocked) {
-                kotlinx.coroutines.delay(5_000)
+                if (seen >= 0 && kotlinx.coroutines.withTimeoutOrNull(5_000) { queueEvents.first { it != seen } } != null)
+                    kotlinx.coroutines.delay(400)
+                seen = queueEvents.value
+                if (database !== db || _status.value !is VaultStatus.Unlocked) break
                 completeRemovalIfNeeded(db)
                 val membershipWaiting = lockedSyncStore.hasPendingMembership(db)
                 if (lockedSyncStore.queuedCount() == 0 && !membershipWaiting) continue
@@ -998,6 +1007,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching { lockedSyncStore.refillRelayIfNeeded(db) }.getOrDefault(false)
             }
             refillRelay()
+            // H4: Drive connected before this version gets its background check here (and after the update).
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { com.privatevault.app.sync.CloudSyncJob.schedulePeriodic(getApplication()) }
+            }
             runner.request(getApplication())
             launch {
                 runner.status.collect { status ->
@@ -1138,6 +1151,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onAppBackgrounded() {
         backgrounded = true
+        runCatching { com.privatevault.app.sync.LanSyncService.onAppLeft(getApplication()) }
         if (_status.value !is VaultStatus.Unlocked) return
         val now = android.os.SystemClock.elapsedRealtime()
         if (externalFlowActive) externalReturnPending = true
@@ -1292,6 +1306,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val passkey = requireNotNull(dao().allPasskeys().firstOrNull { it.id == id }) { "Passkey is missing" }
         com.privatevault.app.sync.LocalPasskeyChangeWriter(requireNotNull(database), deviceIdentityStore)
             .delete(passkey, requireNotNull(sessionKey))
+        // L2: the removal goes to the other devices now, not at the next unlock.
+        com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), requireNotNull(database))
         refreshPasskeys()
         notify("Passkey deleted", StatusKind.SUCCESS)
     }

@@ -213,15 +213,23 @@ internal class LockedSyncStore(private val context: Context,
      */
     suspend fun publish(database: VaultDatabase, full: Boolean = false) {
         val identity = AndroidDeviceIdentityStore(context).getOrCreate()
-        relayLock.withLock {
+        val changed = relayLock.withLock {
+            publishChanged = false
             val scanAll = full || fullScanFor?.get() !== database
             // An incremental publish that finds the folder reset falls back to a full one.
             check(publishLocked(database, identity, scanAll) || !scanAll && publishLocked(database, identity, true)) {
                 "Sync relay changed during publish"
             }
             fullScanFor = WeakReference(database)
+            publishChanged
         }
+        // H4: whatever put a change in the relay folder (the main app, autofill, pairing) also asks
+        // Google Drive to upload it; the request does nothing when Drive is off.
+        if (changed) CloudSyncRunner.request(context)
     }
+
+    /** Set by [finishRelay] when a publish wrote a change or new membership events. Read under [relayLock]. */
+    @Volatile private var publishChanged = false
 
     private data class PublishedState(val mirror: TransportMirror, val newOperations: List<SyncOperationEntity>?,
         val pointers: List<SyncOperationPointer>?, val photoHashes: Set<String>, val hasConflicts: Boolean)
@@ -355,6 +363,7 @@ internal class LockedSyncStore(private val context: Context,
 
     private fun finishRelay(plan: RelayPlan, loaded: List<SyncOperationEntity>): Boolean {
         if (plan.generation != generation) return false
+        val eventsBefore = snapshot()?.takeIf { it.vaultId == plan.selected.vaultId }?.membershipEvents?.size
         // A full scan sees every change, so its floor starts fresh; an incremental one only rises.
         val selected = plan.selected.copy(relayFloor = RelayRetention.raiseFloor(
             if (plan.full) emptyMap() else plan.selected.relayFloor,
@@ -365,8 +374,12 @@ internal class LockedSyncStore(private val context: Context,
         (plan.write + plan.load.mapNotNull { loadedByHash[it] }).forEach { operation ->
             require(operation.hash in keepHashes && operation.vaultId == selected.vaultId)
             val file = File(outgoing, operation.hash)
-            if (!file.exists()) writeProtected(file, gson.toJson(operation).toByteArray(Charsets.UTF_8))
+            if (!file.exists()) {
+                writeProtected(file, gson.toJson(operation).toByteArray(Charsets.UTF_8))
+                publishChanged = true
+            }
         }
+        if (eventsBefore != plan.selected.membershipEvents.size) publishChanged = true
         // A full scan also removes stray files that no held change explains. [relayLock] keeps
         // [applyQueued] from moving a file in meanwhile.
         val dropHashes = plan.drop.mapTo(hashSetOf()) { it.hash }
@@ -792,9 +805,21 @@ internal class LockedSyncStore(private val context: Context,
         if (photoBlobs.file(hash) == null) photoBlobs.discardPartial(hash)
     }
 
-    @Synchronized override fun missingPhotos(): List<Pair<String, Long>> = requireNotNull(snapshot())
-        .pendingPhotoHashes.sorted().filter { photoBlobs.file(it) == null }.take(32)
+    /**
+     * M13: up to 32 images a session may ask for. Those a peer recently said it lacks go last, so the
+     * rest are asked for instead of the same 32 every time.
+     */
+    @Synchronized override fun missingPhotos(): List<Pair<String, Long>> = PhotoRequestOrder.pick(
+        requireNotNull(snapshot()).pendingPhotoHashes.filter { photoBlobs.file(it) == null }, photoLackedAt, 32)
         .map { it to photoBlobs.partialSize(it) }
+
+    @Synchronized override fun photoUnavailable(hash: String) {
+        photoLackedAt[hash] = System.currentTimeMillis()
+        if (photoLackedAt.size > 2048) photoLackedAt.keys.retainAll(requireNotNull(snapshot()).pendingPhotoHashes)
+    }
+
+    /** When a peer last said it lacks an image (this process only). */
+    private val photoLackedAt = HashMap<String, Long>()
 
     @Synchronized override fun recordPeerProgress(deviceId: String, progress: SyncProgress) =
         recordPeer(deviceId, progress, live = false)
@@ -856,16 +881,23 @@ internal class LockedSyncStore(private val context: Context,
         val authors = relayableAuthors(mirror.members)
         val cutoffs = if (relayRemoved) RemovalCutoff.cutoffsOf(mirror.membershipEvents) else emptyMap()
         val pointers = outgoingPointers().filter { it.vaultId == vaultId }
-        val byHash = pointers.associateBy { it.hash }
-        return RelayRetention.gapFree(pointers.map { ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) },
-            frontier.counters, { it.deviceId in authors || RemovalCutoff.allows(cutoffs[it.deviceId], it.sequence, it.hash) },
+        val held = pointers.mapTo(hashSetOf()) { it.hash }
+        // M1: changes stored here but not applied yet go on too, so a locked device passes on what it
+        // received. Each passed the signature, membership and chain checks when it was stored ([queue]).
+        val queued = incomingPointers().filter { it.vaultId == vaultId && it.link.hash !in held }
+        val byHash = pointers.associate { it.hash to Triple(outgoing, it.deviceId, it.sequence) } +
+            queued.associate { it.link.hash to Triple(incoming, it.link.deviceId, it.link.sequence) }
+        // gapFree reads each author's run in sequence order.
+        val links = (pointers.map { ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) } + queued.map { it.link })
+            .sortedWith(compareBy({ it.deviceId }, { it.sequence }))
+        return RelayRetention.gapFree(links, frontier.counters, { it.deviceId in authors || RemovalCutoff.allows(cutoffs[it.deviceId], it.sequence, it.hash) },
             100).map { link ->
-            val pointer = byHash.getValue(link.hash)
-            val bytes = readProtected(File(outgoing, pointer.hash))
+            val (folder, deviceId, sequence) = byHash.getValue(link.hash)
+            val bytes = readProtected(File(folder, link.hash))
             try {
                 gson.fromJson(bytes.toString(Charsets.UTF_8), SyncOperationEntity::class.java).also {
-                    require(it.vaultId == pointer.vaultId && it.deviceId == pointer.deviceId &&
-                        it.sequence == pointer.sequence && it.hash == pointer.hash) { "Outgoing index changed" }
+                    require(it.vaultId == vaultId && it.deviceId == deviceId &&
+                        it.sequence == sequence && it.hash == link.hash) { "Relay index changed" }
                 }
             } finally { bytes.fill(0) }
         }.toList()
@@ -891,6 +923,7 @@ internal class LockedSyncStore(private val context: Context,
             writeProtected(file, bytes)
             incomingIndex = pointers + QueuedPointer(operation.vaultId, link, meta(operation))
         } finally { bytes.fill(0) }
+        mutableQueueEvents.value = mutableQueueEvents.value + 1
     }
 
     /**
@@ -986,6 +1019,13 @@ internal class LockedSyncStore(private val context: Context,
                 progress = true
             }
         } while (progress)
+        // M13: every queued photo's image is asked for now, not only the first one each device's chain
+        // stops at, so N photos arrive in one session instead of N.
+        val queuedPhotos = synchronized(this) { readOperations(incoming) }.filter { it.entityType == "photo" && it.kind == "upsert" }
+        for (operation in queuedPhotos) {
+            val hash = runCatching { applier.photoBlobHash(operation, localKey) }.getOrNull() ?: continue
+            if (photoBlobs.file(hash) == null) runCatching { requestPhoto(hash) }
+        }
         publish(database)
         return applied
     }
@@ -1268,14 +1308,17 @@ internal class LockedSyncStore(private val context: Context,
         return key
     }
 
-    private companion object {
+    companion object {
+        private val mutableQueueEvents = kotlinx.coroutines.flow.MutableStateFlow(0L)
+        /** H5: ticks when a change arrives in the queue, so an unlocked app applies it at once instead of polling. */
+        val queueEvents: kotlinx.coroutines.flow.StateFlow<Long> = mutableQueueEvents
         /** Serializes [applyQueued] across every store instance in the process. */
-        val APPLY_LOCK = Mutex()
-        const val KEY_ALIAS = "nuvori_sync_transport_v1"
+        private val APPLY_LOCK = Mutex()
+        private const val KEY_ALIAS = "nuvori_sync_transport_v1"
         /** The cached Drive file list (about 150 bytes a file); Windows stops listing at 200,000 files. */
-        const val CLOUD_FILES_LIMIT = 32 * 1024 * 1024
+        private const val CLOUD_FILES_LIMIT = 32 * 1024 * 1024
         /** The relay folder's index, about 250 bytes a change. */
-        const val RELAY_INDEX_LIMIT = 32 * 1024 * 1024
-        val HASH = Regex("[a-f0-9]{64}")
+        private const val RELAY_INDEX_LIMIT = 32 * 1024 * 1024
+        private val HASH = Regex("[a-f0-9]{64}")
     }
 }

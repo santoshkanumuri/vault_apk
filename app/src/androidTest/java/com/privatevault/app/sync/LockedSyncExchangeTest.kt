@@ -433,6 +433,9 @@ class LockedSyncExchangeTest {
             assertNull(dbB.dao().entry("from-a"))
             assertEquals(1, storeA.queuedCount())
             assertEquals(1, storeB.queuedCount())
+            // M1: while locked, A passes on what it stored from B as well as its own change.
+            assertEquals(setOf(first.deviceId, second.deviceId),
+                storeA.pending(SyncFrontier(emptyMap())).map { it.deviceId }.toSet())
             assertEquals(1L, storeA.peerProgress(second.deviceId)?.received?.get(first.deviceId)?.sequence)
             assertNull(storeA.peerProgress(second.deviceId)?.applied?.get(first.deviceId))
             assertTrue(runCatching { storeA.recordPeerProgress(second.deviceId,

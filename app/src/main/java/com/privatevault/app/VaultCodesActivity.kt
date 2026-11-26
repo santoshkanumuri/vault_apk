@@ -319,6 +319,11 @@ class VaultCodesActivity : FragmentActivity() {
                     loadedUsage = com.privatevault.app.security.ItemUsageStore.snapshot(applicationContext)
                     val database = VaultDatabase.open(applicationContext, requireNotNull(key))
                     try {
+                        // H5: changes another device made while Nuvori was locked apply before anything
+                        // is shown, so a fill never uses a password that was already changed elsewhere.
+                        // Profile and card fills skip it: they never read passwords.
+                        if (profileFill == null && cardFill == null)
+                            com.privatevault.app.sync.UnlockedSyncApply.applyWaiting(applicationContext, database, requireNotNull(key))
                         loadedIcons = runCatching { database.syncedSiteIcons().all() }.getOrDefault(emptyList())
                         val settings = database.dao().settings()
                         masterInterval = com.privatevault.app.security.capMasterPasswordInterval(settings?.masterPasswordIntervalMs ?: 86_400_000L)

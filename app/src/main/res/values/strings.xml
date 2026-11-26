@@ -240,6 +240,7 @@
         <item quantity="other">Wi-Fi couldn\'t reach %1$s. Your changes wait until they connect.</item>
     </plurals>
     <string name="sync_detail_drive_only_failed">Google Drive didn\'t finish the last sync. Your changes wait on this device.</string>
+    <string name="sync_detail_drive_sign_in">Google Drive needs you to sign in again. Until then, changes don\'t go through Drive.</string>
     <plurals name="sync_detail_rejected_from">
         <item quantity="one">%1$d change from %2$s can\'t apply here. Update both devices, then retry.</item>
         <item quantity="other">%1$d changes from %2$s can\'t apply here. Update both devices, then retry.</item>

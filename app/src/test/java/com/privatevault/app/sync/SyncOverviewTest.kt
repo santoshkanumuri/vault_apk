@@ -213,4 +213,19 @@ class SyncOverviewTest {
         // A change that was set aside still comes first: it needs a decision, not an update.
         assertEquals(AttentionCause.REJECTED, overview(peer("PC").copy(needsUpdate = 3)) { copy(rejected = 1) }.cause)
     }
+
+    /** M14: Google asking to sign in again is on the headline even when everything else is in step. */
+    @Test fun driveSignInNeedsAttentionEvenWhenInStep() {
+        val result = overview(peer("PC"), drive = TransportHealth.FAILED) { copy(driveSignIn = true) }
+        assertEquals(OverallSync.ATTENTION, result.state)
+        assertEquals(AttentionCause.DRIVE_SIGN_IN, result.cause)
+        // Without the sign-in, Wi-Fi alone keeps an in-step group up to date.
+        assertEquals(OverallSync.UP_TO_DATE, overview(peer("PC"), drive = TransportHealth.FAILED).state)
+        val facts = SyncOverviewRules.facts(now, listOf("me" to "This phone", "pc" to "Office PC"), "me", null,
+            emptyMap(), emptyMap(), emptyMap(), DeviceSyncStatus(DeviceSyncPhase.CHECKED, ""), emptyMap(),
+            CloudSyncStatus(connected = true, needsSignIn = true))
+        assertTrue(facts.driveSignIn)
+        assertFalse(SyncOverviewRules.facts(now, listOf("me" to "This phone"), "me", null, emptyMap(), emptyMap(),
+            emptyMap(), DeviceSyncStatus(DeviceSyncPhase.CHECKED, ""), emptyMap(), CloudSyncStatus(needsSignIn = true)).driveSignIn)
+    }
 }

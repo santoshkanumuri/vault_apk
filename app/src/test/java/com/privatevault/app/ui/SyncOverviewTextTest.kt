@@ -85,6 +85,10 @@ class SyncOverviewTextTest {
         assertNull("the failure is the headline, not a second line", only.note)
         assertEquals("2 incoming changes couldn't apply. Update both devices, then retry.",
             text(SyncFacts(now, listOf(peer("Pixel 8")), rejected = 2)).detail)
+        val signIn = text(SyncFacts(now, listOf(peer("Pixel 8")), drive = TransportHealth.FAILED, driveSignIn = true))
+        assertEquals("Sync needs attention", signIn.title)
+        assertEquals("Google Drive needs you to sign in again. Until then, changes don't go through Drive.", signIn.detail)
+        assertNull("the sign-in is the headline, not a second line", signIn.note)
     }
 
     @Test fun staleAndQuietNotes() {

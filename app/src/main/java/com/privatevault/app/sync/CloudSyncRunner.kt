@@ -57,6 +57,9 @@ internal object CloudSyncRunner {
         context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
             .putLong("check_interval_ms", interval).apply()
         mutableCheckInterval.value = interval
+        // H4: the background check follows the setting; "Sync now only" turns it off.
+        val app = context.applicationContext
+        scope.launch { runCatching { CloudSyncJob.schedulePeriodic(app) } }
     }
 
     const val QUEUE_FULL = "Unlock Nuvori to apply waiting changes."
@@ -84,13 +87,32 @@ internal object CloudSyncRunner {
         val app = context.applicationContext
         if (full) queuedFull.set(true)
         if (!queued.compareAndSet(false, true)) return
+        // H4: if Android ends this process before the pass finishes, a background job runs it.
+        CloudSyncJob.scheduleSoon(app)
         scope.launch {
             mutex.withLock {
                 queued.set(false)
-                pass(app, queuedFull.getAndSet(false) || !listedSinceStart)
+                val outcome = pass(app, queuedFull.getAndSet(false) || !listedSinceStart)
+                when {
+                    outcome == PassOutcome.DONE && !queued.get() -> CloudSyncJob.cancelSoon(app)
+                    // A failed pass tries again later, also while Nuvori is closed.
+                    outcome == PassOutcome.RETRY -> CloudSyncJob.scheduleRetry(app)
+                }
             }
         }
     }
+
+    /**
+     * One pass for [CloudSyncJob], after any pass already running. A background job is the only
+     * caller, so it never touches the job schedule itself. False when it should run again later.
+     */
+    internal suspend fun runInBackground(context: Context): Boolean {
+        val app = context.applicationContext
+        return mutex.withLock { pass(app, !listedSinceStart) != PassOutcome.RETRY }
+    }
+
+    /** DONE: nothing left, or nothing to do. RETRY: failed for a reason that may pass. STOP: needs the person. */
+    internal enum class PassOutcome { DONE, RETRY, STOP }
 
     /**
      * Saves a new sign-in after [GoogleDriveSignIn] returned [accessToken]: reads the account address,
@@ -111,6 +133,7 @@ internal object CloudSyncRunner {
             listedSinceStart = false
         }
         mutableStatus.value = CloudSyncStatus(connected = true, account = account)
+        CloudSyncJob.schedulePeriodic(app)
         account
     }
 
@@ -124,6 +147,7 @@ internal object CloudSyncRunner {
             LanSyncService.store(app).forgetCloud()
             listedSinceStart = false
         }
+        CloudSyncJob.cancelAll(app)
         mutableStatus.value = CloudSyncStatus()
         // Best effort, without any screen: only a token Google hands out silently can be cleared.
         (GoogleDriveSignIn.authorize(app) as? GoogleDriveSignIn.Outcome.Token)?.let {
@@ -162,20 +186,21 @@ internal object CloudSyncRunner {
             store.cloudFiles().any { it.name == name }
         }.getOrDefault(false)
 
-    private suspend fun pass(app: Context, full: Boolean) {
+    private suspend fun pass(app: Context, full: Boolean): PassOutcome {
         val store = LanSyncService.store(app)
         val state = runCatching { store.cloudState() }.getOrNull()
-        if (state == null || !state.enabled) { mutableStatus.value = CloudSyncStatus(); return }
+        if (state == null || !state.enabled) { mutableStatus.value = CloudSyncStatus(); return PassOutcome.DONE }
         uploadPendingLeave(store, app)
-        val mirror = runCatching { store.snapshot() }.getOrNull() ?: return
+        val mirror = runCatching { store.snapshot() }.getOrNull() ?: return PassOutcome.DONE
         if (!MembershipChoices.cloudPassNeeded(mirror.localDeviceId, mirror.members,
-                driveHasCurrentMembership(store, state, mirror))) return
+                driveHasCurrentMembership(store, state, mirror))) return PassOutcome.DONE
         // An unlocked app writes a pending appearance (if the group allows it); a Drive pass itself
         // never learns handshake features, so it cannot open the appearance gate.
         AppearanceSync.requestFlush()
         mutableStatus.update { it.copy(connected = true, account = state.account, syncing = true) }
         var error: String? = null
         var needsSignIn = false
+        var outcome = PassOutcome.DONE
         try {
             val drive = GoogleDrive(GoogleDriveAccess(app))
             var round = 0
@@ -184,20 +209,23 @@ internal object CloudSyncRunner {
                 val report = CloudSyncPass(store, drive).run(full && round == 0)
                 if (full && round == 0) listedSinceStart = true
                 round++
-                report.removed?.let { LanSyncService.recordRemoval(app, it); return }
-                if (report.queueFull) { error = QUEUE_FULL; break }
-                // M6/C1: a file nobody can read or a gap in this device's history needs another device
-                // (or a later re-upload), so running again now would only repeat it.
-                if (report.complete || report.stuckAuthors.isNotEmpty() || round >= PASSES_PER_REQUEST) break
+                report.removed?.let { LanSyncService.recordRemoval(app, it); return PassOutcome.STOP }
+                if (report.queueFull) { error = QUEUE_FULL; outcome = PassOutcome.STOP; break }
+                if (report.complete) break
+                // M6/C1: a file nobody can read or a gap in this device's history needs another
+                // device (or a later re-upload), so running again now would only repeat it.
+                if (report.stuckAuthors.isNotEmpty()) break
+                if (round >= PASSES_PER_REQUEST) { outcome = PassOutcome.RETRY; break }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: CloudException) {
             needsSignIn = failure.error == CloudError.AUTH
             error = failure.error.message
+            outcome = if (needsSignIn) PassOutcome.STOP else PassOutcome.RETRY
         }
-        catch (_: NotCloudMemberException) { }
-        catch (_: PhotoStorageFullException) { error = PHOTO_SPACE }
-        catch (_: Exception) { error = CloudError.OTHER.message }
+        catch (_: NotCloudMemberException) { outcome = PassOutcome.STOP }
+        catch (_: PhotoStorageFullException) { error = PHOTO_SPACE; outcome = PassOutcome.STOP }
+        catch (_: Exception) { error = CloudError.OTHER.message; outcome = PassOutcome.RETRY }
         finally {
             val saved = runCatching { store.cloudState() }.getOrDefault(CloudSyncState())
             mutableStatus.update { status ->
@@ -207,5 +235,7 @@ internal object CloudSyncRunner {
                     needsSignIn = needsSignIn, lastError = error)
             }
         }
+        if (needsSignIn) CloudSignInAlert.failed(app) else if (error == null) CloudSignInAlert.passed(app)
+        return outcome
     }
 }

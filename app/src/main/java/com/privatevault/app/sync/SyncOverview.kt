@@ -45,7 +45,9 @@ internal data class SyncFacts(
     /** A removal changed the sync keys and this device's new keys have not arrived. */
     val waitingForKeys: Boolean = false,
     /** Changes arrived here and still wait to apply on this device. */
-    val waitingHere: Boolean = false)
+    val waitingHere: Boolean = false,
+    /** Google Drive is connected and needs the user to sign in again (M14). */
+    val driveSignIn: Boolean = false)
 
 internal enum class PeerAck { UP_TO_DATE, WAITING, SILENT, NOT_CHECKED }
 
@@ -53,7 +55,9 @@ internal enum class OverallSync { SYNCING, ATTENTION, KEYS, CONFLICTS, WAITING, 
 
 internal enum class AttentionCause { BOTH_FAILED, WIFI_ONLY_FAILED, DRIVE_ONLY_FAILED, LOCAL_PROBLEM, REJECTED, DEVICE_SILENT,
     /** Changes from another device wait for this app to be updated (M4). */
-    APP_UPDATE }
+    APP_UPDATE,
+    /** Google Drive needs the user to sign in again (M14). */
+    DRIVE_SIGN_IN }
 
 /** The quiet line under the headline. */
 internal enum class TransportNote {
@@ -147,6 +151,8 @@ internal object SyncOverviewRules {
         val noTransport = (wifiFailed || driveFailed) && facts.wifi != TransportHealth.OK && facts.drive != TransportHealth.OK
         return when {
             facts.busy -> result(OverallSync.SYNCING)
+            // M14: only the user can fix a sign-in, so it is never hidden behind "Up to date".
+            facts.driveSignIn -> result(OverallSync.ATTENTION, AttentionCause.DRIVE_SIGN_IN)
             wifiFailed && driveFailed -> result(OverallSync.ATTENTION, AttentionCause.BOTH_FAILED)
             facts.localProblem != null -> result(OverallSync.ATTENTION, AttentionCause.LOCAL_PROBLEM)
             facts.rejected > 0 -> result(OverallSync.ATTENTION, AttentionCause.REJECTED)
@@ -207,7 +213,8 @@ internal object SyncOverviewRules {
             lastDriveSync = if (cloud.connected) cloud.lastSyncAt else 0L,
             localProblem = lan.detail.takeIf { lan.phase == DeviceSyncPhase.ATTENTION && !reachFailed && it.isNotBlank() },
             conflicts = conflicts, rejected = rejected, waitingForKeys = waitingForKeys,
-            waitingHere = queueWaiting || lan.phase == DeviceSyncPhase.RECEIVED)
+            waitingHere = queueWaiting || lan.phase == DeviceSyncPhase.RECEIVED,
+            driveSignIn = cloud.connected && cloud.needsSignIn)
     }
 
     /**

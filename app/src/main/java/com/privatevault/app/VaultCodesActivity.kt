@@ -1054,16 +1054,16 @@ class VaultCodesActivity : FragmentActivity() {
         if (generating) AlertDialog(onDismissRequest = { if (!busy) generating = false },
             title = { Text(stringResource(R.string.save_generated_password)) },
             text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Save the username or email, generated password, and website link for ${loginFill?.origin.orEmpty()} before filling. Submit the website form to finish. If it rejects the password, remove the generated login. Your old login will remain unchanged.")
+                Text(stringResource(R.string.save_the_username_or_email_generated_pas, (loginFill?.origin.orEmpty()).toString()))
                 OutlinedTextField(generationUsername, { generationUsername = it }, label = { Text(stringResource(R.string.username_or_email)) },
                     enabled = !busy && generationEntry == null, singleLine = true, modifier = Modifier.fillMaxWidth())
             } },
             confirmButton = { Button(enabled = !busy && generationUsername.isNotBlank() && generationUsername.length <= 1024,
-                onClick = ::saveGeneratedLogin) { PickerButtonLabel("Save new login and fill", busy) } },
+                onClick = ::saveGeneratedLogin) { PickerButtonLabel(stringResource(R.string.save_new_login_and_fill), busy) } },
             dismissButton = { TextButton(enabled = !busy, onClick = { generating = false }) { Text(stringResource(R.string.cancel)) } })
         selectedUpdate?.let { entry ->
             AlertDialog(onDismissRequest = { selectedUpdate = null }, title = { Text(stringResource(R.string.update_saved_password)) },
-                text = { Text("Replace the saved password for ${entry.primaryValue} at ${loginSave?.let(::saveDestination).orEmpty()} in \"${entry.title}\"? The old password is replaced and can't be recovered. Groups, photos and the linked authenticator code stay unchanged.") },
+                text = { Text(stringResource(R.string.replace_the_saved_password_for_at_in_the, entry.primaryValue.toString(), (loginSave?.let(::saveDestination).orEmpty()).toString(), entry.title.toString())) },
                 confirmButton = { Button(enabled = !busy, onClick = { selectedUpdate = null; saveLogin(entry) }) { Text(stringResource(R.string.replace_password)) } },
                 dismissButton = { TextButton(onClick = { selectedUpdate = null }) { Text(stringResource(R.string.cancel)) } })
         }
@@ -1110,7 +1110,7 @@ class VaultCodesActivity : FragmentActivity() {
                     Text(stringResource(R.string.fill_once_uses_it_this_time_only_nothing),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } },
-                confirmButton = { Button(enabled = !busy, onClick = { linkAndFill(entry) }) { PickerButtonLabel("Fill and link", busy) } },
+                confirmButton = { Button(enabled = !busy, onClick = { linkAndFill(entry) }) { PickerButtonLabel(stringResource(R.string.fill_and_link), busy) } },
                 dismissButton = {
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(enabled = !busy, onClick = { pendingLoginLink = null }) { Text(stringResource(R.string.cancel)) }
@@ -1139,7 +1139,7 @@ class VaultCodesActivity : FragmentActivity() {
                 }
                 // The app's own claim about its WebView: shown to help find the login, below the app that receives it.
                 destination.claim?.let {
-                    Text("showing $it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Text(stringResource(R.string.showing, it.toString()), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -1168,7 +1168,7 @@ class VaultCodesActivity : FragmentActivity() {
 
     @Composable
     private fun UnverifiedWarning(request: LoginFillRequest) {
-        StatusBanner(StatusKind.WARNING, title = "Nuvori can't confirm this page",
+        StatusBanner(StatusKind.WARNING, title = stringResource(R.string.nuvori_can_t_confirm_this_page),
             message = "${fillDestination(request)} (${request.packageName}) receives what you fill and can read it." +
                 (claimedHost(request)?.let { " It says it shows $it." } ?: "") +
                 " Search for the login you want, and fill it only if you trust this page.")
@@ -1176,7 +1176,7 @@ class VaultCodesActivity : FragmentActivity() {
 
     @Composable
     private fun EmbeddedBrowserWarning(request: LoginFillRequest) {
-        StatusBanner(StatusKind.WARNING, title = "Embedded browser",
+        StatusBanner(StatusKind.WARNING, title = stringResource(R.string.embedded_browser),
             message = "${fillDestination(request)} (${request.packageName}) can read what you fill." +
                 (claimedHost(request)?.let { " It says it shows $it; the app, not that site, receives the login." } ?: "") +
                 " Choose a login only if you trust this app. Website links do not authorize this app.")
@@ -1197,7 +1197,7 @@ class VaultCodesActivity : FragmentActivity() {
         }
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (!keyManager.isInitialized) {
-                StatusBanner(StatusKind.INFO, "Open Nuvori to create your vault first.")
+                StatusBanner(StatusKind.INFO, stringResource(R.string.open_nuvori_to_create_your_vault_first))
             } else {
                 Text(if (passkeyOperation != null) "Unlock to review this passkey request. Creation and sign-in require your confirmation."
                     else if (cardFill != null) "Unlock to choose a card. Nothing is filled until you pick one."
@@ -1206,8 +1206,8 @@ class VaultCodesActivity : FragmentActivity() {
                     else if (autofillMode) "Unlock to choose a login. Nothing is filled until you select an account."
                     else "Unlock to copy passwords, codes, card details or security answers.", style = MaterialTheme.typography.bodyMedium)
                 loginFill?.takeIf { it.embeddedWebView }?.let { EmbeddedBrowserWarning(it) }
-                profileFill?.let(::profileWarning)?.let { StatusBanner(StatusKind.WARNING, it, title = "Embedded browser") }
-                cardFill?.let(::cardWarning)?.let { StatusBanner(StatusKind.WARNING, it, title = "Embedded browser") }
+                profileFill?.let(::profileWarning)?.let { StatusBanner(StatusKind.WARNING, it, title = stringResource(R.string.embedded_browser)) }
+                cardFill?.let(::cardWarning)?.let { StatusBanner(StatusKind.WARNING, it, title = stringResource(R.string.embedded_browser)) }
                 if (fingerprint) FilledTonalButton(onClick = onFingerprint, enabled = !busy,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Icon(NuvoriIcons.Passkey, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
@@ -1228,7 +1228,7 @@ class VaultCodesActivity : FragmentActivity() {
                     modifier = Modifier.fillMaxWidth().focusRequester(focus))
                 message?.let { StatusBanner(StatusKind.ERROR, it) }
                 Button(onClick = { keyboard?.hide(); onSubmit() }, enabled = !busy && password.isNotEmpty(),
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel("Unlock", busy) }
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel(stringResource(R.string.unlock), busy) }
                 Text(stringResource(R.string.a_master_password_starts_a_new_fingerpri),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -1305,7 +1305,7 @@ class VaultCodesActivity : FragmentActivity() {
         @Composable
         fun LoginRow(entry: VaultEntry, matched: LoginMatchTier, action: String = "Fill") = when (matched) {
             LoginMatchTier.EXACT -> AutofillAccountRow(entry, action, codeLinked(entry), mostUsed = entry.id == mostUsedId) { fillLogin(entry) }
-            LoginMatchTier.SAME_SITE -> AutofillAccountRow(entry, "Fill", codeLinked(entry), moreAction = "Fill and link…",
+            LoginMatchTier.SAME_SITE -> AutofillAccountRow(entry, stringResource(R.string.fill), codeLinked(entry), moreAction = stringResource(R.string.fill_and_link_2),
                 onMore = { pendingLoginLink = entry }, mostUsed = entry.id == mostUsedId) { fillLogin(entry, grant = PickerFillGrant.SAME_SITE_ONCE) }
             LoginMatchTier.OTHER -> AutofillAccountRow(entry, if (request.unverified) "Fill…" else "Fill and link", codeLinked(entry)) { pendingLoginLink = entry }
         }
@@ -1315,7 +1315,7 @@ class VaultCodesActivity : FragmentActivity() {
             label = { Text(stringResource(R.string.search_saved_logins)) },
             leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null) },
             trailingIcon = if (search.isEmpty()) null else {
-                { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = "Clear search") } }
+                { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = stringResource(R.string.clear_search)) } }
             },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -1338,18 +1338,18 @@ class VaultCodesActivity : FragmentActivity() {
             }
             if (searching) {
                 // One ranked list across every eligible login: exact, same site, then name matches.
-                if (results.isEmpty()) item(key = "no-search-results") { PickerHint("No saved logins match this search.") }
+                if (results.isEmpty()) item(key = "no-search-results") { PickerHint(stringResource(R.string.no_saved_logins_match_this_search)) }
                 items(results, key = { "search-${it.id}" }) { entry -> LoginRow(entry, tier(entry)) }
             } else {
                 if (justSignedIn != null) {
                     item(key = "just-signed-in-header") {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            PickerSectionHeader("Just signed in")
-                            PickerHint("You filled this login here a moment ago. Fill code enters its linked authenticator code.")
+                            PickerSectionHeader(stringResource(R.string.just_signed_in))
+                            PickerHint(stringResource(R.string.you_filled_this_login_here_a_moment_ago))
                         }
                     }
                     item(key = "just-signed-in-${justSignedIn.id}") {
-                        AutofillAccountRow(justSignedIn, "Fill code", codeLinked = true) {
+                        AutofillAccountRow(justSignedIn, stringResource(R.string.fill_code), codeLinked = true) {
                             fillLogin(justSignedIn, grant = PickerFillGrant.CODE_AFTER_LOGIN)
                         }
                     }
@@ -1376,7 +1376,7 @@ class VaultCodesActivity : FragmentActivity() {
                         val savedHosts = sameSiteLogins.mapNotNull { sameSite[it.id]?.removePrefix("https://") }.distinct()
                         val site = request.origin?.let(::registrableDomain)
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            PickerSectionHeader("Same site, different page")
+                            PickerSectionHeader(stringResource(R.string.same_site_different_page))
                             PickerHint(if (savedHosts.size == 1) "Saved for ${savedHosts.single()}. Fill uses it here once, without linking."
                                 else "Saved for other pages of ${site ?: destination}. Fill uses one here once, without linking.")
                         }
@@ -1386,7 +1386,7 @@ class VaultCodesActivity : FragmentActivity() {
                 if (possible.isNotEmpty()) {
                     item(key = "possible-header") {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            PickerSectionHeader("Possible matches")
+                            PickerSectionHeader(stringResource(R.string.possible_matches))
                             PickerHint(claimedHost(request)?.let { "These look related to $destination or to $it, the site it says it shows. You confirm before one is filled or linked." }
                                 ?: "These look related to $destination. You confirm before one is filled or linked.")
                         }
@@ -1394,7 +1394,7 @@ class VaultCodesActivity : FragmentActivity() {
                     items(possible, key = { "possible-${it.id}" }) { entry -> LoginRow(entry, LoginMatchTier.OTHER) }
                 }
                 if (others.isNotEmpty()) {
-                    item(key = "others-header") { PickerSectionHeader("All saved logins") }
+                    item(key = "others-header") { PickerSectionHeader(stringResource(R.string.all_saved_logins)) }
                     items(others, key = { "other-${it.id}" }) { entry -> LoginRow(entry, LoginMatchTier.OTHER) }
                 }
             }
@@ -1426,7 +1426,7 @@ class VaultCodesActivity : FragmentActivity() {
                         if (entry.primaryValue.isNotBlank() && entry.title != entry.primaryValue) Text(entry.title,
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (codeLinked) StatusChip(StatusKind.INFO, "Code linked", Modifier.padding(top = 4.dp))
+                        if (codeLinked) StatusChip(StatusKind.INFO, stringResource(R.string.code_linked), Modifier.padding(top = 4.dp))
                     }
                 }
                 Button(onClick = { prepareGeneration(entry) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
@@ -1462,7 +1462,7 @@ class VaultCodesActivity : FragmentActivity() {
                         label = { Text(stringResource(R.string.username_or_email)) }, singleLine = true,
                         supportingText = { Text(if (request.usernameConfirmed) "Required to save a new login."
                             else "Check this is your account name, not a server or workspace.") }, modifier = Modifier.fillMaxWidth())
-                    else PickerLabeledValue("Username", request.username)
+                    else PickerLabeledValue(stringResource(R.string.username), request.username)
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(stringResource(R.string.password), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1480,10 +1480,10 @@ class VaultCodesActivity : FragmentActivity() {
                 }
             }
             if (identical.isNotEmpty()) {
-                StatusBanner(StatusKind.SUCCESS, "This password is already saved in Nuvori.")
+                StatusBanner(StatusKind.SUCCESS, stringResource(R.string.this_password_is_already_saved_in_nuvori))
                 Button(onClick = ::finishAlreadySaved, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(stringResource(R.string.done)) }
                 OutlinedButton(enabled = !busy && canCreate, onClick = { saveLogin(null, typedUsername, name) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel("Save as new login", busy && savingId == "new") }
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel(stringResource(R.string.save_as_new_login), busy && savingId == "new") }
             } else {
                 if (different.isNotEmpty()) {
                     StatusBanner(StatusKind.INFO, if (different.size == 1) "This account is already saved with a different password. Update it, or keep both."
@@ -1492,18 +1492,18 @@ class VaultCodesActivity : FragmentActivity() {
                         key(entry.id) {
                             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 if (different.size == 1) Button(enabled = !busy, onClick = { selectedUpdate = entry },
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel("Update ${entry.title}", busy && savingId == entry.id) }
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel(stringResource(R.string.update, entry.title.toString()), busy && savingId == entry.id) }
                                 else FilledTonalButton(enabled = !busy, onClick = { selectedUpdate = entry },
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel("Update ${entry.title}", busy && savingId == entry.id) }
-                                if (needsUsername) PickerHint("Username: ${entry.primaryValue}")
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel(stringResource(R.string.update, entry.title.toString()), busy && savingId == entry.id) }
+                                if (needsUsername) PickerHint(stringResource(R.string.username_2, entry.primaryValue.toString()))
                             }
                         }
                     }
                 }
                 if (different.isEmpty()) Button(enabled = !busy && canCreate, onClick = { saveLogin(null, typedUsername, name) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel("Save as new login", busy && savingId == "new") }
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel(stringResource(R.string.save_as_new_login), busy && savingId == "new") }
                 else OutlinedButton(enabled = !busy && canCreate, onClick = { saveLogin(null, typedUsername, name) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel("Save as new login", busy && savingId == "new") }
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { PickerButtonLabel(stringResource(R.string.save_as_new_login), busy && savingId == "new") }
             }
         }
     }
@@ -1529,14 +1529,14 @@ class VaultCodesActivity : FragmentActivity() {
                             PickerKeyBadge()
                             Text(stringResource(R.string.new_passkey), style = MaterialTheme.typography.titleMedium)
                         }
-                        PickerLabeledValue("Website or app", if (rpName.isNotBlank() && rpName != rpId) "$rpName ($rpId)" else rpId)
-                        PickerLabeledValue("Account", if (displayName.isNotBlank() && displayName != userName) "$displayName ($userName)" else userName)
+                        PickerLabeledValue(stringResource(R.string.website_or_app), if (rpName.isNotBlank() && rpName != rpId) "$rpName ($rpId)" else rpId)
+                        PickerLabeledValue(stringResource(R.string.account), if (displayName.isNotBlank() && displayName != userName) "$displayName ($userName)" else userName)
                         PickerHint(source)
                     }
                 }
-                PickerHint("Keep an encrypted backup to transfer it to another phone.")
+                PickerHint(stringResource(R.string.keep_an_encrypted_backup_to_transfer_it))
                 Button(enabled = !busy, onClick = { usePasskey(null) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                    PickerButtonLabel("Create passkey", busy)
+                    PickerButtonLabel(stringResource(R.string.create_passkey), busy)
                 }
             }
         } else {

@@ -1,5 +1,6 @@
 package com.privatevault.app
 
+import androidx.compose.ui.res.stringResource
 import com.privatevault.app.controls.Button
 import com.privatevault.app.controls.OutlinedButton
 import android.content.Context
@@ -114,23 +115,23 @@ internal fun SettingsHub(summary: SettingsHubSummary, open: (String) -> Unit) {
     val autofillEnabled = rememberAutofillServiceEnabled()
     val membershipNotice = summary.membershipNotice
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        SettingsHubGroup("Security") {
-            SettingsHubRow("Security", "Lock now, auto-lock and master password", NuvoriIcons.Lock,
+        SettingsHubGroup(stringResource(R.string.security)) {
+            SettingsHubRow(stringResource(R.string.security), stringResource(R.string.lock_now_auto_lock_and_master_password), NuvoriIcons.Lock,
                 listOf(StatusKind.NEUTRAL to autoLockStatus(summary.backgroundTimeoutMs))) { open("Security") }
         }
-        SettingsHubGroup("Autofill and passkeys") {
-            SettingsHubRow("Autofill and codes", "Fill logins and open codes quickly", NuvoriIcons.Password,
+        SettingsHubGroup(stringResource(R.string.autofill_and_passkeys)) {
+            SettingsHubRow(stringResource(R.string.autofill_and_codes), stringResource(R.string.fill_logins_and_open_codes_quickly), NuvoriIcons.Password,
                 listOf(if (autofillEnabled) StatusKind.SUCCESS to "On" else StatusKind.WARNING to "Off")) { open("Autofill and codes") }
             SettingsHubDivider()
-            SettingsHubRow("Passkeys", "Sign in without passwords (Android 14 or newer)", NuvoriIcons.Passkey,
+            SettingsHubRow(stringResource(R.string.passkeys), stringResource(R.string.sign_in_without_passwords_android_14_or), NuvoriIcons.Passkey,
                 listOf(StatusKind.NEUTRAL to if (summary.passkeys == 0) "None saved" else "${summary.passkeys} saved")) { open("Passkeys") }
             SettingsHubDivider()
-            SettingsHubRow("Sign-ins", "Which “Continue with” account you used on a site", NuvoriIcons.LogIn) { open("Sign-ins") }
+            SettingsHubRow(stringResource(R.string.sign_ins), stringResource(R.string.which_continue_with_account_you_used_on), NuvoriIcons.LogIn) { open("Sign-ins") }
         }
-        SettingsHubGroup("Sync") {
+        SettingsHubGroup(stringResource(R.string.sync)) {
             val pairedChip = if (summary.pairedDevices == 0) StatusKind.NEUTRAL to "Not paired"
                 else StatusKind.NEUTRAL to "${summary.pairedDevices} ${if (summary.pairedDevices == 1) "device" else "devices"}"
-            SettingsHubRow("Devices & sync", "Pair a phone or a Windows PC", NuvoriIcons.Devices,
+            SettingsHubRow(stringResource(R.string.devices_sync), stringResource(R.string.pair_a_phone_or_a_windows_pc), NuvoriIcons.Devices,
                 listOfNotNull(pairedChip,
                     if (summary.syncNeedsAttention) StatusKind.ERROR to "Needs attention" else null,
                     if (summary.transferPending) StatusKind.INFO to "Role transfer" else null,
@@ -140,31 +141,31 @@ internal fun SettingsHub(summary: SettingsHubSummary, open: (String) -> Unit) {
                         null -> null
                     })) { open("Android devices") }
             SettingsHubDivider()
-            SettingsHubRow("Watch codes", "Show authenticator codes on Wear OS", NuvoriIcons.Watch,
+            SettingsHubRow(stringResource(R.string.watch_codes), stringResource(R.string.show_authenticator_codes_on_wear_os), NuvoriIcons.Watch,
                 listOf(if (summary.watchSyncEnabled) StatusKind.SUCCESS to "On" else StatusKind.NEUTRAL to "Off")) { open("Watch codes") }
         }
-        SettingsHubGroup("Backup and data") {
-            SettingsHubRow("Backup and import", "Encrypted backups and password exports", NuvoriIcons.Import) { open("Backup and import") }
+        SettingsHubGroup(stringResource(R.string.backup_and_data)) {
+            SettingsHubRow(stringResource(R.string.backup_and_import), stringResource(R.string.encrypted_backups_and_password_exports), NuvoriIcons.Import) { open("Backup and import") }
             SettingsHubDivider()
-            SettingsHubRow("Import authenticator codes", "Move codes from another app", NuvoriIcons.Code) { open("Import authenticator codes") }
+            SettingsHubRow(stringResource(R.string.import_authenticator_codes), stringResource(R.string.move_codes_from_another_app), NuvoriIcons.Code) { open("Import authenticator codes") }
             SettingsHubDivider()
-            SettingsHubRow("Recently deleted", "Restore items deleted in the last 30 days", NuvoriIcons.Delete) { open("Recently deleted") }
+            SettingsHubRow(stringResource(R.string.recently_deleted), stringResource(R.string.restore_items_deleted_in_the_last_30_day), NuvoriIcons.Delete) { open("Recently deleted") }
         }
-        SettingsHubGroup("App") {
-            SettingsHubRow("Appearance", "Light or dark, colors and website icons", if (summary.lightMode) NuvoriIcons.Sun else NuvoriIcons.Moon,
+        SettingsHubGroup(stringResource(R.string.app)) {
+            SettingsHubRow(stringResource(R.string.appearance), stringResource(R.string.light_or_dark_colors_and_website_icons), if (summary.lightMode) NuvoriIcons.Sun else NuvoriIcons.Moon,
                 listOf(StatusKind.NEUTRAL to if (summary.lightMode) "Light" else "Dark")) { open("Appearance") }
             SettingsHubDivider()
-            SettingsHubRow("Cards and NFC", "Optional contactless card scanning", NuvoriIcons.Nfc,
+            SettingsHubRow(stringResource(R.string.cards_and_nfc), stringResource(R.string.optional_contactless_card_scanning), NuvoriIcons.Nfc,
                 listOf(when {
                     !summary.nfcSupported -> StatusKind.NEUTRAL to "No NFC"
                     summary.nfcEnabled -> StatusKind.SUCCESS to "NFC on"
                     else -> StatusKind.NEUTRAL to "NFC off"
                 })) { open("Cards and NFC") }
         }
-        SettingsHubGroup("Support") {
-            SettingsHubRow("Help", "Answers and shortcuts for common tasks", NuvoriIcons.Question) { open("Help") }
+        SettingsHubGroup(stringResource(R.string.support)) {
+            SettingsHubRow(stringResource(R.string.help), stringResource(R.string.answers_and_shortcuts_for_common_tasks), NuvoriIcons.Question) { open("Help") }
             SettingsHubDivider()
-            SettingsHubRow("About", "Privacy and security limits", NuvoriIcons.Info) { open("About") }
+            SettingsHubRow(stringResource(R.string.about), stringResource(R.string.privacy_and_security_limits), NuvoriIcons.Info) { open("About") }
         }
     }
 }

@@ -92,35 +92,35 @@ internal fun PasswordGeneratorDialog(onDismiss: () -> Unit, onUse: (String) -> U
                                 liveRegion = LiveRegionMode.Polite
                                 contentDescription = "Generated $noun: $value"
                             })
-                        IconButton(onClick = { round++ }, enabled = error == null) { Icon(Icons.Outlined.Refresh, contentDescription = "New $noun") }
+                        IconButton(onClick = { round++ }, enabled = error == null) { Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.new, noun.toString())) }
                     }
                 }
-                Text("${PasswordGenerator.strengthLabel(bits)} · about $bits bits of randomness", style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.about_bits_of_randomness, (PasswordGenerator.strengthLabel(bits)).toString(), bits.toString()), style = MaterialTheme.typography.bodySmall)
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (!passphrase) {
-                    CountSlider("Length", settings.length, PasswordGenerator.LENGTH_RANGE) { change(settings.copy(length = it)) }
-                    GeneratorSwitch("Uppercase", "A–Z", settings.uppercase, enabled = !(settings.uppercase && setsOn == 1)) { change(settings.copy(uppercase = it)) }
-                    GeneratorSwitch("Lowercase", "a–z", settings.lowercase, enabled = !(settings.lowercase && setsOn == 1)) { change(settings.copy(lowercase = it)) }
-                    GeneratorSwitch("Numbers", "0–9", settings.digits, enabled = !(settings.digits && setsOn == 1)) { change(settings.copy(digits = it)) }
-                    GeneratorSwitch("Symbols", "! @ # $ % ^ & * - _ = + ?", settings.symbols, enabled = !(settings.symbols && setsOn == 1)) { change(settings.copy(symbols = it)) }
-                    GeneratorSwitch("Avoid similar characters", "Leaves out l, I, O, 0 and 1", settings.avoidSimilar) { change(settings.copy(avoidSimilar = it)) }
+                    CountSlider(stringResource(R.string.length), settings.length, PasswordGenerator.LENGTH_RANGE) { change(settings.copy(length = it)) }
+                    GeneratorSwitch(stringResource(R.string.uppercase), "A–Z", settings.uppercase, enabled = !(settings.uppercase && setsOn == 1)) { change(settings.copy(uppercase = it)) }
+                    GeneratorSwitch(stringResource(R.string.lowercase), "a–z", settings.lowercase, enabled = !(settings.lowercase && setsOn == 1)) { change(settings.copy(lowercase = it)) }
+                    GeneratorSwitch(stringResource(R.string.numbers), "0–9", settings.digits, enabled = !(settings.digits && setsOn == 1)) { change(settings.copy(digits = it)) }
+                    GeneratorSwitch(stringResource(R.string.symbols), "! @ # $ % ^ & * - _ = + ?", settings.symbols, enabled = !(settings.symbols && setsOn == 1)) { change(settings.copy(symbols = it)) }
+                    GeneratorSwitch(stringResource(R.string.avoid_similar_characters), stringResource(R.string.leaves_out_l_i_o_0_and_1), settings.avoidSimilar) { change(settings.copy(avoidSimilar = it)) }
                 } else {
-                    CountSlider("Words", settings.words, PasswordGenerator.WORDS_RANGE) { change(settings.copy(words = it)) }
+                    CountSlider(stringResource(R.string.words), settings.words, PasswordGenerator.WORDS_RANGE) { change(settings.copy(words = it)) }
                     Text(stringResource(R.string.separator), style = MaterialTheme.typography.labelLarge)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         separatorLabels.forEach { (separator, label) ->
                             FilterChip(selected = settings.separator == separator, onClick = { change(settings.copy(separator = separator)) }, label = { Text(label) })
                         }
                     }
-                    GeneratorSwitch("Capitalize words", null, settings.capitalize) { change(settings.copy(capitalize = it)) }
-                    GeneratorSwitch("Include a number", "Many websites ask for one", settings.includeNumber) { change(settings.copy(includeNumber = it)) }
+                    GeneratorSwitch(stringResource(R.string.capitalize_words), null, settings.capitalize) { change(settings.copy(capitalize = it)) }
+                    GeneratorSwitch(stringResource(R.string.include_a_number), stringResource(R.string.many_websites_ask_for_one), settings.includeNumber) { change(settings.copy(includeNumber = it)) }
                 }
                 Text(stringResource(R.string.this_replaces_the_password_in_this_form),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = {
-            TextButton(onClick = { store.save(settings); onUse(value) }, enabled = value.isNotEmpty()) { Text("Use $noun") }
+            TextButton(onClick = { store.save(settings); onUse(value) }, enabled = value.isNotEmpty()) { Text(stringResource(R.string.use, noun.toString())) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )

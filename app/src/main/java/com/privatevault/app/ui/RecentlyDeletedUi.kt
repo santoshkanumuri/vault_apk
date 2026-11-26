@@ -80,7 +80,7 @@ internal fun PreviousPasswords(viewModel: VaultViewModel, entryId: String, updat
                     Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text("Replaced ${ago(old.replacedAt)}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.replaced, (ago(old.replacedAt)).toString()), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(if (shown) old.password else "••••••••", style = MaterialTheme.typography.bodyLarge,
                                 fontFamily = if (shown) FontFamily.Monospace else null)
                         }
@@ -88,7 +88,7 @@ internal fun PreviousPasswords(viewModel: VaultViewModel, entryId: String, updat
                             Icon(if (shown) NuvoriIcons.EyeOff else NuvoriIcons.Eye, contentDescription = if (shown) "Hide previous password" else "Reveal previous password", modifier = Modifier.size(20.dp))
                         }
                         IconButton(onClick = { copy("Previous password", old.password) }, modifier = Modifier.size(48.dp)) {
-                            Icon(NuvoriIcons.Copy, contentDescription = "Copy previous password", modifier = Modifier.size(20.dp))
+                            Icon(NuvoriIcons.Copy, contentDescription = stringResource(R.string.copy_previous_password), modifier = Modifier.size(20.dp))
                         }
                     }
                 }
@@ -118,8 +118,8 @@ internal fun RecentlyDeletedPage(viewModel: VaultViewModel) {
     var forget by remember { mutableStateOf<TrashedEntry?>(null) }
     var confirmEmpty by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { viewModel.loadTrash() }
-    SettingsSection("Recently deleted",
-        description = "Entries deleted on this phone or on a paired device stay here for ${TrashedEntry.DAYS} days. A restored entry syncs to your other devices. Photos and passkeys are not kept.") {
+    SettingsSection(stringResource(R.string.recently_deleted),
+        description = stringResource(R.string.entries_deleted_on_this_phone_or_on_a_pa, TrashedEntry.DAYS.toString())) {
         if (items.isEmpty()) Text(stringResource(R.string.nothing_deleted_recently), style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         items.forEachIndexed { index, item ->
@@ -142,7 +142,7 @@ internal fun RecentlyDeletedPage(viewModel: VaultViewModel) {
                 }
             }
         }
-        if (items.isNotEmpty()) SettingsDangerButton("Empty Recently deleted", onClick = { confirmEmpty = true }, icon = NuvoriIcons.Delete)
+        if (items.isNotEmpty()) SettingsDangerButton(stringResource(R.string.empty_recently_deleted_2), onClick = { confirmEmpty = true }, icon = NuvoriIcons.Delete)
     }
     forget?.let { item ->
         AlertDialog(onDismissRequest = { forget = null },
@@ -153,7 +153,7 @@ internal fun RecentlyDeletedPage(viewModel: VaultViewModel) {
     }
     if (confirmEmpty) AlertDialog(onDismissRequest = { confirmEmpty = false },
         title = { Text(stringResource(R.string.empty_recently_deleted)) },
-        text = { Text("This phone forgets all ${items.size} deleted entries. You can't undo this.") },
+        text = { Text(stringResource(R.string.this_phone_forgets_all_deleted_entries_y, items.size.toString())) },
         confirmButton = { TextButton(onClick = { confirmEmpty = false; viewModel.emptyTrash() }) { Text(stringResource(R.string.empty), color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton(onClick = { confirmEmpty = false }) { Text(stringResource(R.string.cancel)) } })
 }

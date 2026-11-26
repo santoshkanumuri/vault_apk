@@ -40,18 +40,18 @@ internal fun CodeAppDetectionPreference() {
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
-    SettingsSwitchRow("Suggest codes for the previous app", enabled, {
+    SettingsSwitchRow(stringResource(R.string.suggest_codes_for_the_previous_app), enabled, {
         enabled = it
         prefs.edit().putBoolean("code_app_detection", it).apply()
     })
     if (enabled) {
         Text(stringResource(R.string.when_nuvori_is_your_autofill_service_the), style = MaterialTheme.typography.bodySmall)
         if (!granted) {
-            StatusBanner(kind = StatusKind.WARNING, message = "If you use another Autofill service, allow Usage access to put codes for your previous app first.")
-            SettingsSecondaryButton("Allow Usage access", onClick = {
+            StatusBanner(kind = StatusKind.WARNING, message = stringResource(R.string.if_you_use_another_autofill_service_allo))
+            SettingsSecondaryButton(stringResource(R.string.allow_usage_access), onClick = {
                 context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:${context.packageName}")))
             })
-        } else StatusChip(StatusKind.SUCCESS, "Usage access allowed")
+        } else StatusChip(StatusKind.SUCCESS, stringResource(R.string.usage_access_allowed))
     }
 }
 

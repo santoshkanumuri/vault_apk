@@ -94,7 +94,7 @@ internal fun SavedPasskeysSection(data: PasskeyPageData, onDelete: (PasskeyInfo)
         else data.passkeys.filter { listOf(it.rpId, it.username, it.displayName).any { text -> text.contains(query, ignoreCase = true) } }
     }
     val sites = remember(data.passkeys) { data.passkeys.map { it.rpId }.distinct().size }
-    SettingsSection("Saved passkeys", description = when {
+    SettingsSection(stringResource(R.string.saved_passkeys), description = when {
         data.passkeys.isEmpty() -> null
         else -> "${data.passkeys.size} ${if (data.passkeys.size == 1) "passkey" else "passkeys"} for $sites ${if (sites == 1) "site or app" else "sites and apps"}. Tap one for details."
     }) {
@@ -102,7 +102,7 @@ internal fun SavedPasskeysSection(data: PasskeyPageData, onDelete: (PasskeyInfo)
         if (data.passkeys.size > 4) OutlinedTextField(search, { search = it }, label = { Text(stringResource(R.string.search_passkeys)) },
             leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null) },
             trailingIcon = if (search.isEmpty()) null else {
-                { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = "Clear search") } }
+                { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = stringResource(R.string.clear_search)) } }
             },
             singleLine = true, modifier = Modifier.fillMaxWidth())
         if (data.passkeys.isNotEmpty() && shown.isEmpty()) Text(stringResource(R.string.no_passkeys_match_this_search),
@@ -166,23 +166,23 @@ private fun PasskeyDetails(passkey: PasskeyInfo, origin: PasskeyOrigin?, events:
     val addedFrom = remember(origin, events) { PasskeyLedger.addedFrom(origin, events) }
     val fingerprint = remember(passkey.publicKey) { PasskeyLedger.publicKeyFingerprint(passkey.publicKey) }
     Column(Modifier.fillMaxWidth().padding(start = 52.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        DetailLine("Website or app", passkey.rpId)
-        DetailLine("Account", passkey.username.ifBlank { "Not given" })
-        if (passkey.displayName.isNotBlank() && passkey.displayName != passkey.username) DetailLine("Display name", passkey.displayName)
-        DetailLine("Added", dateTime(passkey.createdAt))
+        DetailLine(stringResource(R.string.website_or_app), passkey.rpId)
+        DetailLine(stringResource(R.string.account), passkey.username.ifBlank { "Not given" })
+        if (passkey.displayName.isNotBlank() && passkey.displayName != passkey.username) DetailLine(stringResource(R.string.display_name), passkey.displayName)
+        DetailLine(stringResource(R.string.added), dateTime(passkey.createdAt))
         if (addedFrom != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (origin != null) PasskeyIcon(passkey.rpId, origin.icon, origin.appPackage, size = 24.dp)
-            DetailLine("Added from", addedFrom + (origin?.appPackage?.takeIf { it != origin.appLabel }?.let { " ($it)" } ?: ""))
+            DetailLine(stringResource(R.string.added_from), addedFrom + (origin?.appPackage?.takeIf { it != origin.appLabel }?.let { " ($it)" } ?: ""))
         }
         change?.takeIf { it.at != passkey.createdAt || it.eventKind != PasskeyEventKind.ADDED_BEFORE_HISTORY }?.let {
-            DetailLine("Last changed", "${dateTime(it.at)} · ${PasskeyLedger.describe(it)}")
+            DetailLine(stringResource(R.string.last_changed), "${dateTime(it.at)} · ${PasskeyLedger.describe(it)}")
         }
-        DetailLine("Last used", lastUsed?.let { dateTime(it) + if (uses > 0) " · $uses ${if (uses == 1) "time" else "times"} on this device" else "" }
+        DetailLine(stringResource(R.string.last_used), lastUsed?.let { dateTime(it) + if (uses > 0) " · $uses ${if (uses == 1) "time" else "times"} on this device" else "" }
             ?: "Not used on this device yet")
-        DetailLine("Key", "ES256 (ECDSA P-256 with SHA-256) · stays in your encrypted vault")
-        if (fingerprint != null) DetailLine("Public key fingerprint", fingerprint, mono = true)
-        DetailLine("Credential ID", PasskeyLedger.shortId(passkey.id), mono = true)
-        DetailLine("User handle", PasskeyLedger.shortId(passkey.userHandle), mono = true)
+        DetailLine(stringResource(R.string.key), stringResource(R.string.es256_ecdsa_p_256_with_sha_256_stays_in))
+        if (fingerprint != null) DetailLine(stringResource(R.string.public_key_fingerprint), fingerprint, mono = true)
+        DetailLine(stringResource(R.string.credential_id), PasskeyLedger.shortId(passkey.id), mono = true)
+        DetailLine(stringResource(R.string.user_handle), PasskeyLedger.shortId(passkey.userHandle), mono = true)
         Text(stringResource(R.string.stored_encrypted_with_your_vault_include),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (events.isNotEmpty()) {
@@ -244,8 +244,8 @@ internal fun PasskeyHistorySection(history: List<PasskeyHistoryEvent>, onClear: 
     var changesOnly by rememberSaveable { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
     val filtered = remember(history, changesOnly) { if (changesOnly) history.filter { it.eventKind?.isChange == true } else history }
-    SettingsSection("Passkey history",
-        description = "When each passkey was added, synced, used or deleted. Kept encrypted on this device only; not synced or backed up.") {
+    SettingsSection(stringResource(R.string.passkey_history),
+        description = stringResource(R.string.when_each_passkey_was_added_synced_used)) {
         if (history.isEmpty()) {
             Text(stringResource(R.string.nothing_yet_new_passkeys_sign_ins_and_de),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -258,7 +258,7 @@ internal fun PasskeyHistorySection(history: List<PasskeyHistoryEvent>, onClear: 
         val visible = if (all) filtered else filtered.take(10)
         visible.forEach { LedgerLine(it, showPasskey = true) }
         if (filtered.size > 10) TextButton(onClick = { all = !all }) { Text(if (all) "Show less" else "Show all ${filtered.size}") }
-        SettingsSecondaryButton("Clear history", onClick = { confirm = true }, icon = NuvoriIcons.Delete)
+        SettingsSecondaryButton(stringResource(R.string.clear_history), onClick = { confirm = true }, icon = NuvoriIcons.Delete)
     }
     if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text(stringResource(R.string.clear_passkey_history)) },
         text = { Text(stringResource(R.string.this_removes_the_history_list_on_this_de)) },

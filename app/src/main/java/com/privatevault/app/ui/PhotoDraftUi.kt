@@ -124,9 +124,9 @@ internal fun PhotoDraftControls(state: PhotoDraftEditorState, viewModel: VaultVi
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                if (bitmap != null) Image(bitmap.asImageBitmap(), "Photo ${index + 1} ready to save",
+                if (bitmap != null) Image(bitmap.asImageBitmap(), stringResource(R.string.photo_ready_to_save, (index + 1).toString()),
                     Modifier.size(72.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
-                Text("Photo ${index + 1}", Modifier.weight(1f))
+                Text(stringResource(R.string.photo, (index + 1).toString()), Modifier.weight(1f))
                 TextButton(onClick = {
                     state.photos.remove(draft)
                     viewModel.discardDraftPhoto(draft)

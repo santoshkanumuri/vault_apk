@@ -242,14 +242,14 @@ internal fun WatchCodes(snapshot: WatchSnapshot?, secure: Boolean, syncedAt: Lon
                     RECENT -> recent
                     else -> sorted.filter { watchLetter(it) == current }
                 }
-                SwipeBack("letter:$current", handleBack = !background, onBack = { group = null },
+                SwipeBack(stringResource(R.string.letter, current.toString()), handleBack = !background, onBack = { group = null },
                     background = { WatchLetterIndex(accounts.size, recent.size, letters, syncedAt) { group = it } }) {
                     WatchCodeList(current, shown, syncedAt, open)
                 }
             }
         }
     }
-    if (opened != null) SwipeBack("code:${opened.id}", handleBack = true, onBack = { openId = null },
+    if (opened != null) SwipeBack(stringResource(R.string.code, opened.id.toString()), handleBack = true, onBack = { openId = null },
         background = { listScreen(true) }) { WatchCodeDetail(opened, copy) }
     else listScreen(false)
 }

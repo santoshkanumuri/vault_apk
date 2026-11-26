@@ -119,7 +119,7 @@ internal fun LazyListScope.richNoteEditorItems(state: RichNoteEditorState, palet
                 is DividerItem -> Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
                     HorizontalDivider(Modifier.weight(1f), thickness = 2.dp, color = MaterialTheme.colorScheme.outlineVariant)
                     IconButton(onClick = { state.remove(item) }, modifier = Modifier.size(40.dp)) {
-                        Icon(Icons.Filled.Close, contentDescription = "Remove divider", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.remove_divider), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 is TableItem -> RichTableEditor(state, item)
@@ -246,30 +246,30 @@ internal fun RichNoteToolbar(state: RichNoteEditorState, modifier: Modifier = Mo
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                ToolButton(Icons.AutoMirrored.Filled.Undo, "Undo", enabled = state.canUndo) { state.undo() }
-                ToolButton(Icons.AutoMirrored.Filled.Redo, "Redo", enabled = state.canRedo) { state.redo() }
+                ToolButton(Icons.AutoMirrored.Filled.Undo, stringResource(R.string.undo), enabled = state.canUndo) { state.undo() }
+                ToolButton(Icons.AutoMirrored.Filled.Redo, stringResource(R.string.redo), enabled = state.canRedo) { state.redo() }
                 ToolDivider()
-                ToolButton(Icons.Filled.TextFields, "Text style") { sheet = RichSheet.STYLE }
-                ToolButton(Icons.Filled.FormatBold, "Bold", on = has(MarkKind.BOLD)) { segment?.toggleMark(Mark(MarkKind.BOLD)) }
-                ToolButton(Icons.Filled.FormatItalic, "Italic", on = has(MarkKind.ITALIC)) { segment?.toggleMark(Mark(MarkKind.ITALIC)) }
-                ToolButton(Icons.Filled.FormatUnderlined, "Underline", on = has(MarkKind.UNDERLINE)) { segment?.toggleMark(Mark(MarkKind.UNDERLINE)) }
-                ToolButton(Icons.Filled.FormatStrikethrough, "Strikethrough", on = has(MarkKind.STRIKE)) { segment?.toggleMark(Mark(MarkKind.STRIKE)) }
-                ToolButton(Icons.Filled.FormatColorText, "Text color", on = has(MarkKind.COLOR)) { sheet = RichSheet.COLOR }
-                ToolButton(Icons.Filled.FormatColorFill, "Highlight", on = has(MarkKind.BG)) { sheet = RichSheet.HIGHLIGHT }
+                ToolButton(Icons.Filled.TextFields, stringResource(R.string.text_style)) { sheet = RichSheet.STYLE }
+                ToolButton(Icons.Filled.FormatBold, stringResource(R.string.bold), on = has(MarkKind.BOLD)) { segment?.toggleMark(Mark(MarkKind.BOLD)) }
+                ToolButton(Icons.Filled.FormatItalic, stringResource(R.string.italic), on = has(MarkKind.ITALIC)) { segment?.toggleMark(Mark(MarkKind.ITALIC)) }
+                ToolButton(Icons.Filled.FormatUnderlined, stringResource(R.string.underline), on = has(MarkKind.UNDERLINE)) { segment?.toggleMark(Mark(MarkKind.UNDERLINE)) }
+                ToolButton(Icons.Filled.FormatStrikethrough, stringResource(R.string.strikethrough), on = has(MarkKind.STRIKE)) { segment?.toggleMark(Mark(MarkKind.STRIKE)) }
+                ToolButton(Icons.Filled.FormatColorText, stringResource(R.string.text_color), on = has(MarkKind.COLOR)) { sheet = RichSheet.COLOR }
+                ToolButton(Icons.Filled.FormatColorFill, stringResource(R.string.highlight), on = has(MarkKind.BG)) { sheet = RichSheet.HIGHLIGHT }
                 ToolDivider()
-                ToolButton(Icons.AutoMirrored.Filled.FormatListBulleted, "Bulleted list", on = lineIs(BlockKind.BULLET)) { segment?.setLineKind(BlockKind.BULLET) }
-                ToolButton(Icons.Filled.FormatListNumbered, "Numbered list", on = lineIs(BlockKind.NUMBERED)) { segment?.setLineKind(BlockKind.NUMBERED) }
-                ToolButton(Icons.Filled.CheckBox, "Checklist", on = lineIs(BlockKind.CHECK)) {
+                ToolButton(Icons.AutoMirrored.Filled.FormatListBulleted, stringResource(R.string.bulleted_list), on = lineIs(BlockKind.BULLET)) { segment?.setLineKind(BlockKind.BULLET) }
+                ToolButton(Icons.Filled.FormatListNumbered, stringResource(R.string.numbered_list), on = lineIs(BlockKind.NUMBERED)) { segment?.setLineKind(BlockKind.NUMBERED) }
+                ToolButton(Icons.Filled.CheckBox, stringResource(R.string.checklist), on = lineIs(BlockKind.CHECK)) {
                     if (lineIs(BlockKind.CHECK)) state.toggleCheckedAtCaret() else segment?.setLineKind(BlockKind.CHECK)
                 }
-                ToolButton(Icons.AutoMirrored.Filled.FormatIndentIncrease, "Indent") { segment?.indent(1) }
-                ToolButton(Icons.AutoMirrored.Filled.FormatIndentDecrease, "Outdent") { segment?.indent(-1) }
+                ToolButton(Icons.AutoMirrored.Filled.FormatIndentIncrease, stringResource(R.string.indent)) { segment?.indent(1) }
+                ToolButton(Icons.AutoMirrored.Filled.FormatIndentDecrease, stringResource(R.string.outdent)) { segment?.indent(-1) }
                 ToolDivider()
-                ToolButton(Icons.Filled.Link, "Link", on = has(MarkKind.LINK)) { sheet = RichSheet.LINK }
-                ToolButton(Icons.Filled.Code, "Inline code", on = has(MarkKind.CODE)) { segment?.toggleMark(Mark(MarkKind.CODE)) }
-                ToolButton(Icons.Filled.TableChart, "Insert table") { sheet = RichSheet.TABLE }
-                ToolButton(Icons.Filled.HorizontalRule, "Insert divider") { state.insertDivider() }
-                ToolButton(Icons.Filled.FormatClear, "Clear formatting") { segment?.clearFormatting() }
+                ToolButton(Icons.Filled.Link, stringResource(R.string.link), on = has(MarkKind.LINK)) { sheet = RichSheet.LINK }
+                ToolButton(Icons.Filled.Code, stringResource(R.string.inline_code), on = has(MarkKind.CODE)) { segment?.toggleMark(Mark(MarkKind.CODE)) }
+                ToolButton(Icons.Filled.TableChart, stringResource(R.string.insert_table)) { sheet = RichSheet.TABLE }
+                ToolButton(Icons.Filled.HorizontalRule, stringResource(R.string.insert_divider)) { state.insertDivider() }
+                ToolButton(Icons.Filled.FormatClear, stringResource(R.string.clear_formatting)) { segment?.clearFormatting() }
             }
             if (lineIs(BlockKind.CHECK)) Text(stringResource(R.string.tap_the_checklist_button_again_to_tick_t),
                 Modifier.padding(start = 12.dp, bottom = 4.dp), style = MaterialTheme.typography.labelSmall,
@@ -279,10 +279,10 @@ internal fun RichNoteToolbar(state: RichNoteEditorState, modifier: Modifier = Mo
     when (sheet) {
         RichSheet.NONE -> Unit
         RichSheet.STYLE -> TextStyleSheet(segment, onDismiss = { sheet = RichSheet.NONE })
-        RichSheet.COLOR -> ColorSheet("Text color", active.firstOrNull { it.kind == MarkKind.COLOR }?.color, text = true,
+        RichSheet.COLOR -> ColorSheet(stringResource(R.string.text_color), active.firstOrNull { it.kind == MarkKind.COLOR }?.color, text = true,
             onPick = { color -> segment?.setValueMark(MarkKind.COLOR, color?.let { Mark(MarkKind.COLOR, color = it) }) },
             onDismiss = { sheet = RichSheet.NONE })
-        RichSheet.HIGHLIGHT -> ColorSheet("Highlight", active.firstOrNull { it.kind == MarkKind.BG }?.color, text = false,
+        RichSheet.HIGHLIGHT -> ColorSheet(stringResource(R.string.highlight), active.firstOrNull { it.kind == MarkKind.BG }?.color, text = false,
             onPick = { color -> segment?.setValueMark(MarkKind.BG, color?.let { Mark(MarkKind.BG, color = it) }) },
             onDismiss = { sheet = RichSheet.NONE })
         RichSheet.TABLE -> TableSheet(onInsert = { rows, columns, header -> state.insertTable(rows, columns, header) },
@@ -330,7 +330,7 @@ private fun TextStyleSheet(segment: RichTextSegment?, onDismiss: () -> Unit) {
                         kind == BlockKind.CODE -> MaterialTheme.typography.bodyLarge.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
                         else -> MaterialTheme.typography.bodyLarge
                     })
-                    if (selected) Icon(Icons.Filled.Check, contentDescription = "Current style", tint = MaterialTheme.colorScheme.primary)
+                    if (selected) Icon(Icons.Filled.Check, contentDescription = stringResource(R.string.current_style), tint = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -346,7 +346,7 @@ private fun ColorSheet(title: String, selected: NoteColor?, text: Boolean, onPic
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Swatch("Default", null, selected == null, text, light) { onPick(null); onDismiss() }
+                Swatch(stringResource(R.string.default), null, selected == null, text, light) { onPick(null); onDismiss() }
                 NoteColor.entries.forEach { color ->
                     Swatch(NoteColors.label(color), color, selected == color, text, light) { onPick(color); onDismiss() }
                 }
@@ -382,8 +382,8 @@ private fun TableSheet(onInsert: (Int, Int, Boolean) -> Unit, onDismiss: () -> U
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.insert_table), style = MaterialTheme.typography.titleMedium)
-            Stepper("Rows", rows, 1, RichNotes.MAX_TABLE_ROWS) { rows = it }
-            Stepper("Columns", columns, 1, RichNotes.MAX_TABLE_COLUMNS) { columns = it }
+            Stepper(stringResource(R.string.rows), rows, 1, RichNotes.MAX_TABLE_ROWS) { rows = it }
+            Stepper(stringResource(R.string.columns), columns, 1, RichNotes.MAX_TABLE_COLUMNS) { columns = it }
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.header_row), Modifier.weight(1f))
                 Switch(checked = header, onCheckedChange = { header = it })

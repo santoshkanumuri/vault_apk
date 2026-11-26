@@ -342,15 +342,15 @@ private fun SetupScreen(viewModel: VaultViewModel, firstRunChoice: FirstRunChoic
         FirstRunChoice.RESTORE -> "Create a password for this phone. You will enter the backup's original password next."
         FirstRunChoice.BROWSER_IMPORT -> "Create your encrypted vault first. Then choose a password export from your browser or password manager."
     }
-    CenteredAuthCard("Create your private vault", description, onBack = onBack) {
+    CenteredAuthCard(stringResource(R.string.create_your_private_vault), description, onBack = onBack) {
         val create = { if (valid && !checking) { viewModel.setup(password.toCharArray(), enableNfc); password = ""; confirm = "" } }
-        SecretField("Master password", password, supporting = passwordStrengthHint(password)) { password = it }
-        SecretField("Confirm password", confirm,
+        SecretField(stringResource(R.string.master_password), password, supporting = passwordStrengthHint(password)) { password = it }
+        SecretField(stringResource(R.string.confirm_password), confirm,
             error = if (confirm.isNotEmpty() && confirm != password) "Passwords don't match." else null, onDone = create) { confirm = it }
-        Text("Use at least ${PasswordCrypto.MIN_PASSWORD_LENGTH} characters. A phrase of four or more words is easy to remember and hard to guess. If you forget it, Nuvori can't reset it.", style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.use_at_least_characters_a_phrase_of_four, PasswordCrypto.MIN_PASSWORD_LENGTH.toString()), style = MaterialTheme.typography.bodySmall)
         NfcPreference(enableNfc, viewModel.nfcSupported) { enableNfc = it }
         Button(onClick = create, enabled = valid && !checking, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-            if (checking) PasswordCheckProgress("Creating vault…")
+            if (checking) PasswordCheckProgress(stringResource(R.string.creating_vault))
             else Text(if (firstRunChoice == FirstRunChoice.JOIN) "Create and continue" else "Create vault")
         }
     }
@@ -370,7 +370,7 @@ internal fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, 
         LockReason.MANUAL -> "The vault locked. ${if (canUseBiometric) "Use fingerprint or face to continue." else "Enter the master password."}"
         LockReason.RESTORED -> "The backup was restored. Unlock with your current master password, not the backup's."
     }
-    CenteredAuthCard("Unlock vault", reason) {
+    CenteredAuthCard(stringResource(R.string.unlock_vault), reason) {
         if (canUseBiometric) {
             OutlinedButton(onClick = { password = ""; biometric() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Text(stringResource(R.string.use_fingerprint_or_face))
@@ -378,9 +378,9 @@ internal fun UnlockScreen(viewModel: VaultViewModel, state: VaultStatus.Locked, 
         }
         if (usePassword) {
             val unlock = { if (password.isNotEmpty() && !checking) { viewModel.unlock(password.toCharArray()); password = "" } }
-            SecretField("Master password", password, onDone = unlock) { password = it }
+            SecretField(stringResource(R.string.master_password), password, onDone = unlock) { password = it }
             Button(onClick = unlock, enabled = password.isNotEmpty() && !checking, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                if (checking) PasswordCheckProgress("Unlocking…") else Text(stringResource(R.string.unlock))
+                if (checking) PasswordCheckProgress(stringResource(R.string.unlocking)) else Text(stringResource(R.string.unlock))
             }
         } else {
             Text(stringResource(R.string.if_the_prompt_doesn_t_appear_tap_use_fin), color = MaterialTheme.colorScheme.onSurface.copy(alpha = .72f))
@@ -767,16 +767,16 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
         dismissButton = { TextButton(onClick = { showFolderEditor = false }) { Text(stringResource(R.string.cancel)) } })
     folderToDelete?.let { folder -> AlertDialog(properties = wideDialogProperties,
         onDismissRequest = { folderToDelete = null },
-        title = { Text("Delete ${folder.name}?") },
+        title = { Text(stringResource(R.string.delete_2, folder.name.toString())) },
         text = { Text(stringResource(R.string.the_entries_in_this_folder_will_remain_i)) },
-        confirmButton = { DeleteButton(onClick = { viewModel.deleteGroup(folder); selectedFolderId = null; folderToDelete = null }, label = "Delete folder") },
+        confirmButton = { DeleteButton(onClick = { viewModel.deleteGroup(folder); selectedFolderId = null; folderToDelete = null }, label = stringResource(R.string.delete_folder)) },
         dismissButton = { TextButton(onClick = { folderToDelete = null }) { Text(stringResource(R.string.cancel)) } }) }
     importPreview?.let { preview ->
         var importFilter by remember { mutableStateOf(PasswordImportFilter.ALL) }
         val visibleImportItems = preview.items.filter { importFilter.matches(it.status) }
         AlertDialog(properties = wideDialogProperties,
             onDismissRequest = viewModel::cancelPasswordImport,
-            title = { Text("Review ${preview.incomingRows} imported logins") },
+            title = { Text(stringResource(R.string.review_imported_logins, preview.incomingRows.toString())) },
             text = { LazyColumn(Modifier.heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
                     Text(buildList {
@@ -870,11 +870,11 @@ internal fun VaultHome(viewModel: VaultViewModel, onCopySecret: (String, String)
             text = {
                 Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(stringResource(R.string.match_each_heading_samples_are_masked_an))
-                    PasswordColumnPicker("Website", website, request.columns, required = true) { website = it }
-                    PasswordColumnPicker("Username", username, request.columns, required = true) { username = it }
-                    PasswordColumnPicker("Password", password, request.columns, required = true) { password = it }
-                    PasswordColumnPicker("Title", title, request.columns, required = false) { title = it }
-                    PasswordColumnPicker("Notes", notes, request.columns, required = false) { notes = it }
+                    PasswordColumnPicker(stringResource(R.string.website), website, request.columns, required = true) { website = it }
+                    PasswordColumnPicker(stringResource(R.string.username), username, request.columns, required = true) { username = it }
+                    PasswordColumnPicker(stringResource(R.string.password), password, request.columns, required = true) { password = it }
+                    PasswordColumnPicker(stringResource(R.string.title), title, request.columns, required = false) { title = it }
+                    PasswordColumnPicker(stringResource(R.string.notes), notes, request.columns, required = false) { notes = it }
                     if (!valid) Text(stringResource(R.string.choose_three_different_required_columns), color = MaterialTheme.colorScheme.error)
                 }
             },
@@ -932,10 +932,10 @@ private fun VaultToolbar(title: String, search: String, onSearch: (String) -> Un
                 Text(stringResource(R.string.add))
             }
             IconButton(onClick = onLock, modifier = Modifier.size(48.dp)) {
-                Icon(NuvoriIcons.Lock, contentDescription = "Lock vault", modifier = Modifier.size(22.dp))
+                Icon(NuvoriIcons.Lock, contentDescription = stringResource(R.string.lock_vault), modifier = Modifier.size(22.dp))
             }
         }
-        if (showSearch) NuvoriSearchField(search, onSearch, "Search ${title.lowercase(Locale.ROOT)}", Modifier.padding(end = 8.dp))
+        if (showSearch) NuvoriSearchField(search, onSearch, stringResource(R.string.search, (title.lowercase(Locale.ROOT)).toString()), Modifier.padding(end = 8.dp))
     }
 }
 
@@ -1022,14 +1022,14 @@ private fun VaultRail(selected: Int, onSelect: (Int) -> Unit, openSettings: (Str
                 icon = tab.icon,
                 label = when (tab) { VaultTab.QUESTIONS -> "Security questions"; VaultTab.AUTOFILL -> "Autofill details"; else -> tab.label })
         }
-        VaultRailDestination(selected = false, onClick = { openSettings("Passkeys") }, icon = NuvoriIcons.Passkey, label = "Passkeys")
+        VaultRailDestination(selected = false, onClick = { openSettings("Passkeys") }, icon = NuvoriIcons.Passkey, label = stringResource(R.string.passkeys))
         VaultRailDestination(selected = selected == VaultTab.MORE.ordinal, onClick = { onSelect(VaultTab.MORE.ordinal) },
-            icon = NuvoriIcons.More, label = "More")
+            icon = NuvoriIcons.More, label = stringResource(R.string.more))
         HorizontalDivider(Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.hairline)
         VaultRailDestination(selected = false, onClick = { openSettings("Android devices") },
-            icon = NuvoriIcons.Devices, label = "Devices & sync")
-        VaultRailDestination(selected = false, onClick = { openSettings(null) }, icon = NuvoriIcons.Settings, label = "Settings")
-        VaultRailDestination(selected = false, onClick = lock, icon = NuvoriIcons.Lock, label = "Lock vault")
+            icon = NuvoriIcons.Devices, label = stringResource(R.string.devices_sync))
+        VaultRailDestination(selected = false, onClick = { openSettings(null) }, icon = NuvoriIcons.Settings, label = stringResource(R.string.settings))
+        VaultRailDestination(selected = false, onClick = lock, icon = NuvoriIcons.Lock, label = stringResource(R.string.lock_vault))
     }
 }
 
@@ -1204,7 +1204,7 @@ private fun CardFace(
                         Modifier.weight(1f).then(if (numberVisible || entry.primaryValue.isBlank()) Modifier
                             else Modifier.semantics { contentDescription = "Card number ending ${entry.primaryValue.filter(Char::isDigit).takeLast(4)}" }),
                         fontSize = 19.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.Medium)
-                    if (copy != null && entry.primaryValue.isNotBlank()) CardCopyAction("Copy card number") { copy("Card number", entry.primaryValue) }
+                    if (copy != null && entry.primaryValue.isNotBlank()) CardCopyAction(stringResource(R.string.copy_card_number)) { copy("Card number", entry.primaryValue) }
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1216,7 +1216,7 @@ private fun CardFace(
                         Text(stringResource(R.string.expires), style = MaterialTheme.typography.labelSmall, color = ink, letterSpacing = .8.sp)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(entry.tertiaryValue.ifBlank { null }?.let(::displayExpiry) ?: "MM/YY", maxLines = 1, softWrap = false)
-                            if (copy != null && entry.tertiaryValue.isNotBlank()) CardCopyAction("Copy expiry date") { copy("Expiry", entry.tertiaryValue) }
+                            if (copy != null && entry.tertiaryValue.isNotBlank()) CardCopyAction(stringResource(R.string.copy_expiry_date)) { copy("Expiry", entry.tertiaryValue) }
                         }
                     }
                 }
@@ -1239,7 +1239,7 @@ private fun CardFace(
                             }
                         }
                         if (entry.fourthValue.isNotBlank())
-                            CardCopyAction("Authenticate to copy CVV") { authenticate { copy?.invoke("CVV", entry.fourthValue) } }
+                            CardCopyAction(stringResource(R.string.authenticate_to_copy_cvv)) { authenticate { copy?.invoke("CVV", entry.fourthValue) } }
                     }
                     NetworkLogo(entry.network.ifBlank { cardNetwork(entry.primaryValue) }, Modifier.padding(start = 6.dp))
                 }
@@ -1261,7 +1261,7 @@ private fun CardCopyAction(description: String, action: () -> Unit) {
 @Composable
 internal fun BackIcon(onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-        Icon(NuvoriIcons.Back, contentDescription = "Back", modifier = Modifier.size(22.dp))
+        Icon(NuvoriIcons.Back, contentDescription = stringResource(R.string.back), modifier = Modifier.size(22.dp))
     }
 }
 
@@ -1291,7 +1291,7 @@ private fun GlobalSearchResults(entries: List<EntryWithDetails>, folders: List<V
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     if (folders.isEmpty() && entries.isEmpty()) {
-        EmptyState(NuvoriIcons.Search, "No results for \"$query\"", "Try a different name or keyword.", modifier.fillMaxSize())
+        EmptyState(NuvoriIcons.Search, stringResource(R.string.no_results_for, query.toString()), stringResource(R.string.try_a_different_name_or_keyword), modifier.fillMaxSize())
         return
     }
     LazyColumn(modifier, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
@@ -1299,7 +1299,7 @@ private fun GlobalSearchResults(entries: List<EntryWithDetails>, folders: List<V
         item { Text("$count ${if (count == 1) "result" else "results"}",
             style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 8.dp)) }
-        if (folders.isNotEmpty()) item { SectionHeader("Folders") }
+        if (folders.isNotEmpty()) item { SectionHeader(stringResource(R.string.folders)) }
         itemsIndexed(folders, key = { _, folder -> "folder-${folder.id}" }) { index, folder ->
             val folderType = folder.folderType!!.label()
             val scheme = MaterialTheme.colorScheme
@@ -1317,7 +1317,7 @@ private fun GlobalSearchResults(entries: List<EntryWithDetails>, folders: List<V
             }
         }
         if (folders.isNotEmpty() && entries.isNotEmpty()) item { Spacer(Modifier.height(16.dp)) }
-        if (entries.isNotEmpty()) item { SectionHeader("Items") }
+        if (entries.isNotEmpty()) item { SectionHeader(stringResource(R.string.items)) }
         itemsIndexed(entries, key = { _, item -> item.entry.id }) { index, entry ->
             EntryListRow(entry, index, entries.size, {
                 focus.clearFocus(); keyboard?.hide(); openEntry(entry.entry.id)
@@ -1353,7 +1353,7 @@ internal fun CategoryCollection(
             Icon(NuvoriIcons.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
             Text(selectedFolder.name, Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Box {
-                IconButton(onClick = { folderMenuExpanded = true }, modifier = Modifier.size(48.dp)) { Icon(NuvoriIcons.More, "Folder actions") }
+                IconButton(onClick = { folderMenuExpanded = true }, modifier = Modifier.size(48.dp)) { Icon(NuvoriIcons.More, stringResource(R.string.folder_actions)) }
                 DropdownMenu(expanded = folderMenuExpanded, onDismissRequest = { folderMenuExpanded = false }) {
                     DropdownMenuItem(text = { Text(stringResource(R.string.rename)) }, onClick = {
                         folderMenuExpanded = false
@@ -1370,7 +1370,7 @@ internal fun CategoryCollection(
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.folders), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
                 if (search.isBlank() && tab.type != EntryType.AUTHENTICATOR) IconButton(onClick = { onEditFolder(null) }, modifier = Modifier.size(48.dp)) {
-                    Icon(NuvoriIcons.Add, "Add folder", modifier = Modifier.size(20.dp))
+                    Icon(NuvoriIcons.Add, stringResource(R.string.add_folder), modifier = Modifier.size(20.dp))
                 }
             }
             if (matchingFolders.isNotEmpty()) CompactFolders(matchingFolders, entries, onFolder)
@@ -1490,7 +1490,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             IconButton(onClick = edit, modifier = Modifier.size(48.dp)) {
-                Icon(NuvoriIcons.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(NuvoriIcons.Edit, contentDescription = stringResource(R.string.edit), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Box {
                 IconButton(onClick = { actionsMenuExpanded = !actionsMenuExpanded }, modifier = Modifier.size(48.dp)) {
@@ -1534,15 +1534,15 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 if (expiry != ExpiryState.OK) item {
                     StatusBanner(kind = if (expiry == ExpiryState.EXPIRED) StatusKind.ERROR else StatusKind.WARNING, message = expiry.label)
                 }
-                item { SectionTitle("Card") }
-                item { PlainRow("Card type", item.entry.cardKind.label()) }
-                item { SecretRow("Card number", item.entry.primaryValue, revealed.contains("primary"), { revealed = toggle(revealed, "primary") }, copy) }
-                item { PlainRow("Name on card", item.entry.secondaryValue, copy) }
-                item { PlainRow("Expiry", item.entry.tertiaryValue, copy) }
-                item { SectionTitle("Security") }
+                item { SectionTitle(stringResource(R.string.card)) }
+                item { PlainRow(stringResource(R.string.card_type), item.entry.cardKind.label()) }
+                item { SecretRow(stringResource(R.string.card_number), item.entry.primaryValue, revealed.contains("primary"), { revealed = toggle(revealed, "primary") }, copy) }
+                item { PlainRow(stringResource(R.string.name_on_card), item.entry.secondaryValue, copy) }
+                item { PlainRow(stringResource(R.string.expiry), item.entry.tertiaryValue, copy) }
+                item { SectionTitle(stringResource(R.string.security)) }
                 item {
                     SecretRow(
-                        "CVV",
+                        stringResource(R.string.cvv),
                         item.entry.fourthValue,
                         revealed.contains("fourth"),
                         {
@@ -1554,31 +1554,31 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 }
             } else if (item.entry.type == EntryType.AUTHENTICATOR) {
                 item { TotpTile(item.entry, copy, {}) }
-                item { PlainRow("Account", item.entry.primaryValue) }
-                item { PlainRow("Code settings", "${item.entry.totpDigits} digits · ${item.entry.totpPeriod} seconds · ${item.entry.totpAlgorithm}") }
+                item { PlainRow(stringResource(R.string.account), item.entry.primaryValue) }
+                item { PlainRow(stringResource(R.string.code_settings), stringResource(R.string.digits_seconds, item.entry.totpDigits.toString(), item.entry.totpPeriod.toString(), item.entry.totpAlgorithm.toString())) }
             } else if (item.entry.type == EntryType.PASSWORD) {
-                item { SectionTitle("Login") }
-                item { PlainRow("Username", item.entry.primaryValue, copy, emptyText = "No username") }
-                if (item.entry.tertiaryValue.isNotBlank()) item { PlainRow("Website", item.entry.tertiaryValue, copy) }
-                item { SectionTitle("Security") }
-                item { SecretRow("Password", item.entry.secondaryValue, revealed.contains("secondary"), { revealed = toggle(revealed, "secondary") }, copy) }
+                item { SectionTitle(stringResource(R.string.login)) }
+                item { PlainRow(stringResource(R.string.username), item.entry.primaryValue, copy, emptyText = stringResource(R.string.no_username)) }
+                if (item.entry.tertiaryValue.isNotBlank()) item { PlainRow(stringResource(R.string.website), item.entry.tertiaryValue, copy) }
+                item { SectionTitle(stringResource(R.string.security)) }
+                item { SecretRow(stringResource(R.string.password), item.entry.secondaryValue, revealed.contains("secondary"), { revealed = toggle(revealed, "secondary") }, copy) }
                 item { PreviousPasswords(viewModel, item.entry.id, item.entry.updatedAt, copy) }
                 val linked = vaultEntries.firstOrNull { it.entry.id == item.entry.linkedAuthenticatorId && it.entry.type == EntryType.AUTHENTICATOR }?.entry
                 if (linked != null) item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SectionTitle("Linked code")
+                        SectionTitle(stringResource(R.string.linked_code))
                         TotpTile(linked, copy, {}, initiallyMasked = true)
                     }
                 }
                 // "Continue with GitHub · octocat" remembered for this login's site (SignInMethodsUi.kt). Nothing when none.
                 if (item.entry.tertiaryValue.isNotBlank()) item { LoginSignInMethods(viewModel, item.entry.tertiaryValue) }
             } else if (item.entry.type == EntryType.QUESTION) {
-                item { SectionTitle("Security question") }
-                item { PlainRow("Question", item.entry.primaryValue) }
-                item { SecretRow("Answer", item.entry.secondaryValue, revealed.contains("secondary"), { revealed = toggle(revealed, "secondary") }, copy) }
+                item { SectionTitle(stringResource(R.string.security_question)) }
+                item { PlainRow(stringResource(R.string.question), item.entry.primaryValue) }
+                item { SecretRow(stringResource(R.string.answer), item.entry.secondaryValue, revealed.contains("secondary"), { revealed = toggle(revealed, "secondary") }, copy) }
             } else if (item.entry.type == EntryType.AUTOFILL) {
                 val profile = item.entry.autofillProfile()
-                item { SectionTitle("Contact details") }
+                item { SectionTitle(stringResource(R.string.contact_details)) }
                 if (profile != null) {
                     listOf("Full name" to profile.name, "Email" to profile.email,
                         "Mobile number" to profile.phone, "Address line 1" to profile.address1,
@@ -1591,7 +1591,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 }
                 item { AutofillFormAvailability(viewModel::refreshAutofillCopy) }
             } else if (note != null) {
-                item { SectionTitle("Note") }
+                item { SectionTitle(stringResource(R.string.note)) }
                 if (note.source == RichNoteSource.DIVERGED || note.source == RichNoteSource.NEWER_VERSION)
                     item { RichNoteFallbackNotice(note.source) }
                 richNoteViewItems(note.document, notePalette,
@@ -1611,7 +1611,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 item { FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { item.groups.forEach { GroupLabel(it.name) } } }
             }
             if (item.photos.isNotEmpty()) {
-                item { SectionTitle("Photos") }
+                item { SectionTitle(stringResource(R.string.photos)) }
                 item {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(item.photos.sortedByDescending { it.isCover }, key = { it.id }) { photo ->
@@ -1621,11 +1621,11 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
                 }
             }
             if (item.entry.type != EntryType.NOTE && item.entry.notes.isNotBlank()) {
-                item { SectionTitle("Notes") }
-                item { PlainRow("Additional details", item.entry.notes) }
+                item { SectionTitle(stringResource(R.string.notes)) }
+                item { PlainRow(stringResource(R.string.additional_details), item.entry.notes) }
             }
             if (item.entry.tags.isNotBlank()) {
-                item { SectionTitle("Tags") }
+                item { SectionTitle(stringResource(R.string.tags)) }
                 item { Text(item.entry.tags, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .8f)) }
             }
         }
@@ -1636,7 +1636,7 @@ internal fun EntryDetail(item: EntryWithDetails, viewModel: VaultViewModel, copy
         modifier = wideDialogModifier,
         properties = wideDialogProperties,
         onDismissRequest = { confirmDelete = false },
-        title = { Text("Delete ${item.entry.title}?") },
+        title = { Text(stringResource(R.string.delete_2, item.entry.title.toString())) },
         text = { Text(stringResource(R.string.this_removes_the_item_from_this_phone_an)) },
         confirmButton = { DeleteButton(onClick = { viewModel.deleteEntry(item); confirmDelete = false; close() }) },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.cancel)) } }
@@ -1688,7 +1688,7 @@ internal fun PhotoViewer(photo: VaultPhoto, viewModel: VaultViewModel, close: ()
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(safeInsets)) {
                 Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = back, enabled = !busy, modifier = Modifier.size(48.dp)) { Icon(NuvoriIcons.Back, "Back", Modifier.size(22.dp)) }
+                    IconButton(onClick = back, enabled = !busy, modifier = Modifier.size(48.dp)) { Icon(NuvoriIcons.Back, stringResource(R.string.back), Modifier.size(22.dp)) }
                     Text(if (cropping) "Crop photo" else "Photo", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 }
                 if (cropping) Text(stringResource(R.string.drag_the_edges_or_corners_drag_inside_to), Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
@@ -1737,7 +1737,7 @@ private fun PlainRow(label: String, value: String, copy: ((String, String) -> Un
                     color = if (value.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
             }
             if (copy != null && value.isNotBlank()) IconButton(onClick = { copy(label, value) }, modifier = Modifier.size(48.dp)) {
-                Icon(NuvoriIcons.Copy, contentDescription = "Copy ${spokenLabel(label)}", modifier = Modifier.size(20.dp))
+                Icon(NuvoriIcons.Copy, contentDescription = stringResource(R.string.copy, (spokenLabel(label)).toString()), modifier = Modifier.size(20.dp))
             }
         }
     }
@@ -1774,7 +1774,7 @@ private fun SecretRow(label: String, value: String, revealed: Boolean, toggle: (
                     modifier = Modifier.size(20.dp))
             }
             if (value.isNotBlank()) IconButton(onClick = { copy(label, value) }, modifier = Modifier.size(48.dp)) {
-                Icon(NuvoriIcons.Copy, contentDescription = "Copy ${spokenLabel(label)}", modifier = Modifier.size(20.dp))
+                Icon(NuvoriIcons.Copy, contentDescription = stringResource(R.string.copy, (spokenLabel(label)).toString()), modifier = Modifier.size(20.dp))
             }
         }
     }
@@ -1787,7 +1787,7 @@ private fun AutofillFormAvailability(refreshCopy: () -> Unit) {
     var enabled by remember { mutableStateOf(preferences.getBoolean("autofill_unlocked_profiles", false)) }
     var offerLocked by remember { mutableStateOf(com.privatevault.app.autofill.AutofillPreferences.offerLockedProfiles(context)) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionTitle("Form filling")
+        SectionTitle(stringResource(R.string.form_filling))
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.offer_to_fill_contact_details), Modifier.weight(1f))
             Switch(checked = offerLocked, onCheckedChange = { selected ->
@@ -1795,7 +1795,7 @@ private fun AutofillFormAvailability(refreshCopy: () -> Unit) {
                 com.privatevault.app.autofill.AutofillPreferences.setOfferLockedProfiles(context, selected)
             })
         }
-        Text("Forms show \"Unlock to fill your details\". After you unlock, you choose which details to fill.",
+        Text(stringResource(R.string.forms_show_unlock_to_fill_your_details_a),
             style = MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.fill_without_vault_unlock), Modifier.weight(1f))
@@ -1881,7 +1881,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                         catch (error: RichNoteTooLargeException) { noteError = error.message; null }
                     if (saved != null) onSave(saved, selectedGroups, photoDraft.takeForSave())
                     }, enabled = valid && !photoDraft.busy, modifier = Modifier.size(48.dp)) {
-                        Icon(NuvoriIcons.Check, contentDescription = "Save entry")
+                        Icon(NuvoriIcons.Check, contentDescription = stringResource(R.string.save_entry))
                     }
                 }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp),
@@ -1893,7 +1893,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                     label = { Text(when (type) { EntryType.CARD -> "Card label"; EntryType.NOTE -> "Note title"; EntryType.AUTOFILL -> "Profile label"; else -> "Service" }) },
                     trailingIcon = if (type == EntryType.CARD && nfcEnabled) {{
                         IconButton(onClick = viewModel::requestNfcScan, modifier = Modifier.size(48.dp)) {
-                            Icon(NuvoriIcons.Nfc, contentDescription = "Scan card with NFC", tint = MaterialTheme.colorScheme.primary)
+                            Icon(NuvoriIcons.Nfc, contentDescription = stringResource(R.string.scan_card_with_nfc), tint = MaterialTheme.colorScheme.primary)
                         }
                     }} else null,
                     modifier = Modifier.fillMaxWidth()
@@ -1923,7 +1923,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                 }
                 EntryType.PASSWORD -> {
                     item { OutlinedTextField(primary, { primary = it }, label = { Text(stringResource(R.string.username)) }, modifier = Modifier.fillMaxWidth()) }
-                    item { SecretField("Password", secondary) { secondary = it } }
+                    item { SecretField(stringResource(R.string.password), secondary) { secondary = it } }
                     item { OutlinedTextField(tertiary, { tertiary = it }, label = { Text(stringResource(R.string.website_url)) }, supportingText = { Text(stringResource(R.string.use_the_exact_https_website_for_browser)) }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
                     item { LoginOptions(loginApps, loginSignatures, linkedCode,
                         vaultEntries.map { it.entry }.filter { it.type == EntryType.AUTHENTICATOR },
@@ -1932,7 +1932,7 @@ internal fun EntryEditor(existing: VaultEntry?, type: EntryType, groups: List<Va
                 }
                 EntryType.QUESTION -> {
                     item { OutlinedTextField(primary, { primary = it }, label = { Text(stringResource(R.string.security_question)) }, modifier = Modifier.fillMaxWidth()) }
-                    item { SecretField("Answer", secondary) { secondary = it } }
+                    item { SecretField(stringResource(R.string.answer), secondary) { secondary = it } }
                 }
                 EntryType.AUTOFILL -> {
                     item { Text(stringResource(R.string.choose_which_details_to_save_nuvori_fill), style = MaterialTheme.typography.bodySmall) }
@@ -2056,7 +2056,7 @@ internal fun GroupManager(
                         item {
                             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text("${linked.size} linked entries", style = MaterialTheme.typography.titleMedium)
+                                    Text(stringResource(R.string.linked_entries, linked.size.toString()), style = MaterialTheme.typography.titleMedium)
                                     if (selected.notes.isNotBlank()) Text(selected.notes)
                                     OutlinedButton(onClick = { links = linked.map { it.entry.id }.toSet(); managingLinks = true }) { Text(stringResource(R.string.manage_linked_entries)) }
                                 }
@@ -2073,7 +2073,7 @@ internal fun GroupManager(
                     }
                     HorizontalDivider()
                     Surface(tonalElevation = 8.dp) {
-                        DeleteButton(onClick = { confirmDelete = true }, label = "Delete group",
+                        DeleteButton(onClick = { confirmDelete = true }, label = stringResource(R.string.delete_group),
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).heightIn(min = 48.dp))
                     }
             }
@@ -2102,7 +2102,7 @@ internal fun GroupManager(
         confirmButton = { Button(onClick = { viewModel.setGroupEntries(selected, links); managingLinks = false }) { Text(stringResource(R.string.save_links)) } },
         dismissButton = { TextButton(onClick = { managingLinks = false }) { Text(stringResource(R.string.cancel)) } })
     if (confirmDelete && selected != null) AlertDialog(properties = wideDialogProperties, onDismissRequest = { confirmDelete = false },
-        title = { Text("Delete ${selected.name}?") }, text = { Text(stringResource(R.string.only_this_group_and_its_notes_are_delete)) },
+        title = { Text(stringResource(R.string.delete_2, selected.name.toString())) }, text = { Text(stringResource(R.string.only_this_group_and_its_notes_are_delete)) },
         confirmButton = { DeleteButton(onClick = { viewModel.deleteGroup(selected); selectedId = null; confirmDelete = false }) },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.cancel)) } })
 }
@@ -2127,8 +2127,8 @@ private fun GroupEntryDetails(
                     authenticate
                 ) { open() }
             }
-            if (entry.notes.isNotBlank()) PlainRow("Notes", entry.notes)
-            if (entry.tags.isNotBlank()) PlainRow("Tags", entry.tags)
+            if (entry.notes.isNotBlank()) PlainRow(stringResource(R.string.notes), entry.notes)
+            if (entry.tags.isNotBlank()) PlainRow(stringResource(R.string.tags), entry.tags)
             TextButton(onClick = open, modifier = Modifier.align(Alignment.End).height(44.dp)) { Text(stringResource(R.string.open_full_details)) }
         }
         return
@@ -2142,14 +2142,14 @@ private fun GroupEntryDetails(
             Text(entry.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             when (entry.type) {
                 EntryType.PASSWORD -> {
-                    PlainRow("Username", entry.primaryValue, copy)
-                    SecretRow("Password", entry.secondaryValue, "password" in revealed, { revealed = toggle(revealed, "password") }, copy)
+                    PlainRow(stringResource(R.string.username), entry.primaryValue, copy)
+                    SecretRow(stringResource(R.string.password), entry.secondaryValue, "password" in revealed, { revealed = toggle(revealed, "password") }, copy)
                 }
                 EntryType.QUESTION -> {
-                    PlainRow("Question", entry.primaryValue)
-                    SecretRow("Answer", entry.secondaryValue, "answer" in revealed, { revealed = toggle(revealed, "answer") }, copy)
+                    PlainRow(stringResource(R.string.question), entry.primaryValue)
+                    SecretRow(stringResource(R.string.answer), entry.secondaryValue, "answer" in revealed, { revealed = toggle(revealed, "answer") }, copy)
                 }
-                EntryType.NOTE -> PlainRow("Contents", entry.notes)
+                EntryType.NOTE -> PlainRow(stringResource(R.string.contents), entry.notes)
                 EntryType.AUTOFILL -> entry.autofillProfile()?.let { profile ->
                     listOf("Name" to profile.name, "Email" to profile.email, "Mobile number" to profile.phone,
                         "Address line 1" to profile.address1, "Address line 2" to profile.address2,
@@ -2160,8 +2160,8 @@ private fun GroupEntryDetails(
                 EntryType.AUTHENTICATOR -> TotpTile(entry, copy, open)
                 EntryType.CARD -> Unit
             }
-            if (entry.type != EntryType.NOTE && entry.notes.isNotBlank()) PlainRow("Notes", entry.notes)
-            if (entry.tags.isNotBlank()) PlainRow("Tags", entry.tags)
+            if (entry.type != EntryType.NOTE && entry.notes.isNotBlank()) PlainRow(stringResource(R.string.notes), entry.notes)
+            if (entry.tags.isNotBlank()) PlainRow(stringResource(R.string.tags), entry.tags)
             if (item.photos.isNotEmpty()) Text("${item.photos.size} ${if (item.photos.size == 1) "photo" else "photos"}", color = MaterialTheme.colorScheme.primary)
             TextButton(onClick = open, modifier = Modifier.align(Alignment.End).height(44.dp)) { Text(stringResource(R.string.open_full_details)) }
         }
@@ -2341,16 +2341,16 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         }
     }
     val browserImportContent: @Composable () -> Unit = {
-        SettingsSection("Import passwords",
-            description = "Choose a password CSV from a browser or password manager, or an unencrypted Bitwarden JSON export. You will review the accounts before saving. This does not import passkeys.") {
-            StatusBanner(kind = StatusKind.WARNING, message = "Export files contain readable passwords.")
+        SettingsSection(stringResource(R.string.import_passwords),
+            description = stringResource(R.string.choose_a_password_csv_from_a_browser_or)) {
+            StatusBanner(kind = StatusKind.WARNING, message = stringResource(R.string.export_files_contain_readable_passwords))
             val chooseExport = {
                 viewModel.externalFlowActive = true
                 importPasswords.launch(arrayOf("text/*", "application/csv", "application/json", "application/vnd.ms-excel", "application/octet-stream"))
             }
             if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT)
-                SettingsPrimaryButton("Choose password export", onClick = chooseExport, icon = NuvoriIcons.Import)
-            else SettingsSecondaryButton("Choose password export", onClick = chooseExport, icon = NuvoriIcons.Import)
+                SettingsPrimaryButton(stringResource(R.string.choose_password_export), onClick = chooseExport, icon = NuvoriIcons.Import)
+            else SettingsSecondaryButton(stringResource(R.string.choose_password_export), onClick = chooseExport, icon = NuvoriIcons.Import)
         }
     }
 
@@ -2384,19 +2384,19 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 )) { page = it }
             }
             if (page == "Appearance") {
-                SettingsSection("Theme", description = "Choose how Nuvori looks on this device.") {
-                    SettingsSwitchRow("Light mode", lightMode, { on ->
+                SettingsSection(stringResource(R.string.theme), description = stringResource(R.string.choose_how_nuvori_looks_on_this_device)) {
+                    SettingsSwitchRow(stringResource(R.string.light_mode), lightMode, { on ->
                         viewModel.setLightMode(on)
                         viewModel.notify(if (on) "Light mode on" else "Dark mode on", StatusKind.SUCCESS)
                     },
-                        description = "Turn off for a black background.")
+                        description = stringResource(R.string.turn_off_for_a_black_background))
                 }
                 val siteIconContext = androidx.compose.ui.platform.LocalContext.current
-                SettingsSection("Icons") {
-                    SettingsSwitchRow("Website icons", SiteIconSettings.enabled(siteIconContext), { on ->
+                SettingsSection(stringResource(R.string.icons)) {
+                    SettingsSwitchRow(stringResource(R.string.website_icons), SiteIconSettings.enabled(siteIconContext), { on ->
                         SiteIconSettings.set(siteIconContext, on)
                     },
-                        description = "Logos for popular sites are built in. Icons that Nuvori for Windows saves from your browser arrive through sync. This phone downloads nothing.")
+                        description = stringResource(R.string.logos_for_popular_sites_are_built_in_ico))
                 }
                 val storedAppearance by viewModel.appearance.collectAsStateWithLifecycle()
                 AppearanceColorSections(storedAppearance.appearance.accent, storedAppearance.appearance.surface,
@@ -2412,17 +2412,17 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 if (destination == "Vault") close() else page = destination
             }
             if (page == "Passkeys") {
-                SettingsSection("Set up passkeys",
-                    description = "Create passkeys from a supported website in Chrome or Brave. They are encrypted with your vault and included in backups. Deleting one here does not remove its registration on the website.") {
+                SettingsSection(stringResource(R.string.set_up_passkeys),
+                    description = stringResource(R.string.create_passkeys_from_a_supported_website)) {
                     if (android.os.Build.VERSION.SDK_INT >= 34) {
-                        SettingsPrimaryButton("Enable Nuvori for passwords and passkeys", icon = NuvoriIcons.Passkey, onClick = {
+                        SettingsPrimaryButton(stringResource(R.string.enable_nuvori_for_passwords_and_passkeys), icon = NuvoriIcons.Passkey, onClick = {
                             runCatching { androidx.credentials.CredentialManager.create(context).createSettingsPendingIntent().send() }
                         })
                     } else StatusBanner(kind = StatusKind.INFO,
-                        message = "Creating and using passkeys requires Android 14 or newer. Stored passkeys remain included in backups.")
+                        message = stringResource(R.string.creating_and_using_passkeys_requires_and))
                 }
-                SettingsSection("Import from another manager",
-                    description = "Android will show managers that support secure credential transfer. Browsers are listed only when their credential provider offers an export.") {
+                SettingsSection(stringResource(R.string.import_from_another_manager),
+                    description = stringResource(R.string.android_will_show_managers_that_support)) {
                     SettingsSecondaryButton(if (transferBusy) "Waiting for password manager…" else "Import passkeys from another manager",
                         icon = NuvoriIcons.Import, enabled = !transferBusy, onClick = {
                             transferBusy = true
@@ -2463,25 +2463,25 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 PasskeyHistorySection(passkeyPage.history, viewModel::clearPasskeyHistory)
                 if (android.os.Build.VERSION.SDK_INT >= 34) PasskeyRequestsSection()
             }
-            if (page == "Cards and NFC") SettingsSection("Contactless cards") {
+            if (page == "Cards and NFC") SettingsSection(stringResource(R.string.contactless_cards)) {
                 NfcPreference(nfcEnabled, viewModel.nfcSupported) { on ->
                     viewModel.setNfcEnabled(on)
                     viewModel.notify(if (on) "NFC card import on" else "NFC card import off", StatusKind.SUCCESS)
                 }
             }
             if (page == "Import authenticator codes") {
-                SettingsSection("Choose an export",
-                    description = "In Google Authenticator, choose Transfer accounts, then Export accounts. Scan every QR page before importing. A second device may be needed to display the codes.") {
-                    SettingsPrimaryButton("Scan transfer QR", icon = NuvoriIcons.Scan, onClick = {
+                SettingsSection(stringResource(R.string.choose_an_export),
+                    description = stringResource(R.string.in_google_authenticator_choose_transfer)) {
+                    SettingsPrimaryButton(stringResource(R.string.scan_transfer_qr), icon = NuvoriIcons.Scan, onClick = {
                         if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) authenticatorScanner = true
                         else authenticatorPermission.launch(android.Manifest.permission.CAMERA)
                     })
-                    SettingsSecondaryButton("Choose QR image", icon = Icons.Outlined.PhotoLibrary,
+                    SettingsSecondaryButton(stringResource(R.string.choose_qr_image), icon = Icons.Outlined.PhotoLibrary,
                         onClick = { viewModel.externalFlowActive = true; authenticatorImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
-                    SettingsSecondaryButton("Choose OneAuth JSON or TOTP text file", icon = Icons.Outlined.Description,
+                    SettingsSecondaryButton(stringResource(R.string.choose_oneauth_json_or_totp_text_file), icon = Icons.Outlined.Description,
                         onClick = { viewModel.externalFlowActive = true; authenticatorFile.launch(arrayOf("application/json", "text/plain", "text/*", "application/octet-stream")) })
                     Text(stringResource(R.string.you_can_also_scan_a_standard_totp_setup), style = MaterialTheme.typography.bodySmall)
-                    StatusBanner(kind = StatusKind.WARNING, message = "Plaintext TOTP files contain readable setup keys. Delete them after checking the imported codes.")
+                    StatusBanner(kind = StatusKind.WARNING, message = stringResource(R.string.plaintext_totp_files_contain_readable_se))
                     authenticatorError?.let { StatusBanner(kind = StatusKind.ERROR, message = it) }
                 }
                 if (authenticatorPages.isNotEmpty()) {
@@ -2499,9 +2499,9 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                             Text("${account.issuer.ifBlank { account.account }} · ${account.account} · $label")
                         }
                         if (authenticatorPages.size < expected)
-                            StatusBanner(kind = StatusKind.INFO, message = "Scan the remaining QR pages to continue.")
+                            StatusBanner(kind = StatusKind.INFO, message = stringResource(R.string.scan_the_remaining_qr_pages_to_continue))
                         Text(stringResource(R.string.review_these_accounts_before_saving_impo), style = MaterialTheme.typography.bodySmall)
-                        SettingsPrimaryButton("Import codes", icon = NuvoriIcons.Check, enabled = authenticatorPages.size == expected, onClick = {
+                        SettingsPrimaryButton(stringResource(R.string.import_codes), icon = NuvoriIcons.Check, enabled = authenticatorPages.size == expected, onClick = {
                             viewModel.importAuthenticatorAccounts(accounts)
                             authenticatorPages = emptyMap()
                         })
@@ -2513,31 +2513,31 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             if (page == "Autofill and codes") {
                 AutofillPreference(viewModel::refreshAutofillCopy,
                     onUsageCleared = { viewModel.notify("Most used cleared. Counting starts again.", StatusKind.SUCCESS) })
-                SettingsSection("Quick copy tile",
-                    description = "Copy passwords, codes, card details and security answers from Quick Settings after unlocking. After one copy, the other fields of that item stay in your notifications for 2 minutes. The tile works with any Autofill provider.") {
-                    SettingsSecondaryButton("Add Quick copy tile", icon = Icons.Outlined.AppShortcut,
+                SettingsSection(stringResource(R.string.quick_copy_tile),
+                    description = stringResource(R.string.copy_passwords_codes_card_details_and_se)) {
+                    SettingsSecondaryButton(stringResource(R.string.add_quick_copy_tile), icon = Icons.Outlined.AppShortcut,
                         onClick = { requestVaultCodesTile(context) })
                 }
-                SettingsSection("Suggested codes",
-                    description = "When you open the tile, Nuvori can put codes for your previous app first.") {
+                SettingsSection(stringResource(R.string.suggested_codes),
+                    description = stringResource(R.string.when_you_open_the_tile_nuvori_can_put_co)) {
                     CodeAppDetectionPreference()
                 }
             }
             if (page == "Watch codes") {
-                SettingsSection("Codes on your watch",
-                    description = "Install Nuvori on the watch and connect it to this phone. The watch keeps an encrypted copy of your authenticator accounts so it can show codes without the phone. The watch must have a screen lock.") {
+                SettingsSection(stringResource(R.string.codes_on_your_watch),
+                    description = stringResource(R.string.install_nuvori_on_the_watch_and_connect)) {
                     val watches = watchConnection.names
                     val lastSent = com.privatevault.app.watch.WatchDisplay.syncedLabel(System.currentTimeMillis(),
                         watchConnection.lastSentAt, prefix = "Last update sent")
                     if (security.watchSyncEnabled) when {
-                        watches == null -> StatusBanner(kind = StatusKind.INFO, title = "Watch sync is on",
+                        watches == null -> StatusBanner(kind = StatusKind.INFO, title = stringResource(R.string.watch_sync_is_on),
                             message = listOfNotNull("Codes are sent after you add, edit, or delete one.", lastSent?.let { "$it." }).joinToString(" "))
-                        watches.isEmpty() -> StatusBanner(kind = StatusKind.WARNING, title = "No watch connected right now",
+                        watches.isEmpty() -> StatusBanner(kind = StatusKind.WARNING, title = stringResource(R.string.no_watch_connected_right_now),
                             message = listOfNotNull("Codes reach your watch when it reconnects to this phone.", lastSent?.let { "$it." }).joinToString(" "))
-                        else -> StatusBanner(kind = StatusKind.SUCCESS, title = "Connected to ${watches.joinToString()}",
+                        else -> StatusBanner(kind = StatusKind.SUCCESS, title = stringResource(R.string.connected_to, (watches.joinToString()).toString()),
                             message = listOfNotNull("Codes are sent after you add, edit, or delete one.", lastSent?.let { "$it." }).joinToString(" "))
                     }
-                    else StatusBanner(kind = StatusKind.INFO, title = "Watch sync is off",
+                    else StatusBanner(kind = StatusKind.INFO, title = stringResource(R.string.watch_sync_is_off),
                         message = if (!watches.isNullOrEmpty()) "${watches.joinToString()} is connected. Connect it to see your authenticator codes there."
                             else "Connect a Wear OS watch to see your authenticator codes there.")
                     SettingsPrimaryButton(if (security.watchSyncEnabled) "Sync codes now" else "Connect watch and sync codes",
@@ -2545,12 +2545,12 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                     if (security.watchSyncEnabled) {
                         if (watchConnection.legacyKey) Text(stringResource(R.string.tap_sync_codes_now_once_with_the_watch_c),
                             style = MaterialTheme.typography.bodySmall)
-                        SettingsDangerButton("Remove codes from watch", icon = Icons.Outlined.DeleteOutline,
+                        SettingsDangerButton(stringResource(R.string.remove_codes_from_watch), icon = Icons.Outlined.DeleteOutline,
                             onClick = viewModel::removeWatchCodes)
                         Text(stringResource(R.string.a_disconnected_watch_keeps_its_current_c), style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                SettingsSection("How watch sync works") {
+                SettingsSection(stringResource(R.string.how_watch_sync_works)) {
                     Text(stringResource(R.string.nuvori_sends_updated_accounts_after_you), style = MaterialTheme.typography.bodyMedium)
                     Text(stringResource(R.string.on_the_watch_tap_a_code_to_show_it_full), style = MaterialTheme.typography.bodySmall)
                     Text(stringResource(R.string.sync_may_use_google_s_encrypted_wear_os), style = MaterialTheme.typography.bodySmall)
@@ -2559,16 +2559,16 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             if (page == "Backup and import") {
                 val restoreFirst = initialImportChoice == FirstRunChoice.RESTORE
                 if (restoreFirst) StatusBanner(kind = StatusKind.INFO,
-                    message = "Next: restore your backup. Find it in Google Drive, or choose a .pvault file. Enter the password used when it was made, and review its contents before replacing this new vault.")
+                    message = stringResource(R.string.next_restore_your_backup_find_it_in_goog))
                 if (initialImportChoice == FirstRunChoice.BROWSER_IMPORT) {
                     StatusBanner(kind = StatusKind.INFO,
-                        message = "Next: choose a password CSV or an unencrypted Bitwarden JSON export. Review the accounts before saving them to your vault. Passkeys are not included.")
+                        message = stringResource(R.string.next_choose_a_password_csv_or_an_unencry))
                     browserImportContent()
                 }
                 if (restoreFirst) DriveRestoreSection(viewModel, primary = true)
                 else DriveBackupCard(viewModel)
-                SettingsSection("Encrypted backup",
-                    description = "Save your vault to a .pvault file protected by a password, or restore one. A restore is checked and reviewed before it replaces anything.") {
+                SettingsSection(stringResource(R.string.encrypted_backup),
+                    description = stringResource(R.string.save_your_vault_to_a_pvault_file_protect)) {
                     (if (restoreFirst) listOf("restore", "export") else listOf("export", "restore")).forEach { kind ->
                         val isExport = kind == "export"
                         val label = if (isExport) "Export encrypted backup" else "Restore encrypted backup"
@@ -2581,46 +2581,46 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 if (restoreFirst) DriveBackupCard(viewModel)
                 else DriveRestoreSection(viewModel, primary = false)
                 if (initialImportChoice != FirstRunChoice.BROWSER_IMPORT) browserImportContent()
-                SettingsSection("Exact duplicate passwords",
-                    description = "Find password entries whose saved fields, tags, folders, and app or website links match exactly. Entry IDs and activity dates are ignored. Entries with photos are never included.") {
-                    SettingsSecondaryButton("Check for exact duplicates", icon = NuvoriIcons.Copy,
+                SettingsSection(stringResource(R.string.exact_duplicate_passwords),
+                    description = stringResource(R.string.find_password_entries_whose_saved_fields)) {
+                    SettingsSecondaryButton(stringResource(R.string.check_for_exact_duplicates), icon = NuvoriIcons.Copy,
                         onClick = viewModel::checkPasswordDuplicates)
                 }
             }
             if (page == "Security") {
-                SettingsPrimaryButton("Lock now", icon = NuvoriIcons.Lock,
+                SettingsPrimaryButton(stringResource(R.string.lock_now), icon = NuvoriIcons.Lock,
                     onClick = { viewModel.notify("Vault locked", StatusKind.NEUTRAL); viewModel.lock(LockReason.MANUAL); close() })
-                SecurityChoices("Auto-lock after leaving the app", "The vault locks after you switch apps. Screen-off always locks immediately.",
+                SecurityChoices(stringResource(R.string.auto_lock_after_leaving_the_app), stringResource(R.string.the_vault_locks_after_you_switch_apps_sc),
                     security.backgroundTimeoutMs, backgroundLockChoices, onSelect = viewModel::setBackgroundTimeout)
-                SecurityChoices("Auto-lock after inactivity while open", "The countdown starts after your last interaction. Switching apps never extends it. A file or photo picker that Nuvori opens counts as time in the app, for up to 10 minutes.",
+                SecurityChoices(stringResource(R.string.auto_lock_after_inactivity_while_open), stringResource(R.string.the_countdown_starts_after_your_last_int),
                     security.inactivityTimeoutMs, listOf(60_000L to "1 minute", 300_000L to "5 minutes", 900_000L to "15 minutes", 1_800_000L to "30 minutes"),
                     onSelect = viewModel::setInactivityTimeout)
-                SecurityChoices("Require the master password again", "How often Nuvori asks for your master password. In between, you unlock with fingerprint or face, for up to 1 week.",
+                SecurityChoices(stringResource(R.string.require_the_master_password_again), stringResource(R.string.how_often_nuvori_asks_for_your_master_pa),
                     security.masterPasswordIntervalMs, listOf(0L to "Every unlock", 86_400_000L to "After 1 day", 604_800_000L to "After 1 week"),
-                    footnote = "Changing this ends the current fingerprint or face session. Enter your master password after the next lock to start a new one.") { value ->
+                    footnote = stringResource(R.string.changing_this_ends_the_current_fingerpri)) { value ->
                     if (value >= 604_800_000L) { pendingInterval = value; page = "Confirm interval" }
                     else viewModel.setMasterPasswordInterval(value)
                 }
                 val hasPairedDevices = pairedDevices.any { it.status == com.privatevault.app.sync.MemberStatus.ACTIVE.name }
-                SettingsSection("Master password", description = "Existing backup files keep their original passwords.") {
+                SettingsSection(stringResource(R.string.master_password), description = stringResource(R.string.existing_backup_files_keep_their_origina)) {
                     if (hasPairedDevices) StatusBanner(kind = StatusKind.WARNING,
-                        message = "Paired devices must keep the same master password. Remove paired devices before changing it.")
-                    SettingsSecondaryButton("Change master password", icon = NuvoriIcons.Password, enabled = !hasPairedDevices,
+                        message = stringResource(R.string.paired_devices_must_keep_the_same_master))
+                    SettingsSecondaryButton(stringResource(R.string.change_master_password), icon = NuvoriIcons.Password, enabled = !hasPairedDevices,
                         onClick = { action = "password" })
                 }
             }
             if (page == "Confirm interval") {
-                SettingsSection("Ask for the master password less often?") {
+                SettingsSection(stringResource(R.string.ask_for_the_master_password_less_often)) {
                     StatusBanner(kind = StatusKind.WARNING,
-                        message = "You'll type your master password less often, so it's easier to forget. Nuvori can't reset it, and a forgotten password means a lost vault.")
+                        message = stringResource(R.string.you_ll_type_your_master_password_less_of))
                     if (pendingInterval == 604_800_000L) StatusBanner(kind = StatusKind.WARNING,
-                        message = "For up to 7 days, anyone whose fingerprint or face unlocks this phone can open your vault.")
-                    SettingsPrimaryButton("Confirm", onClick = { pendingInterval?.let(viewModel::setMasterPasswordInterval); pendingInterval = null; page = "Security" })
-                    SettingsSecondaryButton("Cancel", onClick = { pendingInterval = null; page = "Security" })
+                        message = stringResource(R.string.for_up_to_7_days_anyone_whose_fingerprin))
+                    SettingsPrimaryButton(stringResource(R.string.confirm), onClick = { pendingInterval?.let(viewModel::setMasterPasswordInterval); pendingInterval = null; page = "Security" })
+                    SettingsSecondaryButton(stringResource(R.string.cancel), onClick = { pendingInterval = null; page = "Security" })
                 }
             }
             if (page == "About") {
-                SettingsSection("Nuvori") {
+                SettingsSection(stringResource(R.string.nuvori_2)) {
                     Text(stringResource(R.string.yours_by_design), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                     Text(stringResource(R.string.your_vault_is_encrypted_on_this_device_t))
                     TextButton(onClick = { showPrivacy = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.privacy_policy)) }
@@ -2642,7 +2642,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 confirmButton = { DeleteButton(onClick = {
                     viewModel.deleteSelectedPasswordDuplicates()
                     confirmPasswordDuplicateDelete = false
-                }, label = "Delete selected") },
+                }, label = stringResource(R.string.delete_selected)) },
                 dismissButton = { TextButton(onClick = { confirmPasswordDuplicateDelete = false }) { Text(stringResource(R.string.back)) } }
             )
         } else {
@@ -2685,7 +2685,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Checkbox(checked = selected, onCheckedChange = null)
-                                            Text("Delete duplicate copy ${index + 1}")
+                                            Text(stringResource(R.string.delete_duplicate_copy, (index + 1).toString()))
                                         }
                                     }
                                 }
@@ -2696,7 +2696,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
                 confirmButton = { DeleteButton(
                     onClick = { confirmPasswordDuplicateDelete = true },
                     enabled = review.selectedIds.isNotEmpty(),
-                    label = "Delete selected"
+                    label = stringResource(R.string.delete_selected)
                 ) },
                 dismissButton = { TextButton(onClick = viewModel::cancelPasswordDuplicateReview) { Text(stringResource(R.string.cancel)) } }
             )
@@ -2704,7 +2704,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
     }
     deletePasskey?.let { key ->
         AlertDialog(onDismissRequest = { deletePasskey = null }, title = { Text(stringResource(R.string.delete_passkey_2)) },
-            text = { Text("Remove the passkey for ${key.username} at ${key.rpId}? Make sure you have another way to sign in. Older backups may still contain it.") },
+            text = { Text(stringResource(R.string.remove_the_passkey_for_at_make_sure_you, key.username.toString(), key.rpId.toString())) },
             confirmButton = { DeleteButton(onClick = { viewModel.deletePasskey(key.id); deletePasskey = null }) },
             dismissButton = { TextButton(onClick = { deletePasskey = null }) { Text(stringResource(R.string.cancel)) } })
     }
@@ -2714,11 +2714,11 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         val conflictCount = preview.items.count { it.status == PasskeyTransferStatus.CONFLICT }
         AlertDialog(
             onDismissRequest = viewModel::cancelCredentialTransfer,
-            title = { Text("Import passkeys from ${preview.exporter}?") },
+            title = { Text(stringResource(R.string.import_passkeys_from, preview.exporter.toString())) },
             text = {
                 LazyColumn(Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
-                        Text("$newCount new · $savedCount already saved · $conflictCount conflicts")
+                        Text(stringResource(R.string.new_already_saved_conflicts, newCount.toString(), savedCount.toString(), conflictCount.toString()))
                         Text(preview.sourcePackage, style = MaterialTheme.typography.bodySmall)
                     }
                     if (preview.unsupported > 0) item {
@@ -2806,12 +2806,12 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             properties = wideDialogProperties,
             onDismissRequest = clearPasswordFields, title = { Text(stringResource(R.string.change_master_password)) },
             text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SecretField("Current password", current) { current = it }
-                SecretField("New password", replacement, supporting = passwordStrengthHint(replacement)) { replacement = it }
-                SecretField("Confirm new password", replacementConfirm,
+                SecretField(stringResource(R.string.current_password), current) { current = it }
+                SecretField(stringResource(R.string.new_password), replacement, supporting = passwordStrengthHint(replacement)) { replacement = it }
+                SecretField(stringResource(R.string.confirm_new_password), replacementConfirm,
                     error = if (mismatch) "Passwords don't match." else null, onDone = submit) { replacementConfirm = it }
                 StatusBanner(kind = StatusKind.WARNING,
-                    message = "Nuvori can't reset this password. If you forget it, your vault can't be recovered.")
+                    message = stringResource(R.string.nuvori_can_t_reset_this_password_if_you))
                 Text(stringResource(R.string.backup_files_you_saved_yourself_still_op), style = MaterialTheme.typography.bodySmall)
             } },
             confirmButton = { Button(onClick = submit, enabled = canChange) { Text(stringResource(R.string.change_password)) } },
@@ -2826,7 +2826,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
             title = { Text(stringResource(R.string.unlock_oneauth_export)) },
             text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.enter_the_password_you_set_when_you_expo))
-                SecretField("Export password", oneAuthPassword) { oneAuthPassword = it }
+                SecretField(stringResource(R.string.export_password), oneAuthPassword) { oneAuthPassword = it }
             } },
             confirmButton = { Button(enabled = oneAuthPassword.isNotEmpty(), onClick = {
                 val pass = oneAuthPassword.toCharArray()
@@ -2847,7 +2847,7 @@ internal fun SettingsDialog(viewModel: VaultViewModel, initialImportChoice: Firs
         )
     }
     if (authenticatorScanner) QrScanner(::acceptAuthenticatorQr, { authenticatorScanner = false },
-        "Scan authenticator transfer QR", "Scan every page from Google Authenticator or a standard TOTP setup QR. No camera images are saved.")
+        stringResource(R.string.scan_authenticator_transfer_qr), stringResource(R.string.scan_every_page_from_google_authenticato))
 }
 
 @Composable
@@ -2965,7 +2965,7 @@ private fun cardInk(background: Color): Color = inkFor(background)
 
 @Composable
 private fun NfcPreference(enabled: Boolean, supported: Boolean, change: (Boolean) -> Unit) {
-    SettingsSwitchRow("NFC card import", enabled, change, enabled = supported,
+    SettingsSwitchRow(stringResource(R.string.nfc_card_import), enabled, change, enabled = supported,
         description = if (supported) "Optional. Off means no card scanning. When on, tap the NFC icon in the Card label field. No CVV or payments."
             else "This phone has no NFC reader. You can still enter cards manually.")
 }

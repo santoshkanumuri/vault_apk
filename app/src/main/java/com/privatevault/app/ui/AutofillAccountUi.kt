@@ -105,12 +105,12 @@ internal fun AutofillAccountRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (site != null) Text(site, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (codeLinked) StatusChip(StatusKind.INFO, "Code linked", Modifier.padding(top = 4.dp))
+                if (codeLinked) StatusChip(StatusKind.INFO, stringResource(R.string.code_linked), Modifier.padding(top = 4.dp))
             }
             Text(action, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, maxLines = 1)
             if (moreAction != null) Box {
                 IconButton(onClick = { menu = true }) {
-                    Icon(NuvoriIcons.More, contentDescription = "More choices for $account")
+                    Icon(NuvoriIcons.More, contentDescription = stringResource(R.string.more_choices_for, account.toString()))
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text(moreAction) }, onClick = { menu = false; onMore() },

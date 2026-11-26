@@ -113,7 +113,7 @@ internal fun TotpTile(entry: VaultEntry, copy: (String, String) -> Unit, open: (
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (initiallyMasked) TextButton(onClick = { revealed = !revealed }) { Text(if (revealed) "Hide" else "Show") }
                     IconButton(enabled = code != null, onClick = copyCurrent) {
-                        Icon(NuvoriIcons.Copy, "Copy authenticator code", Modifier.size(20.dp))
+                        Icon(NuvoriIcons.Copy, stringResource(R.string.copy_authenticator_code), Modifier.size(20.dp))
                     }
                 }
             }
@@ -144,10 +144,10 @@ internal fun MoreScreen(groupCount: Int, entries: List<EntryWithDetails>, groups
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(Modifier.widthIn(max = 720.dp).fillMaxSize(), state = state,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp)) {
-            item { MoreCaption("Your vault") }
+            item { MoreCaption(stringResource(R.string.your_vault)) }
             itemsIndexed(vault, key = { _, row -> row.title }) { index, row -> MoreItem(row, index, vault.size) }
             item { Spacer(Modifier.height(20.dp)) }
-            item { MoreCaption("Manage Nuvori") }
+            item { MoreCaption(stringResource(R.string.manage_nuvori)) }
             itemsIndexed(manage, key = { _, row -> "manage-" + row.title }) { index, row -> MoreItem(row, index, manage.size) }
         }
     }
@@ -223,7 +223,7 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                     IconButton(enabled = valid && !photoDraft.busy, onClick = {
                         onSave((existing ?: VaultEntry(type = EntryType.AUTHENTICATOR, title = issuer)).copy(title = issuer.trim(), primaryValue = account.trim(), secondaryValue = Totp.normalizeSecret(secret), totpAlgorithm = algorithm, totpDigits = digits.toInt(), totpPeriod = period.toInt(), notes = notes, linkedApps = linkedApps), selectedGroups, photoDraft.takeForSave())
                         secret = ""
-                    }, modifier = Modifier.size(48.dp)) { Icon(NuvoriIcons.Check, contentDescription = "Save authenticator") }
+                    }, modifier = Modifier.size(48.dp)) { Icon(NuvoriIcons.Check, contentDescription = stringResource(R.string.save_authenticator)) }
                 }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -246,7 +246,7 @@ internal fun AuthenticatorEditor(existing: VaultEntry?, groups: List<VaultGroup>
                 item { OutlinedTextField(notes, { notes = it }, label = { Text(stringResource(R.string.notes)) }, modifier = Modifier.fillMaxWidth()) }
                 item { PhotoDraftControls(photoDraft, viewModel) }
                 item { OutlinedButton(onClick = { linkApps = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Linked apps (${com.privatevault.app.security.linkedAppPackages(linkedApps).size})")
+                    Text(stringResource(R.string.linked_apps_2, (com.privatevault.app.security.linkedAppPackages(linkedApps).size).toString()))
                 } }
                 if (groups.isNotEmpty()) item { Text(stringResource(R.string.link_to_groups), style = MaterialTheme.typography.titleSmall) }
                 items(groups, key = { it.id }) { group ->

@@ -94,7 +94,7 @@ internal fun ColumnScope.VaultQuickAccessContent(
         label = { Text(category.searchLabel) },
         leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null) },
         trailingIcon = if (search.isEmpty()) null else {
-            { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = "Clear search") } }
+            { IconButton(onClick = { search = "" }) { Icon(NuvoriIcons.Close, contentDescription = stringResource(R.string.clear_search)) } }
         },
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -125,7 +125,7 @@ internal fun ColumnScope.VaultQuickAccessContent(
             }
         }
         if (category == QuickCategory.PASSWORDS && accounts.isNotEmpty()) item(key = "autofill-hint") {
-            PickerHint("To fill and link a login instead, return to its sign-in field and choose Nuvori Autofill.")
+            PickerHint(stringResource(R.string.to_fill_and_link_a_login_instead_return))
         }
     }
 }

@@ -294,4 +294,67 @@ class CardAutofillTest {
         assertNull(classifyCardForm(listOf(page(false)), browser = false, lenient = true))
         assertNull(classifyCardForm(listOf(page(true)), browser = true, lenient = true))
     }
+
+    // ---- shapes that filled wrong values before (dates, partial numbers) -----------------------------------------
+
+    private fun text(values: Map<String, CardValue>) = values.mapValues { (it.value as CardValue.Text).text }
+
+    @Test fun theExpiryFollowsTheFieldsOwnPattern() {
+        fun expiry(pattern: String, max: Int = -1) =
+            text(cardFillValues(card, mapOf("e" to CardFieldSpec(CardField.EXPIRY, max, pattern)), false))["e"]
+        // "08/2029" in an "MM / YY" box with room for 7 was reformatted by the page to 08 / 20.
+        assertEquals("08 / 29", expiry("MM / YY", 7))
+        assertEquals("08 / 29", expiry("MM / YY"))
+        assertEquals("082029", expiry("MMYYYY", 6))
+        assertEquals("08-29", expiry("MM-YY", 5))
+        assertEquals("08/29", expiry("Valid thru (MM/YY)"))
+        assertEquals("08/2029", expiry("MM/YYYY"))
+        // A pattern longer than the limit drops its spaces; no pattern leaves the limit to decide.
+        assertEquals("08/29", expiry("MM / YY", 5))
+        assertEquals("08/29", expiry("Expiry date", 5))
+        assertEquals("0829", expiry("", 4))
+        assertEquals("08/2029", expiry("", 7))
+    }
+
+    @Test fun aYearBoxTakesTheDigitsItsHintShows() {
+        fun year(pattern: String, max: Int = -1) =
+            text(cardFillValues(card, mapOf("y" to CardFieldSpec(CardField.EXP_YEAR, max, pattern)), false))["y"]
+        assertEquals("29", year("Year (YY)"))
+        assertEquals("29", year("YY"))
+        assertEquals("29", year("", 2))
+        assertEquals("2029", year("YYYY", 4))
+        assertEquals("2029", year("Year"))
+    }
+
+    @Test fun onlySplitBoxesSplitTheNumber() {
+        // A number and a "Confirm card number" box both get the whole number, not 4 digits each.
+        assertEquals(mapOf("n" to "4111111111111111", "again" to "4111111111111111"), text(cardFillValues(card,
+            linkedMapOf("n" to CardFieldSpec(CardField.NUMBER), "again" to CardFieldSpec(CardField.NUMBER)), false)))
+        // A stray short box beside the real one is left alone.
+        assertEquals(mapOf("n" to "4111111111111111"), text(cardFillValues(card,
+            linkedMapOf("n" to CardFieldSpec(CardField.NUMBER, 19), "short" to CardFieldSpec(CardField.NUMBER, 4)), false)))
+        // Four boxes with no known limit are still split boxes.
+        assertEquals(listOf("4111", "1111", "1111", "1111"), text(cardFillValues(card,
+            linkedMapOf("a" to CardFieldSpec(CardField.NUMBER), "b" to CardFieldSpec(CardField.NUMBER),
+                "c" to CardFieldSpec(CardField.NUMBER), "d" to CardFieldSpec(CardField.NUMBER)), false)).values.toList())
+    }
+
+    @Test fun cardWordsAroundOtherFieldsAreNotTheNumber() {
+        for (name in listOf("Debit card PIN", "Credit card nickname", "Credit card bill amount", "Credit card limit")) {
+            assertNull(name, cardFieldByName(name))
+        }
+        for (name in listOf("Card number", "Debit card number", "Credit/Debit card number", "card[number]", "creditcard")) {
+            assertEquals(name, CardField.NUMBER, cardFieldByName(name))
+        }
+        // One box for month and year is the whole expiry, and Indian wordings are read.
+        assertEquals(CardField.EXPIRY, cardFieldByName("Expiration date (month/year)"))
+        assertEquals(CardField.EXPIRY, cardFieldByName("Expiry month / year"))
+        assertEquals(CardField.EXPIRY, cardFieldByName("Valid till"))
+        assertEquals(CardField.EXPIRY, cardFieldByName("Valid upto"))
+        assertEquals(CardField.NAME, cardFieldByName("Name as on card"))
+        assertEquals(CardField.EXP_MONTH, cardFieldByName("Expiry Month"))
+        assertEquals(CardField.EXP_YEAR, cardFieldByName("Expiry Year"))
+        // A birth date is no card's expiry.
+        assertNull(cardFieldByName("Month and year of birth"))
+    }
 }

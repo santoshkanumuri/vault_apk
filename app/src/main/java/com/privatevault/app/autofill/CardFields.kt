@@ -46,6 +46,10 @@ private val OTHER_PURPOSES = setOf("name", "givenname", "familyname", "additiona
 private val NOT_PAYMENT = listOf("gift", "loyalty", "member", "reward", "club", "voucher", "coupon", "promo", "library", "idcard",
     "identity", "insurance", "aadhaar", "pancard", "simcard")
 
+/** Words that make a "credit card ..." or "debit card ..." field something other than its number: a PIN, a nickname, an amount. */
+private val NOT_NUMBER = listOf("pin", "nickname", "amount", "bill", "limit", "balance", "emi", "otp", "password", "holder", "name",
+    "type", "brand", "last4", "lastfour")
+
 private fun has(text: String, vararg words: String) = words.any { it in text }
 
 /**
@@ -62,14 +66,18 @@ internal fun cardFieldByName(name: String): CardField? {
         // "Security code" and "verification code" are one-time codes unless the field also names the card.
         has(n, "cvv", "cvc", "csc", "cvn", "cardcode", "cardverification") || n == "cid" ||
             (card && has(n, "securitycode", "verificationcode")) -> CardField.CSC
+        // One box for both ("Expiration date (month/year)", "MM / YY") is the whole expiry, not its month.
+        (has(n, "month") && has(n, "year") && cardContext) || has(n, "mmyy", "mmyyyy") -> CardField.EXPIRY
         (has(n, "month") || n.endsWith("mm") || n == "mm") && (cardContext || n == "mm") -> CardField.EXP_MONTH
-        (has(n, "year") || n.endsWith("yyyy") || n.endsWith("yy") || n == "yy") && !has(n, "mmyy", "mmyyyy") &&
-            (cardContext || n == "yy" || n == "yyyy") -> CardField.EXP_YEAR
-        has(n, "expiry", "expiration", "expdate", "ccexp", "cardexp", "validthru", "validuntil", "mmyy", "mmyyyy") || n == "exp" -> CardField.EXPIRY
-        has(n, "cardholder", "nameoncard", "ccname", "holdername", "cardowner", "cardname") -> CardField.NAME
+        (has(n, "year") || n.endsWith("yyyy") || n.endsWith("yy") || n == "yy") && (cardContext || n == "yy" || n == "yyyy") -> CardField.EXP_YEAR
+        has(n, "expiry", "expiration", "expdate", "ccexp", "cardexp", "validthru", "validuntil", "validtill", "validupto", "validto") ||
+            n == "exp" || n == "expires" -> CardField.EXPIRY
+        has(n, "cardholder", "nameoncard", "nameasoncard", "ccname", "holdername", "cardowner", "cardname") -> CardField.NAME
         // The network ("card type", "card brand"): filled only from a drop-down entry or box that names the card's network.
         has(n, "cardtype", "cctype", "cardbrand", "ccbrand", "cardnetwork") -> CardField.TYPE
-        has(n, "cardnumber", "ccnumber", "ccnum", "cardno", "cardnum", "creditcard", "debitcard") || n == "pan" -> CardField.NUMBER
+        has(n, "cardnumber", "ccnumber", "ccnum", "cardno", "cardnum") || n == "pan" -> CardField.NUMBER
+        // "Credit card" alone is the number; "Debit card PIN" or "Credit card nickname" is not.
+        has(n, "creditcard", "debitcard") && NOT_NUMBER.none { it in n } -> CardField.NUMBER
         else -> null
     }
 }
@@ -120,36 +128,66 @@ internal fun yearOption(options: List<String>, year: Int): Int? = options.indexO
     digits == year.toString() || digits == (year % 100).toString().padStart(2, '0')
 }.takeIf { it >= 0 }
 
-/** "MM/YY" unless the field shows or allows another shape ("MM/YYYY", "MMYY", "MM / YY"). */
+/** The "MM / YY" part of a field's placeholder or hint: the separator between month and year, and the year's digits. */
+private val EXPIRY_PATTERN = Regex("""mm(\s*[/\-.]?\s*)(yyyy|yy)""")
+
+/**
+ * The expiry in the shape the field shows: its own pattern ("MM / YY", "MM-YYYY", "MMYY") when it has one, with the
+ * same separator and spaces, because payment pages reformat what they get and "08/2029" in an "MM / YY" box reads as
+ * 08 / 20. Without a pattern, the length limit decides: 4 is "MMYY", 7 is "MM/YYYY", anything else "MM/YY".
+ */
 internal fun expiryText(month: Int, year: Int, spec: CardFieldSpec): String {
     val mm = month.toString().padStart(2, '0')
     val yy = (year % 100).toString().padStart(2, '0')
-    val pattern = spec.pattern.lowercase(Locale.ROOT).replace(" ", "")
-    return when {
-        "yyyy" in pattern || spec.maxLength == 7 -> "$mm/$year"
-        ("mmyy" in pattern && '/' !in pattern) || spec.maxLength == 4 -> "$mm$yy"
+    EXPIRY_PATTERN.find(spec.pattern.lowercase(Locale.ROOT))?.let { match ->
+        val (separator, yearShape) = match.destructured
+        val text = mm + separator + if (yearShape == "yyyy") year.toString() else yy
+        // A limit shorter than the pattern drops the spaces first ("MM / YY" in a 5-character box).
+        return if (spec.maxLength > 0 && text.length > spec.maxLength) text.filterNot(Char::isWhitespace) else text
+    }
+    return when (spec.maxLength) {
+        4 -> "$mm$yy"
+        7 -> "$mm/$year"
         else -> "$mm/$yy"
     }
 }
 
+/** Whether a year box takes two digits: its hint says "YY" (not "YYYY"), or it holds only two characters. */
+private fun twoDigitYear(spec: CardFieldSpec): Boolean {
+    val pattern = spec.pattern.lowercase(Locale.ROOT)
+    return spec.maxLength == 2 || ("yy" in pattern && "yyyy" !in pattern)
+}
+
 /**
- * The values to fill: only fields the card has something for. Split number boxes (several NUMBER fields) take the
- * digits in order, each up to its length (4 when unknown). The security code is filled only when [includeSecurityCode].
+ * The number boxes of a form that splits the card number (4 boxes of 4, Amex 4-6-5): two to six number fields that
+ * each take at most 6 characters, or three to five with no known limit. Anything else (a number and a "Confirm card
+ * number" box, say) gets the whole number in each box.
+ */
+private fun splitBoxes(numberFields: Collection<CardFieldSpec>): Boolean =
+    (numberFields.size in 2..6 && numberFields.all { it.maxLength in 1..6 }) ||
+        (numberFields.size in 3..5 && numberFields.all { it.maxLength <= 0 })
+
+/**
+ * The values to fill: only fields the card has something for. Split number boxes ([splitBoxes]) take the digits in
+ * order, each up to its length (4 when unknown); any other number field gets the whole number. The security code is
+ * filled only when [includeSecurityCode].
  */
 internal fun <K> cardFillValues(card: CardDetails, fields: Map<K, CardFieldSpec>, includeSecurityCode: Boolean): Map<K, CardValue> {
     val out = LinkedHashMap<K, CardValue>()
     val digits = card.number.filter(Char::isDigit)
     val numberFields = fields.filterValues { it.kind == CardField.NUMBER }
     if (digits.isNotEmpty()) {
-        if (numberFields.size == 1) out[numberFields.keys.first()] = CardValue.Text(digits)
-        else {
+        if (splitBoxes(numberFields.values)) {
             var at = 0
             for ((key, spec) in numberFields) {
                 if (at >= digits.length) break
-                val size = if (spec.maxLength in 1..19) spec.maxLength else 4
+                val size = if (spec.maxLength in 1..6) spec.maxLength else 4
                 out[key] = CardValue.Text(digits.substring(at, minOf(digits.length, at + size)))
                 at += size
             }
+        } else {
+            // A box too short for the number (a stray 4-character field beside the real one) is left alone.
+            for ((key, spec) in numberFields) if (spec.maxLength <= 0 || spec.maxLength >= digits.length) out[key] = CardValue.Text(digits)
         }
     }
     val holder = card.holder.trim()
@@ -169,8 +207,7 @@ internal fun <K> cardFillValues(card: CardDetails, fields: Map<K, CardFieldSpec>
             }
             CardField.EXP_YEAR -> expiry?.let { (_, year) ->
                 if (spec.options.isNotEmpty()) yearOption(spec.options, year)?.let { CardValue.Choice(it) }
-                else CardValue.Text(if (spec.maxLength == 2 || (spec.pattern.lowercase(Locale.ROOT).trim() == "yy")) (year % 100).toString().padStart(2, '0')
-                    else year.toString())
+                else CardValue.Text(if (twoDigitYear(spec)) (year % 100).toString().padStart(2, '0') else year.toString())
             }
             CardField.CSC -> card.securityCode.trim().takeIf { includeSecurityCode && it.isNotEmpty() }?.let { CardValue.Text(it) }
             CardField.TYPE -> card.network.trim().ifEmpty { com.privatevault.app.nfc.cardNetwork(digits) }.takeIf { it.isNotEmpty() }?.let { network ->

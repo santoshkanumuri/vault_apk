@@ -120,7 +120,7 @@ private fun SignInMethodRow(method: SignInMethod, now: Long, onForget: (() -> Un
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
         }
         if (onForget != null) IconButton(onClick = onForget, modifier = Modifier.size(48.dp)) {
-            Icon(NuvoriIcons.Delete, contentDescription = "Forget $name on ${method.site}",
+            Icon(NuvoriIcons.Delete, contentDescription = stringResource(R.string.forget_on, name.toString(), method.site.toString()),
                 tint = MaterialTheme.colorScheme.error)
         }
     }
@@ -158,7 +158,7 @@ internal fun SignInMethodsPage(viewModel: VaultViewModel) {
             }
         }
     } else {
-        NuvoriSearchField(query, { query = it }, "Search by site")
+        NuvoriSearchField(query, { query = it }, stringResource(R.string.search_by_site))
         if (providers.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(provider.isEmpty(), { provider = "" }, { Text(stringResource(R.string.all)) }, shape = NuvoriShapes.Chip)
@@ -230,7 +230,7 @@ internal fun SignInMethodsPage(viewModel: VaultViewModel) {
     forget?.let { method ->
         val who = if (method.account.isEmpty()) "" else " (${method.account})"
         AlertDialog(onDismissRequest = { forget = null },
-            title = { Text("Forget ${SignInMarks.name(method.provider)}$who on ${method.site}?") },
+            title = { Text(stringResource(R.string.forget_on_2, (SignInMarks.name(method.provider)).toString(), who.toString(), method.site.toString())) },
             text = { Text(stringResource(R.string.nuvori_stops_reminding_you_about_it_on_a)) },
             confirmButton = {
                 Button(onClick = { viewModel.deleteSignInMethod(method); forget = null },

@@ -285,7 +285,7 @@ internal fun NuvoriSearchField(value: String, onValue: (String) -> Unit, placeho
         leadingIcon = { Icon(NuvoriIcons.Search, contentDescription = null, modifier = Modifier.size(20.dp)) },
         trailingIcon = if (value.isNotEmpty()) {{
             IconButton(onClick = { onValue("") }, modifier = Modifier.size(48.dp)) {
-                Icon(NuvoriIcons.Close, contentDescription = "Clear search", modifier = Modifier.size(20.dp))
+                Icon(NuvoriIcons.Close, contentDescription = stringResource(R.string.clear_search), modifier = Modifier.size(20.dp))
             }
         }} else null,
         singleLine = true,
@@ -321,10 +321,10 @@ internal fun HomeHeader(itemCount: Int, search: String, onSearch: (String) -> Un
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onLock, modifier = Modifier.size(48.dp)) {
-                Icon(NuvoriIcons.Lock, contentDescription = "Lock vault", modifier = Modifier.size(22.dp))
+                Icon(NuvoriIcons.Lock, contentDescription = stringResource(R.string.lock_vault), modifier = Modifier.size(22.dp))
             }
         }
-        NuvoriSearchField(search, onSearch, "Search vault", Modifier.padding(end = 8.dp))
+        NuvoriSearchField(search, onSearch, stringResource(R.string.search_vault), Modifier.padding(end = 8.dp))
     }
 }
 
@@ -398,8 +398,8 @@ internal fun HomeScreen(
             }
             item(key = "quick") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionHeader("Quick access")
-                    if (quick.isEmpty()) EmptyHint(NuvoriIcons.Star, "Star an item or open one, and it shows up here.")
+                    SectionHeader(stringResource(R.string.quick_access))
+                    if (quick.isEmpty()) EmptyHint(NuvoriIcons.Star, stringResource(R.string.star_an_item_or_open_one_and_it_shows_up))
                     else LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(end = 4.dp)) {
                         items(quick, key = { it.entry.id }) { item ->
@@ -410,13 +410,13 @@ internal fun HomeScreen(
             }
             if (codes.isNotEmpty()) item(key = "codes") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionHeader("Codes", action = "All codes", onAction = { openCategory(EntryType.AUTHENTICATOR) })
+                    SectionHeader(stringResource(R.string.codes), action = stringResource(R.string.all_codes), onAction = { openCategory(EntryType.AUTHENTICATOR) })
                     LiveCodes(codes, copy, open)
                 }
             }
             item(key = "categories") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionHeader("Your vault")
+                    SectionHeader(stringResource(R.string.your_vault))
                     CategoryGrid(listOf(
                         CategoryTile("Passwords", counts[EntryType.PASSWORD] ?: 0, EntryType.PASSWORD.icon, tint(EntryType.PASSWORD.tintIndex)) { openCategory(EntryType.PASSWORD) },
                         CategoryTile("Cards", counts[EntryType.CARD] ?: 0, EntryType.CARD.icon, tint(EntryType.CARD.tintIndex)) { openCategory(EntryType.CARD) },
@@ -434,13 +434,13 @@ internal fun HomeScreen(
             }
             item(key = "actions") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionHeader("Quick actions")
+                    SectionHeader(stringResource(R.string.quick_actions))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         val syncing = sync.phase == DeviceSyncPhase.TRANSFERRING || sync.phase == DeviceSyncPhase.CONNECTING
-                        QuickActionTile(NuvoriIcons.Add, "Add", Modifier.weight(1f), onClick = onAdd)
+                        QuickActionTile(NuvoriIcons.Add, stringResource(R.string.add), Modifier.weight(1f), onClick = onAdd)
                         QuickActionTile(NuvoriIcons.Sync, if (syncing) "Syncing" else "Sync now", Modifier.weight(1f),
                             busy = syncing, onClick = onSyncNow)
-                        QuickActionTile(NuvoriIcons.Scan, "Scan or import", Modifier.weight(1f), onClick = onScanImport)
+                        QuickActionTile(NuvoriIcons.Scan, stringResource(R.string.scan_or_import), Modifier.weight(1f), onClick = onScanImport)
                     }
                 }
             }
@@ -687,7 +687,7 @@ internal fun AddTypeSheet(onDismiss: () -> Unit, onPick: (EntryType) -> Unit) {
         EntryType.QUESTION to "Question and answer",
         EntryType.AUTOFILL to "Name, email, phone, address",
     )
-    NuvoriSheet("Add to your vault", onDismiss) {
+    NuvoriSheet(stringResource(R.string.add_to_your_vault), onDismiss) {
         types.forEachIndexed { index, (type, hint) ->
             SheetRow(type.icon, tint(type.tintIndex), type.itemLabel, hint, index, types.size) { onPick(type) }
         }
@@ -704,7 +704,7 @@ internal fun ScanImportSheet(onDismiss: () -> Unit, scanCode: () -> Unit, import
         Triple(NuvoriIcons.Import, "Import passwords", "Browser or password manager export") to importPasswords,
         Triple(NuvoriIcons.History, "Restore a backup", "Google Drive or .pvault file") to restoreBackup,
     )
-    NuvoriSheet("Scan or import", onDismiss) {
+    NuvoriSheet(stringResource(R.string.scan_or_import), onDismiss) {
         rows.forEachIndexed { index, (row, action) ->
             SheetRow(row.first, tint(if (index == 0) 0 else 1), row.second, row.third, index, rows.size, action)
         }

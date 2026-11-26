@@ -43,7 +43,7 @@ internal fun profileChoices(entries: List<VaultEntry>, kinds: Collection<Profile
 internal fun ColumnScope.ProfileFillContent(choices: List<ProfileChoice>, hasProfiles: Boolean, busy: Boolean,
     embeddedWarning: String?, onFill: (VaultEntry) -> Unit, onOpenNuvori: () -> Unit) {
     LazyColumn(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        embeddedWarning?.let { item(key = "embedded-browser") { StatusBanner(StatusKind.WARNING, it, title = "Embedded browser") } }
+        embeddedWarning?.let { item(key = "embedded-browser") { StatusBanner(StatusKind.WARNING, it, title = stringResource(R.string.embedded_browser)) } }
         if (choices.isEmpty()) {
             item(key = "empty") {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -53,9 +53,9 @@ internal fun ColumnScope.ProfileFillContent(choices: List<ProfileChoice>, hasPro
                 }
             }
         } else {
-            item(key = "header") { PickerSectionHeader("Saved details") }
+            item(key = "header") { PickerSectionHeader(stringResource(R.string.saved_details)) }
             items(choices, key = { it.entry.id }) { choice -> ProfileChoiceRow(choice, !busy) { onFill(choice.entry) } }
-            item(key = "hint") { PickerHint("Choose details to fill. Only the fields this form asks for are filled.") }
+            item(key = "hint") { PickerHint(stringResource(R.string.choose_details_to_fill_only_the_fields_t)) }
         }
         item(key = "open-nuvori") {
             TextButton(onClick = onOpenNuvori, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {

@@ -64,12 +64,12 @@ internal fun ColumnScope.CardFillContent(cards: List<VaultEntry>, asksForCode: B
     var query by rememberSaveable { mutableStateOf("") }
     val shown = remember(cards, query) { filterCards(cards, query) }
     LazyColumn(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        embeddedWarning?.let { item(key = "embedded-browser") { StatusBanner(StatusKind.WARNING, it, title = "Embedded browser") } }
+        embeddedWarning?.let { item(key = "embedded-browser") { StatusBanner(StatusKind.WARNING, it, title = stringResource(R.string.embedded_browser)) } }
         if (cards.isEmpty()) {
             item(key = "empty") {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    PickerSectionHeader("No cards saved yet")
-                    PickerHint("Add a card in Nuvori. Nuvori can then fill its number, name and expiry here.")
+                    PickerSectionHeader(stringResource(R.string.no_cards_saved_yet))
+                    PickerHint(stringResource(R.string.add_a_card_in_nuvori_nuvori_can_then_fil))
                 }
             }
         } else {
@@ -90,7 +90,7 @@ internal fun ColumnScope.CardFillContent(cards: List<VaultEntry>, asksForCode: B
             }
             item(key = "header") { PickerSectionHeader(if (query.isBlank()) "Your cards" else "${shown.size} matching") }
             items(shown, key = { it.id }) { card -> CardChoiceRow(card, !busy) { onFill(card) } }
-            item(key = "hint") { PickerHint("Choose a card. Only the card fields this form asks for are filled.") }
+            item(key = "hint") { PickerHint(stringResource(R.string.choose_a_card_only_the_card_fields_this)) }
         }
         item(key = "open-nuvori") {
             TextButton(onClick = onOpenNuvori, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {

@@ -50,7 +50,7 @@ internal fun ColumnScope.AppearanceColorSections(accentId: String, surfaceId: St
     onChange: (accent: String, surface: String) -> Unit) {
     val accent = AppearancePalette.accent(accentId)
     val surface = AppearancePalette.surface(surfaceId)
-    SettingsSection("Colors", description = "Pick an accent and a background. The whole app changes at once.") {
+    SettingsSection(stringResource(R.string.colors), description = stringResource(R.string.pick_an_accent_and_a_background_the_whol)) {
         AppearancePreview()
         Text(stringResource(R.string.accent_color), style = MaterialTheme.typography.titleSmall, modifier = Modifier.semantics { heading() })
         FlowRow(Modifier.fillMaxWidth()) {
@@ -65,7 +65,7 @@ internal fun ColumnScope.AppearanceColorSections(accentId: String, surfaceId: St
         Text(stringResource(R.string.background), style = MaterialTheme.typography.titleSmall, modifier = Modifier.semantics { heading() })
         FlowRow(Modifier.fillMaxWidth()) {
             AppearancePalette.surfaces.forEach { option ->
-                SwatchButton("${option.name} background", selected = option.id == surface.id, RoundedCornerShape(14.dp), onClick = { onChange(accent.id, option.id) }) {
+                SwatchButton(stringResource(R.string.background_2, option.name.toString()), selected = option.id == surface.id, RoundedCornerShape(14.dp), onClick = { onChange(accent.id, option.id) }) {
                     Box(Modifier.size(SwatchSize).clip(RoundedCornerShape(10.dp)).background(Color(option.swatch))
                         .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp)),
                         contentAlignment = Alignment.Center) {

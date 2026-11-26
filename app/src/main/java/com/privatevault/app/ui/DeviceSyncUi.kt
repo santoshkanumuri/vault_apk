@@ -177,7 +177,7 @@ internal fun DeviceSyncState(text: SyncOverviewText, connected: Int, paired: Int
 private fun ConflictInbox(conflicts: List<SyncConflictReview>, onReview: (String) -> Unit) {
     if (conflicts.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        StatusBanner(kind = StatusKind.WARNING, title = "Conflicts to review",
+        StatusBanner(kind = StatusKind.WARNING, title = stringResource(R.string.sync_state_conflicts),
             message = "${conflicts.size} ${if (conflicts.size == 1) "record was" else "records were"} changed on two devices. Choose which version to keep.")
         conflicts.forEach { conflict ->
             Card(Modifier.fillMaxWidth()) {
@@ -206,10 +206,10 @@ private fun ConflictVersion(label: String, side: SyncConflictSide) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                if (side.deleted) StatusChip(StatusKind.ERROR, "Deleted")
+                if (side.deleted) StatusChip(StatusKind.ERROR, stringResource(R.string.deleted))
             }
             Text(side.device, style = MaterialTheme.typography.labelMedium)
-            Text("Changed ${side.reportedAtUtc}", style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.changed, side.reportedAtUtc.toString()), style = MaterialTheme.typography.bodySmall)
             Text(side.description, style = MaterialTheme.typography.bodyMedium)
         }
     }
@@ -227,21 +227,21 @@ internal fun ConflictReviewSheet(conflict: SyncConflictReview, onDismiss: () -> 
             .padding(horizontal = 18.dp).padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("${conflict.type.replaceFirstChar { it.uppercase() }} conflict",
+                Text(stringResource(R.string.conflict, (conflict.type.replaceFirstChar { it.uppercase() }).toString()),
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f))
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) }
             }
             Text(stringResource(R.string.choose_the_version_to_keep_across_paired),
                 style = MaterialTheme.typography.bodyMedium)
-            ConflictVersion("On this device", conflict.current)
-            ConflictVersion("Incoming version", conflict.incoming)
+            ConflictVersion(stringResource(R.string.on_this_device), conflict.current)
+            ConflictVersion(stringResource(R.string.incoming_version), conflict.incoming)
             Text(stringResource(R.string.times_may_differ_secret_values_stay_hidd),
                 style = MaterialTheme.typography.bodySmall)
             if (conflict.current.deleted || conflict.incoming.deleted)
-                StatusBanner(kind = StatusKind.WARNING, message = "A deleted version removes this record.")
+                StatusBanner(kind = StatusKind.WARNING, message = stringResource(R.string.a_deleted_version_removes_this_record))
             if (conflict.type == "passkey")
-                StatusBanner(kind = StatusKind.INFO, message = "The incoming passkey cannot replace another credential with the same ID. Keep this device's version, then register a new passkey on the website.")
+                StatusBanner(kind = StatusKind.INFO, message = stringResource(R.string.the_incoming_passkey_cannot_replace_anot))
             if (pendingCombine) {
                 val panel = statusColors(StatusKind.INFO)
                 Surface(color = panel.container, contentColor = panel.content, shape = NuvoriShapes.Card) {
@@ -428,14 +428,14 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             if (advanced) {
                 status?.let { SyncStageTrail(it.phase) }
-                if (lastContact > 0) Text("Last connected: ${dateFormat.format(Date(lastContact))}",
+                if (lastContact > 0) Text(stringResource(R.string.last_connected, (dateFormat.format(Date(lastContact))).toString()),
                     style = MaterialTheme.typography.bodySmall)
-                if (lastExchange > 0) Text("Last synced: ${dateFormat.format(Date(lastExchange))}",
+                if (lastExchange > 0) Text(stringResource(R.string.last_synced, (dateFormat.format(Date(lastExchange))).toString()),
                     style = MaterialTheme.typography.bodySmall)
                 if (progress.isNotBlank()) Text(progress, style = MaterialTheme.typography.bodySmall)
-                Text("Waiting to send: ${counts.toSend}. Waiting to apply here: ${counts.toApplyHere}.",
+                Text(stringResource(R.string.waiting_to_send_waiting_to_apply_here, counts.toSend.toString(), counts.toApplyHere.toString()),
                     style = MaterialTheme.typography.bodySmall)
-                Text("Waiting to apply there: ${counts.receivedThere}. Waiting to arrive here: ${counts.toReceiveHere}.",
+                Text(stringResource(R.string.waiting_to_apply_there_waiting_to_arrive, counts.receivedThere.toString(), counts.toReceiveHere.toString()),
                     style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = { showAddress = !showAddress },
                     modifier = Modifier.heightIn(min = 48.dp)) {
@@ -453,12 +453,12 @@ internal fun DeviceSyncPeerCard(device: SyncMembershipEntity, isManager: Boolean
                             if (address.isNotBlank() && !validAddress)
                                 Text(stringResource(R.string.enter_a_private_wi_fi_ip_address))
                         }, modifier = Modifier.fillMaxWidth())
-                    SettingsSecondaryButton("Try this address", onClick = { onTryAddress(address) },
+                    SettingsSecondaryButton(stringResource(R.string.try_this_address), onClick = { onTryAddress(address) },
                         enabled = validAddress)
                 }
             }
             if (showRemove) {
-                SettingsDangerButton("Remove ${device.displayName}", onClick = onRemove, enabled = canRemove,
+                SettingsDangerButton(stringResource(R.string.remove_2, device.displayName.toString()), onClick = onRemove, enabled = canRemove,
                     icon = NuvoriIcons.Delete)
                 if (removeHint != null) Text(removeHint, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -597,16 +597,16 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         com.privatevault.app.security.DeviceIntegrity.warning(com.privatevault.app.security.DeviceIntegrity.check(context))
     }
     val addDeviceCard: @Composable () -> Unit = {
-        SettingsSection("Add a device") {
+        SettingsSection(stringResource(R.string.add_a_device)) {
             // Security review L-12: a warning only; pairing still works on a rooted phone.
-            integrityWarning?.let { StatusBanner(kind = StatusKind.WARNING, title = "Check this phone", message = it) }
+            integrityWarning?.let { StatusBanner(kind = StatusKind.WARNING, title = stringResource(R.string.check_this_phone), message = it) }
             if (devices.isEmpty() && (state.stage == "idle" || state.stage == "failed")) {
                 Text(if (joiningExisting) "Scan the QR code from the device that manages your vault."
                     else "Connect another Android device or a Windows PC to sync over Wi-Fi.",
                     style = MaterialTheme.typography.bodyMedium)
-                PairingStep(1, "Create a QR on the managing device", "Open Devices & sync there and tap Create QR.")
-                PairingStep(2, "Scan it here", "On the empty device, tap Scan QR and point the camera at the code.")
-                PairingStep(3, "Compare the codes", "Confirm the same code appears on both devices before the vault copy starts.")
+                PairingStep(1, stringResource(R.string.create_a_qr_on_the_managing_device), stringResource(R.string.open_devices_sync_there_and_tap_create_q))
+                PairingStep(2, stringResource(R.string.scan_it_here), stringResource(R.string.on_the_empty_device_tap_scan_qr_and_poin))
+                PairingStep(3, stringResource(R.string.compare_the_codes), stringResource(R.string.confirm_the_same_code_appears_on_both_de))
                 Text(stringResource(R.string.keep_both_devices_unlocked_during_setup),
                     style = MaterialTheme.typography.bodySmall)
             }
@@ -628,18 +628,18 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                             }, 0, 600, 0, 0, 600, 600)
                         }
                     }
-                    Image(bitmap.asImageBitmap(), "Temporary pairing QR code",
+                    Image(bitmap.asImageBitmap(), stringResource(R.string.temporary_pairing_qr_code),
                         Modifier.widthIn(max = 320.dp).fillMaxWidth().aspectRatio(1f))
                     val phoneAddress = remember(state.invitation) {
                         PairingInvitation.decode(state.invitation).address
                     }
-                    Text("Phone Wi-Fi address: $phoneAddress", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.phone_wi_fi_address, phoneAddress.toString()), style = MaterialTheme.typography.bodySmall)
                     Text(stringResource(R.string.on_another_android_phone_start_with_an_e),
                         style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SettingsSecondaryButton("Copy link", onClick = { copyLink(state.invitation) },
+                        SettingsSecondaryButton(stringResource(R.string.copy_link), onClick = { copyLink(state.invitation) },
                             modifier = Modifier.weight(1f), icon = NuvoriIcons.Copy, fill = false)
-                        SettingsSecondaryButton("Cancel", onClick = viewModel::cancelDevicePairing,
+                        SettingsSecondaryButton(stringResource(R.string.cancel), onClick = viewModel::cancelDevicePairing,
                             modifier = Modifier.weight(1f), fill = false)
                     }
                 }
@@ -647,9 +647,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     Text(stringResource(R.string.t_2_compare_the_code_on_both_devices), style = MaterialTheme.typography.titleSmall)
                     Text(state.confirmation, style = MaterialTheme.typography.headlineLarge)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SettingsPrimaryButton("Codes match", onClick = viewModel::approveDevicePairing,
+                        SettingsPrimaryButton(stringResource(R.string.codes_match), onClick = viewModel::approveDevicePairing,
                             modifier = Modifier.weight(1f), icon = NuvoriIcons.Check, fill = false)
-                        SettingsSecondaryButton("Cancel", onClick = viewModel::cancelDevicePairing,
+                        SettingsSecondaryButton(stringResource(R.string.cancel), onClick = viewModel::cancelDevicePairing,
                             modifier = Modifier.weight(1f), fill = false)
                     }
                 }
@@ -657,10 +657,10 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     Text(if (state.stage == "connecting") "Connecting to the new device"
                         else "3. Copying the vault", style = MaterialTheme.typography.titleSmall)
                     LinearProgressIndicator(Modifier.fillMaxWidth())
-                    SettingsSecondaryButton("Cancel", onClick = viewModel::cancelDevicePairing)
+                    SettingsSecondaryButton(stringResource(R.string.cancel), onClick = viewModel::cancelDevicePairing)
                 }
                 "paired", "enrolled_pending" -> {
-                    SettingsPrimaryButton("Done", onClick = viewModel::cancelDevicePairing, icon = NuvoriIcons.Check)
+                    SettingsPrimaryButton(stringResource(R.string.done), onClick = viewModel::cancelDevicePairing, icon = NuvoriIcons.Check)
                 }
                 else -> {
                     if (state.stage == "failed") TextButton(onClick = viewModel::cancelDevicePairing,
@@ -681,14 +681,14 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                             if (activeDeviceCount < MAX_ACTIVE_SYNC_DEVICES) "Create QR" else "Reconnect",
                             onClick = { reverseLink = null; passwordError = null; verifyPairing = true },
                             modifier = Modifier.weight(1f), icon = Icons.Outlined.QrCode, fill = false)
-                        if (canScan) SettingsSecondaryButton("Scan QR", onClick = {
+                        if (canScan) SettingsSecondaryButton(stringResource(R.string.scan_qr), onClick = {
                             scanWindowsQr = false
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                                 PackageManager.PERMISSION_GRANTED) scanner = true
                             else cameraPermission.launch(Manifest.permission.CAMERA)
                         }, modifier = Modifier.weight(1f), icon = NuvoriIcons.Scan, fill = false)
                     }
-                    if (canCreate) SettingsSecondaryButton("Scan Windows QR if the PC cannot reach this phone", onClick = {
+                    if (canCreate) SettingsSecondaryButton(stringResource(R.string.scan_windows_qr_if_the_pc_cannot_reach_t), onClick = {
                         scanWindowsQr = true
                         scanError = null
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
@@ -706,7 +706,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                             OutlinedTextField(link, { link = it }, label = { Text(stringResource(R.string.setup_link_from_the_other_device)) },
                                 visualTransformation = PasswordVisualTransformation(),
                                 modifier = Modifier.fillMaxWidth(), maxLines = 3)
-                            SettingsSecondaryButton("Continue pairing", onClick = { joinLink = link; link = "" },
+                            SettingsSecondaryButton(stringResource(R.string.continue_pairing), onClick = { joinLink = link; link = "" },
                                 enabled = link.isNotBlank())
                         }
                     }
@@ -744,19 +744,19 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     if (viewModel.waitingForSyncKeys()) StatusBanner(kind = StatusKind.INFO,
         message = "Waiting for new sync keys from $managerName. Changes made here stay on this device until they arrive. " +
             "Open Nuvori on $managerName, or put both devices on the same Wi-Fi.")
-    if (rejected > 0) StatusBanner(kind = StatusKind.ERROR, title = "Changes need attention",
+    if (rejected > 0) StatusBanner(kind = StatusKind.ERROR, title = stringResource(R.string.changes_need_attention),
         message = "$rejected incoming ${if (rejected == 1) "change" else "changes"} could not be applied. Update both devices, then retry.",
-        actionLabel = "Retry changes", onAction = { viewModel.retryRejectedSyncChanges() })
+        actionLabel = stringResource(R.string.retry_changes), onAction = { viewModel.retryRejectedSyncChanges() })
     ConflictInbox(conflicts) { reviewConflictId = it }
 
     // 3. Devices in this vault.
     if (devices.isNotEmpty()) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                SettingsHeading("Devices in this vault", Modifier.weight(1f))
-                Text("$activeDeviceCount of $MAX_ACTIVE_SYNC_DEVICES", style = MaterialTheme.typography.labelMedium)
+                SettingsHeading(stringResource(R.string.devices_in_this_vault), Modifier.weight(1f))
+                Text(stringResource(R.string.of, activeDeviceCount.toString(), MAX_ACTIVE_SYNC_DEVICES.toString()), style = MaterialTheme.typography.labelMedium)
             }
-            Text("Up to 6 mobile devices and 2 Windows PCs share this vault. Each keeps its own copy and catches up when connected. $managerName manages the group.",
+            Text(stringResource(R.string.up_to_6_mobile_devices_and_2_windows_pcs, managerName.toString()),
                 style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(if (showAdvanced) "Hide connection details" else "Show connection details")
@@ -805,7 +805,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                             Text(device.displayName, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            StatusChip(StatusKind.NEUTRAL, "Removed")
+                            StatusChip(StatusKind.NEUTRAL, stringResource(R.string.removed))
                         }
                     }
                 }
@@ -814,14 +814,14 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     }
 
     // 4. Automatic sync.
-    if (devices.isNotEmpty()) SettingsSection("Automatic sync",
-        description = "Nuvori checks your paired devices while it can reach them on Wi-Fi.") {
-        SettingsSwitchRow("Automatic sync", autoOn, setAutomatic,
+    if (devices.isNotEmpty()) SettingsSection(stringResource(R.string.automatic_sync),
+        description = stringResource(R.string.nuvori_checks_your_paired_devices_while)) {
+        SettingsSwitchRow(stringResource(R.string.automatic_sync), autoOn, setAutomatic,
             description = if (autoOn) "On. Checks every $intervalLabel."
                 // H3: what still happens while paused, and what keeps changes moving.
                 else "Paused. Saving a change or tapping Sync now still checks once. Keep it on for one device, or use Google Drive, so changes always reach your other devices.")
         var syncOnOpen by remember { mutableStateOf(SyncOnOpen.enabled(context)) }
-        SettingsSwitchRow("Sync when Nuvori opens", syncOnOpen, { on ->
+        SettingsSwitchRow(stringResource(R.string.sync_when_nuvori_opens), syncOnOpen, { on ->
             syncOnOpen = on
             SyncOnOpen.setEnabled(context, on)
             viewModel.notify(if (on) "Nuvori syncs each time you open it" else "Opening Nuvori no longer starts a sync",
@@ -849,7 +849,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                 }
             }
         }
-        SettingsSecondaryButton("Add Auto sync tile", onClick = { requestAutoSyncTile(context) },
+        SettingsSecondaryButton(stringResource(R.string.add_auto_sync_tile), onClick = { requestAutoSyncTile(context) },
             icon = Icons.Outlined.AppShortcut)
         // Android needs a notification while Auto sync runs. On Android 13+ the user can hide it: the service keeps
         // running, Android lists Nuvori under Active apps in Quick Settings, and the tile shows On or Paused.
@@ -857,7 +857,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             Text("Android shows a notification while Auto sync is on. To hide it, turn off the Auto sync notification. " +
                 "Sync keeps running, and the Auto sync tile still shows On or Paused.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            SettingsSecondaryButton("Hide Auto sync notification", onClick = {
+            SettingsSecondaryButton(stringResource(R.string.hide_auto_sync_notification), onClick = {
                 LanSyncService.createChannel(context)
                 runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
@@ -865,8 +865,8 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             }, icon = Icons.Outlined.NotificationsOff)
         }
         if (notificationDenied) StatusBanner(kind = StatusKind.WARNING,
-            message = "Allow notifications to keep automatic sync active when Nuvori is closed.",
-            actionLabel = "Allow notifications",
+            message = stringResource(R.string.allow_notifications_to_keep_automatic_sy),
+            actionLabel = stringResource(R.string.allow_notifications),
             onAction = { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) })
         viewModel.deviceSyncQueueStatus()?.let { StatusBanner(kind = StatusKind.ERROR, message = it) }
     }
@@ -879,8 +879,8 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
 
     // 6. Managing role: a three-step handoff that every device can follow.
     val transfer = authorityTransfer
-    if (devices.isNotEmpty() && (isManager || transfer != null)) SettingsSection("Managing role",
-        description = "The managing device adds and removes devices and holds pairing invitations. Vault items sync the same on every device.") {
+    if (devices.isNotEmpty() && (isManager || transfer != null)) SettingsSection(stringResource(R.string.managing_role),
+        description = stringResource(R.string.the_managing_device_adds_and_removes_dev)) {
         val me = localDevice?.deviceId
         val targetName = (devices + listOfNotNull(localDevice)).firstOrNull { it.deviceId == transfer?.targetDeviceId }?.displayName
             ?: "the other device"
@@ -896,26 +896,26 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                 if (roleCandidates.size < devices.size) Text(stringResource(R.string.only_an_android_phone_or_tablet_can_mana),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 roleCandidates.forEach { device ->
-                    SettingsSecondaryButton("Offer to ${device.displayName}", icon = devicePlatformIcon(device),
+                    SettingsSecondaryButton(stringResource(R.string.offer_to, device.displayName.toString()), icon = devicePlatformIcon(device),
                         onClick = { transferTargetId = device.deviceId })
                 }
             }
             isManager -> {
-                if (transfer.accepted) StatusBanner(kind = StatusKind.SUCCESS, title = "Complete transfer",
-                    message = "$targetName accepted. Sync both devices, then complete the transfer.")
-                else StatusBanner(kind = StatusKind.PROGRESS, title = "Waiting for $targetName to accept",
-                    message = "Open Devices & sync on $targetName and accept. Keep both devices syncing.")
-                if (transfer.accepted) SettingsPrimaryButton("Complete transfer",
+                if (transfer.accepted) StatusBanner(kind = StatusKind.SUCCESS, title = stringResource(R.string.complete_transfer),
+                    message = stringResource(R.string.accepted_sync_both_devices_then_complete, targetName.toString()))
+                else StatusBanner(kind = StatusKind.PROGRESS, title = stringResource(R.string.waiting_for_to_accept, targetName.toString()),
+                    message = stringResource(R.string.open_devices_sync_on_and_accept_keep_bot, targetName.toString()))
+                if (transfer.accepted) SettingsPrimaryButton(stringResource(R.string.complete_transfer),
                     onClick = viewModel::completeAuthorityTransfer, icon = NuvoriIcons.Check)
-                SettingsSecondaryButton("Cancel transfer", onClick = viewModel::cancelAuthorityTransfer,
+                SettingsSecondaryButton(stringResource(R.string.cancel_transfer), onClick = viewModel::cancelAuthorityTransfer,
                     icon = NuvoriIcons.Close)
             }
             transfer.targetDeviceId == me -> {
-                if (transfer.accepted) StatusBanner(kind = StatusKind.PROGRESS, title = "Accepted",
-                    message = "Waiting for $managerName to complete the handoff.")
-                else StatusBanner(kind = StatusKind.INFO, title = "Accept managing role?",
-                    message = "$managerName offered this device the managing role. Both devices must finish syncing before you accept.")
-                if (!transfer.accepted) SettingsPrimaryButton("Accept managing role",
+                if (transfer.accepted) StatusBanner(kind = StatusKind.PROGRESS, title = stringResource(R.string.accepted),
+                    message = stringResource(R.string.waiting_for_to_complete_the_handoff, managerName.toString()))
+                else StatusBanner(kind = StatusKind.INFO, title = stringResource(R.string.accept_managing_role),
+                    message = stringResource(R.string.offered_this_device_the_managing_role_bo, managerName.toString()))
+                if (!transfer.accepted) SettingsPrimaryButton(stringResource(R.string.accept_managing_role_2),
                     onClick = { acceptTransfer = true }, icon = NuvoriIcons.Check)
                 // TODO(sync): the membership chain only lets the managing device sign CANCEL_TRANSFER.
                 // A recipient-side decline needs a new signed action or a cancel request to the manager.
@@ -938,9 +938,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             if (isManager) {
                 Text(stringResource(R.string.this_device_manages_the_group_so_it_can),
                     style = MaterialTheme.typography.bodyMedium)
-                SettingsDangerButton("Remove this device from the group", onClick = {}, enabled = false,
+                SettingsDangerButton(stringResource(R.string.remove_this_device_from_the_group), onClick = {}, enabled = false,
                     icon = Icons.Outlined.LinkOff)
-                if (transfer == null) SettingsSecondaryButton("Transfer managing role", onClick = {
+                if (transfer == null) SettingsSecondaryButton(stringResource(R.string.transfer_managing_role), onClick = {
                     if (roleCandidates.size == 1) transferTargetId = roleCandidates.first().deviceId
                     else if (roleCandidates.isEmpty()) viewModel.notify("Only an Android phone or tablet can manage the group. Pair one first.", StatusKind.INFO)
                     else viewModel.notify("Choose a device under Managing role.", StatusKind.INFO)
@@ -949,23 +949,23 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
                     Text(stringResource(R.string.start_a_separate_group_on_this_device_in), color = MaterialTheme.colorScheme.error)
                 }
             } else {
-                Text("This device keeps its vault copy and stops syncing. $managerName removes it from the group; no one needs to approve.",
+                Text(stringResource(R.string.this_device_keeps_its_vault_copy_and_sto, managerName.toString()),
                     style = MaterialTheme.typography.bodyMedium)
-                SettingsDangerButton("Remove this device from the group", onClick = { leaveGroup = true },
+                SettingsDangerButton(stringResource(R.string.remove_this_device_from_the_group), onClick = { leaveGroup = true },
                     icon = Icons.Outlined.LinkOff)
                 // A lost managing device: freeze the old group here, then start a new one or join one.
                 if (lostManager == null) {
-                    Text("Lost $managerName? Mark it as lost. This device then stops taking changes from it.",
+                    Text(stringResource(R.string.lost_mark_it_as_lost_this_device_then_st, managerName.toString()),
                         style = MaterialTheme.typography.bodySmall)
-                    SettingsSecondaryButton("Mark $managerName as lost", onClick = { markLost = true },
+                    SettingsSecondaryButton(stringResource(R.string.mark_as_lost_2, managerName.toString()), onClick = { markLost = true },
                         icon = NuvoriIcons.Shield)
                 } else {
-                    StatusBanner(StatusKind.WARNING, title = "$managerName is marked as lost",
-                        message = "This device no longer takes changes from it. Make this device the managing device of a new group, or scan the QR of a device that already did.")
-                    SettingsPrimaryButton("Make this the managing device", onClick = { startNewGroup = true },
+                    StatusBanner(StatusKind.WARNING, title = stringResource(R.string.is_marked_as_lost, managerName.toString()),
+                        message = stringResource(R.string.this_device_no_longer_takes_changes_from))
+                    SettingsPrimaryButton(stringResource(R.string.make_this_the_managing_device), onClick = { startNewGroup = true },
                         icon = NuvoriIcons.Shield)
                     TextButton(onClick = viewModel::undoSyncManagerLost, modifier = Modifier.heightIn(min = 48.dp)) {
-                        Text("$managerName is back")
+                        Text(stringResource(R.string.is_back, managerName.toString()))
                     }
                 }
             }
@@ -993,7 +993,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             } else scanError = "Scan the Windows QR shown in Nuvori's Sync page."
         } else joinLink = value
     }, close = { scanner = false }, title = if (scanWindowsQr) "Scan Windows pairing QR" else "Scan Nuvori pairing QR",
-        help = "Scan the QR shown on the other device. Keep both devices unlocked on reachable local networks.")
+        help = stringResource(R.string.scan_the_qr_shown_on_the_other_device_ke))
     if (joinLink != null) AlertDialog(
         onDismissRequest = {
             if (joining) return@AlertDialog
@@ -1076,15 +1076,15 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { viewModel.devicesNeedingUpdateForRemoval(deviceId) }
         }
         AlertDialog(onDismissRequest = { removeDeviceId = null },
-            title = { Text("Remove $name?") },
+            title = { Text(stringResource(R.string.remove_3, name.toString())) },
             text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("$name doesn't need to approve. It keeps its own copy of the vault. Your devices stop accepting its changes, and it sees a notice the next time it reaches any of your devices.")
+                Text(stringResource(R.string.doesn_t_need_to_approve_it_keeps_its_own, name.toString()))
                 // New sync keys only when every other device sent its signed key statement.
-                if (outdated?.isEmpty() == true) Text("$name can't read anything you add from now on.",
+                if (outdated?.isEmpty() == true) Text(stringResource(R.string.can_t_read_anything_you_add_from_now_on, name.toString()),
                     style = MaterialTheme.typography.bodyMedium)
                 else if (outdated != null) Text("${outdated!!.joinToString()} ${if (outdated!!.size == 1) "needs" else "need"} an update before Nuvori can change the sync keys. $name can't send changes, but it could still read new ones.",
                     color = MaterialTheme.colorScheme.error)
-                Text("If $name was connected to Google Drive sync, also remove Nuvori's access in your Google account.",
+                Text(stringResource(R.string.if_was_connected_to_google_drive_sync_al, name.toString()),
                     style = MaterialTheme.typography.bodySmall)
                 if (behind.isNotEmpty()) Text("${behind.joinToString()} ${if (behind.size == 1) "has" else "have"} not received every change from $name yet. Sync ${if (behind.size == 1) "that device" else "those devices"} first, or ${if (behind.size == 1) "it" else "they"} will not get those changes.",
                     color = MaterialTheme.colorScheme.error)
@@ -1099,14 +1099,14 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
             dismissButton = { TextButton(onClick = { removeDeviceId = null }) { Text(stringResource(R.string.cancel)) } })
     }
     if (markLost) AlertDialog(onDismissRequest = { markLost = false },
-        title = { Text("Mark $managerName as lost?") },
-        text = { Text("This device stops taking changes from $managerName. Your items stay. You can undo this.") },
+        title = { Text(stringResource(R.string.mark_as_lost_3, managerName.toString())) },
+        text = { Text(stringResource(R.string.this_device_stops_taking_changes_from_yo, managerName.toString())) },
         confirmButton = { TextButton(onClick = { markLost = false; viewModel.markSyncManagerLost() }) {
             Text(stringResource(R.string.mark_as_lost), color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton(onClick = { markLost = false }) { Text(stringResource(R.string.cancel)) } })
     if (startNewGroup) AlertDialog(onDismissRequest = { startNewGroup = false },
         title = { Text(stringResource(R.string.start_a_new_group_here)) },
-        text = { Text("This device keeps its items and manages a new group. Then pair your other devices with it. They keep their items too, with no duplicates. $managerName can't read anything you add after that.") },
+        text = { Text(stringResource(R.string.this_device_keeps_its_items_and_manages, managerName.toString())) },
         confirmButton = { TextButton(onClick = { startNewGroup = false; viewModel.startGroupAfterLostManager() }) {
             Text(stringResource(R.string.start_new_group)) } },
         dismissButton = { TextButton(onClick = { startNewGroup = false }) { Text(stringResource(R.string.cancel)) } })
@@ -1117,9 +1117,9 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
         AlertDialog(onDismissRequest = { leaveGroup = false },
         title = { Text(if (isManager) "Start a separate group?" else "Remove this device from the group?") },
         text = { if (isManager) Text(
-            "This device keeps its vault and starts a separate sync group with new keys. The other devices keep their copies, but nobody can add or remove members in the old group until it has a managing device again. Pair the watch again for codes.")
+            stringResource(R.string.this_device_keeps_its_vault_and_starts_a))
             else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("This device stops syncing with the group. $managerName removes it the next time they connect; no approval is needed. Changes waiting to arrive here must finish first. Pair the watch again for codes.")
+                Text(stringResource(R.string.this_device_stops_syncing_with_the_group, managerName.toString()))
                 listOf(false to ("Keep this device's items" to "Everything stays here as a separate vault. You can pair this device again later; its items are added as new copies."),
                     true to ("Leave and empty this device" to "Ready to join a sync group again. Items move to Recently deleted on this device for 30 days. Passkeys and folders are deleted here. Your other devices keep their copies."))
                     .forEach { (empty, labels) ->
@@ -1150,8 +1150,8 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     transferTargetId?.let { targetId ->
         val name = devices.firstOrNull { it.deviceId == targetId }?.displayName ?: "the other device"
         AlertDialog(onDismissRequest = { transferTargetId = null },
-            title = { Text("Offer the managing role to $name?") },
-            text = { Text("Step 1 of 3. $name must be up to date and accept. Then you complete the handoff here. You can cancel at any step. This device keeps syncing items afterwards.") },
+            title = { Text(stringResource(R.string.offer_the_managing_role_to, name.toString())) },
+            text = { Text(stringResource(R.string.step_1_of_3_must_be_up_to_date_and_accep, name.toString())) },
             confirmButton = { TextButton(onClick = {
                 transferTargetId = null
                 viewModel.offerAuthorityTransfer(targetId)
@@ -1160,7 +1160,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
     }
     if (acceptTransfer) AlertDialog(onDismissRequest = { acceptTransfer = false },
         title = { Text(stringResource(R.string.accept_managing_role)) },
-        text = { Text("Step 2 of 3. This device will add and remove devices after $managerName completes the signed handoff. Vault items keep syncing on every device.") },
+        text = { Text(stringResource(R.string.step_2_of_3_this_device_will_add_and_rem, managerName.toString())) },
         confirmButton = { TextButton(onClick = {
             acceptTransfer = false
             viewModel.acceptAuthorityTransfer()
@@ -1274,17 +1274,17 @@ internal fun CloudSyncCard(viewModel: VaultViewModel) {
                 if (status.connected) StatusChip(chipKind, chipLabel)
             }
             if (!status.connected) {
-                CloudPoint("Works anywhere", "Your devices sync through your Drive when they are not on the same Wi-Fi.")
-                CloudPoint("Google can't read it", "Every change is encrypted on this device before it is uploaded.")
-                CloudPoint("Only a hidden Nuvori folder", "Nuvori can't see or change your other Drive files.")
-                CloudPoint("One account for all devices", "Use the same Google account on every device.")
+                CloudPoint(stringResource(R.string.works_anywhere), stringResource(R.string.your_devices_sync_through_your_drive_whe))
+                CloudPoint(stringResource(R.string.google_can_t_read_it), stringResource(R.string.every_change_is_encrypted_on_this_device))
+                CloudPoint(stringResource(R.string.only_a_hidden_nuvori_folder), stringResource(R.string.nuvori_can_t_see_or_change_your_other_dr))
+                CloudPoint(stringResource(R.string.one_account_for_all_devices), stringResource(R.string.use_the_same_google_account_on_every_dev))
                 SettingsPrimaryButton(if (waiting) "Waiting for Google…" else "Connect Google Drive", onClick = connect,
                     icon = NuvoriIcons.Cloud, enabled = !waiting)
             } else {
-                if (status.needsSignIn) StatusBanner(kind = StatusKind.WARNING, title = "Google needs you to sign in again",
-                    message = "Access was removed or expired. Nothing is lost. Sync over Wi-Fi keeps working.",
+                if (status.needsSignIn) StatusBanner(kind = StatusKind.WARNING, title = stringResource(R.string.google_needs_you_to_sign_in_again),
+                    message = stringResource(R.string.access_was_removed_or_expired_nothing_is),
                     actionLabel = if (waiting) null else "Sign in again", onAction = connect)
-                else status.lastError?.let { StatusBanner(kind = StatusKind.WARNING, title = "Last Drive sync didn't finish", message = it) }
+                else status.lastError?.let { StatusBanner(kind = StatusKind.WARNING, title = stringResource(R.string.last_drive_sync_didn_t_finish), message = it) }
                 Text("Last Drive sync: ${if (status.lastSyncAt > 0) relativeTime(status.lastSyncAt, now) else "not yet"}",
                     style = MaterialTheme.typography.bodyMedium)
                 Text(stringResource(R.string.check_google_drive_every), style = MaterialTheme.typography.labelLarge)
@@ -1312,7 +1312,7 @@ internal fun CloudSyncCard(viewModel: VaultViewModel) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(stringResource(R.string.your_drive_stores_encrypted_changes_only),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                SettingsSecondaryButton("Disconnect", onClick = { confirmDisconnect = true }, icon = NuvoriIcons.LogOut)
+                SettingsSecondaryButton(stringResource(R.string.disconnect), onClick = { confirmDisconnect = true }, icon = NuvoriIcons.LogOut)
             }
         }
     }

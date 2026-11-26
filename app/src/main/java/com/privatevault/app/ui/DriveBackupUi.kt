@@ -140,19 +140,19 @@ internal fun DriveBackupCard(viewModel: VaultViewModel) {
                 SettingsPrimaryButton(if (waiting) "Waiting for Google…" else "Turn on Google Drive backup",
                     onClick = signIn, icon = NuvoriIcons.Cloud, enabled = !waiting)
             } else {
-                if (status.needsSignIn) StatusBanner(kind = StatusKind.WARNING, title = "Google needs you to sign in again",
-                    message = "Access was removed or expired. Your vault on this phone is safe.",
+                if (status.needsSignIn) StatusBanner(kind = StatusKind.WARNING, title = stringResource(R.string.google_needs_you_to_sign_in_again),
+                    message = stringResource(R.string.access_was_removed_or_expired_your_vault),
                     actionLabel = if (waiting) null else "Sign in again", onAction = signIn)
-                else status.lastError?.let { StatusBanner(kind = StatusKind.WARNING, title = "Last backup didn't finish", message = it) }
+                else status.lastError?.let { StatusBanner(kind = StatusKind.WARNING, title = stringResource(R.string.last_backup_didn_t_finish), message = it) }
                 Text("Last backup: " + if (status.lastBackupAt > 0) relativeTime(status.lastBackupAt, now) else "not yet",
                     style = MaterialTheme.typography.bodyMedium)
                 Text(stringResource(R.string.back_up_every), style = MaterialTheme.typography.labelLarge)
                 IntervalChips(status.interval, viewModel::setDriveBackupInterval)
-                Text("Backs up ${intervalSentence(status.interval)} while Nuvori is unlocked. A backup opens with your master password.",
+                Text(stringResource(R.string.backs_up_while_nuvori_is_unlocked_a_back, (intervalSentence(status.interval)).toString()),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 SettingsPrimaryButton(if (status.running) "Backing up…" else "Back up now", icon = NuvoriIcons.Upload,
                     enabled = !status.running, onClick = viewModel::backUpToDriveNow)
-                SettingsSecondaryButton("Turn off", icon = NuvoriIcons.LogOut, onClick = { confirmOff = true })
+                SettingsSecondaryButton(stringResource(R.string.turn_off), icon = NuvoriIcons.LogOut, onClick = { confirmOff = true })
             }
         }
     }
@@ -163,7 +163,7 @@ internal fun DriveBackupCard(viewModel: VaultViewModel) {
         title = { Text(stringResource(R.string.protect_drive_backups)) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.backups_open_with_your_current_master_pa))
-            SecretField("Current master password", password) { password = it }
+            SecretField(stringResource(R.string.current_master_password), password) { password = it }
         } },
         confirmButton = { Button(enabled = password.isNotEmpty(), onClick = {
             viewModel.turnOnDriveBackup(password.toCharArray(), chosenInterval)
@@ -189,8 +189,8 @@ internal fun DriveRestoreSection(viewModel: VaultViewModel, primary: Boolean) {
     var selected by remember { mutableStateOf<DriveBackupFile?>(null) }
     var password by remember { mutableStateOf("") }
     val (waiting, signIn) = rememberDriveSignIn(viewModel) { viewModel.findDriveBackups() }
-    SettingsSection("Restore from Google Drive",
-        description = "Use a backup that Nuvori saved in your Google Drive. Sign in with the Google account of your old phone.") {
+    SettingsSection(stringResource(R.string.restore_from_google_drive),
+        description = stringResource(R.string.use_a_backup_that_nuvori_saved_in_your_g)) {
         val label = if (waiting) "Looking in Google Drive…" else "Find backups in Google Drive"
         if (primary) SettingsPrimaryButton(label, icon = NuvoriIcons.Cloud, enabled = !waiting, onClick = signIn)
         else SettingsSecondaryButton(label, icon = NuvoriIcons.Cloud, enabled = !waiting, onClick = signIn)
@@ -226,7 +226,7 @@ internal fun DriveRestoreSection(viewModel: VaultViewModel, primary: Boolean) {
                     }
                 }
             }
-            SecretField("Master password of the backup", password) { password = it }
+            SecretField(stringResource(R.string.master_password_of_the_backup), password) { password = it }
             Text(stringResource(R.string.this_is_the_master_password_of_your_old),
                 style = MaterialTheme.typography.bodySmall)
         } },

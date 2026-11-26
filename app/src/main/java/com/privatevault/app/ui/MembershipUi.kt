@@ -121,7 +121,7 @@ internal fun MembershipNoticeBanner(notice: MembershipNotice, onDismiss: () -> U
     Column(modifier) {
         StatusBanner(kind = if (removed) StatusKind.WARNING else StatusKind.INFO,
             title = if (removed) "Removed from sync" else "Left the sync group", message = message,
-            actionLabel = "Dismiss", onAction = onDismiss)
+            actionLabel = stringResource(R.string.dismiss), onAction = onDismiss)
         if (onOpenDevices != null) TextButton(onClick = onOpenDevices, modifier = Modifier.heightIn(min = 40.dp)) {
             Text(stringResource(R.string.open_devices_sync))
         }

@@ -32,8 +32,8 @@ internal fun PasskeyRequestsSection() {
     var all by rememberSaveable { mutableStateOf(false) }
     var problemsOnly by rememberSaveable { mutableStateOf(false) }
     val filtered = remember(records, problemsOnly) { if (problemsOnly) records.filter { !it.offered } else records }
-    SettingsSection("Passkey requests",
-        description = "Apps and websites that asked Nuvori, newest first. The last ${PasskeyRequestLog.CAPACITY} stay encrypted on this device; no account or key is kept.") {
+    SettingsSection(stringResource(R.string.passkey_requests),
+        description = stringResource(R.string.apps_and_websites_that_asked_nuvori_newe, PasskeyRequestLog.CAPACITY.toString())) {
         if (records.isEmpty()) {
             Text(stringResource(R.string.no_requests_yet_if_an_app_lists_other_ma),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -41,8 +41,8 @@ internal fun PasskeyRequestsSection() {
         }
         val problems = records.count { !it.offered }
         if (problems > 0) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !problemsOnly, onClick = { problemsOnly = false }, label = { Text("All ${records.size}") })
-            FilterChip(selected = problemsOnly, onClick = { problemsOnly = true }, label = { Text("Not offered $problems") })
+            FilterChip(selected = !problemsOnly, onClick = { problemsOnly = false }, label = { Text(stringResource(R.string.all_2, records.size.toString())) })
+            FilterChip(selected = problemsOnly, onClick = { problemsOnly = true }, label = { Text(stringResource(R.string.not_offered, problems.toString())) })
         }
         val visible = if (all) filtered else filtered.take(5)
         visible.forEachIndexed { index, record ->
@@ -50,7 +50,7 @@ internal fun PasskeyRequestsSection() {
             PasskeyRequestRow(record)
         }
         if (filtered.size > 5) TextButton(onClick = { all = !all }) { Text(if (all) "Show less" else "Show all ${filtered.size}") }
-        SettingsSecondaryButton("Clear request history", onClick = { PasskeyRequestLog.clear(context) }, icon = NuvoriIcons.Delete)
+        SettingsSecondaryButton(stringResource(R.string.clear_request_history), onClick = { PasskeyRequestLog.clear(context) }, icon = NuvoriIcons.Delete)
     }
 }
 

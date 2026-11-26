@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -30,7 +31,7 @@ internal fun PhotoCropEditor(bitmap: Bitmap, crop: PhotoCrop, onCrop: (PhotoCrop
         val imageWidth = minOf(maxWidth, maxHeight * ratio)
         val imageHeight = imageWidth / ratio
         Box(Modifier.size(imageWidth, imageHeight)) {
-            Image(bitmap.asImageBitmap(), "Photo being cropped", Modifier.fillMaxSize())
+            Image(bitmap.asImageBitmap(), stringResource(R.string.photo_being_cropped), Modifier.fillMaxSize())
             Canvas(Modifier.fillMaxSize().semantics { contentDescription = "Drag the crop edges or corners, or drag inside to move the selection" }.pointerInput(bitmap) {
                 var left = false
                 var right = false

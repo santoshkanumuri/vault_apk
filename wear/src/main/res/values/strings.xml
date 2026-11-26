@@ -4,4 +4,7 @@
     <string name="authenticator">Authenticator</string>
     <string name="find_a_code">Find a code</string>
     <string name="copy_code">Copy code</string>
+    <!-- Text passed to composables as arguments, including text that fills in values. -->
+    <string name="letter">letter:%1$s</string>
+    <string name="code">code:%1$s</string>
 </resources>

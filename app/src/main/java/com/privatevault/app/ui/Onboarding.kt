@@ -107,7 +107,7 @@ internal fun OnboardingScreen(
                     Text(stringResource(R.string.nuvori), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                     Text(stringResource(R.string.yours_by_design), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text("${page + 1} of 4", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.of_4, (page + 1).toString()), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             AnimatedContent(page, modifier = Modifier.weight(1f), transitionSpec = {
                 val direction = if (targetState > initialState) 1 else -1
@@ -131,11 +131,11 @@ internal fun OnboardingScreen(
                         Text(stringResource(R.string.choose_what_to_do_after_you_create_your),
                             style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            ChoiceRow(FirstRunChoice.NEW, choice, NuvoriIcons.Password, "New vault", "Start with an empty vault") { choice = it }
+                            ChoiceRow(FirstRunChoice.NEW, choice, NuvoriIcons.Password, stringResource(R.string.new_vault), stringResource(R.string.start_with_an_empty_vault)) { choice = it }
                             ChoiceRow(FirstRunChoice.JOIN, choice, NuvoriIcons.Devices,
-                                "Join an existing vault", "Copy your vault from another phone or PC") { choice = it }
-                            ChoiceRow(FirstRunChoice.RESTORE, choice, NuvoriIcons.History, "Restore a backup", "From Google Drive or a .pvault file") { choice = it }
-                            ChoiceRow(FirstRunChoice.BROWSER_IMPORT, choice, NuvoriIcons.Import, "Import passwords", "From a browser or password manager export") { choice = it }
+                                stringResource(R.string.join_an_existing_vault), stringResource(R.string.copy_your_vault_from_another_phone_or_pc)) { choice = it }
+                            ChoiceRow(FirstRunChoice.RESTORE, choice, NuvoriIcons.History, stringResource(R.string.restore_a_backup), stringResource(R.string.from_google_drive_or_a_pvault_file)) { choice = it }
+                            ChoiceRow(FirstRunChoice.BROWSER_IMPORT, choice, NuvoriIcons.Import, stringResource(R.string.import_passwords), stringResource(R.string.from_a_browser_or_password_manager_expor)) { choice = it }
                         }
                         TextButton(onClick = onPrivacy) { Text(stringResource(R.string.privacy_policy)) }
                     }
@@ -143,7 +143,7 @@ internal fun OnboardingScreen(
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (page > 0) OutlinedIconButton(onClick = { onPageChange(page - 1) }, modifier = Modifier.size(52.dp)) {
-                    Icon(NuvoriIcons.Back, contentDescription = "Previous page")
+                    Icon(NuvoriIcons.Back, contentDescription = stringResource(R.string.previous_page))
                 }
                 else Spacer(Modifier.size(52.dp))
                 Spacer(Modifier.weight(1f))

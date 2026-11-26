@@ -99,6 +99,25 @@ internal object SyncRequests {
     fun clear() { state.value = 0L }
 }
 
+/** What a finished Sync now says, from the one sync status over every device and both transports. */
+internal fun syncNowResult(viewModel: VaultViewModel): Pair<StatusKind, String> {
+    val members = viewModel.pairedDevices.value.filter { it.status == MemberStatus.ACTIVE.name }
+    val facts = viewModel.syncFacts(members, viewModel.deviceSyncStatus.value, viewModel.devicePeerStatus.value,
+        viewModel.cloudSyncStatus.value, viewModel.syncConflicts.value.size, viewModel.rejectedSyncChanges.value)
+    val overview = facts?.let { com.privatevault.app.sync.SyncOverviewRules.overview(it) }
+        ?: return StatusKind.SUCCESS to "Synced."
+    return when (overview.state) {
+        OverallSync.UP_TO_DATE, OverallSync.NOT_YET -> StatusKind.SUCCESS to "Synced. Everything's up to date."
+        OverallSync.WAITING -> StatusKind.INFO to "Synced. ${overview.waitingFor.joinToString { it.name }} still " +
+            "${if (overview.waitingFor.size == 1) "needs" else "need"} your latest changes."
+        OverallSync.WAITING_HERE -> StatusKind.WARNING to if (overview.missingFrom.isNotEmpty())
+            "Synced. Some changes from ${overview.missingFrom.joinToString { it.name }} haven't arrived here yet."
+            else "Synced. Some changes are still waiting to apply."
+        OverallSync.CONFLICTS -> StatusKind.WARNING to "Synced. Some conflicts need your review."
+        else -> StatusKind.WARNING to "Synced, but sync needs attention. Open Devices & sync."
+    }
+}
+
 /** Shows a notice when a user-started sync finishes or fails. Automatic syncs stay quiet. */
 @Composable
 internal fun SyncAcknowledgementEffect(viewModel: VaultViewModel) {
@@ -111,7 +130,10 @@ internal fun SyncAcknowledgementEffect(viewModel: VaultViewModel) {
             DeviceSyncPhase.SEARCHING, DeviceSyncPhase.FOUND, DeviceSyncPhase.CONNECTING,
             DeviceSyncPhase.TRANSFERRING -> sawActivity = true
             DeviceSyncPhase.CHECKED -> if (sawActivity) {
-                SyncRequests.clear(); viewModel.notify("Synced. Everything's up to date.", StatusKind.SUCCESS)
+                SyncRequests.clear()
+                // "Up to date" only when the one status says so: one device answering is not all of them (H1).
+                val (kind, message) = withContext(Dispatchers.IO) { syncNowResult(viewModel) }
+                viewModel.notify(message, kind)
             }
             DeviceSyncPhase.RECEIVED -> if (sawActivity) {
                 SyncRequests.clear(); viewModel.notify("Synced. Some changes are still waiting to apply.", StatusKind.WARNING)
@@ -241,6 +263,9 @@ private fun calmLine(sync: HomeSync, itemCount: Int, now: Long): CalmLine = when
     sync.phase == DeviceSyncPhase.PAUSED -> CalmLine(StatusKind.NEUTRAL, "Automatic sync is paused")
     sync.phase == DeviceSyncPhase.WAITING -> CalmLine(StatusKind.NEUTRAL, "Waiting for Wi-Fi to sync")
     sync.phase == DeviceSyncPhase.OFF -> CalmLine(StatusKind.NEUTRAL, "Device sync is off")
+    // A state other than up to date never reads as in sync (H1).
+    sync.overview != null && sync.overviewText != null && sync.overview.state != OverallSync.UP_TO_DATE ->
+        CalmLine(sync.overviewText.kind, sync.overviewText.title)
     sync.lastChecked > 0 -> CalmLine(StatusKind.SUCCESS, "Everything's in sync · ${relativeTimeShort(sync.lastChecked, now)}")
     else -> CalmLine(StatusKind.SUCCESS, "Everything's in sync")
 }

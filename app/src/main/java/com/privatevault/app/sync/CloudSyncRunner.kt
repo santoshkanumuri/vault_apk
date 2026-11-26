@@ -105,7 +105,9 @@ internal object CloudSyncRunner {
         mutex.withLock {
             val store = LanSyncService.store(app)
             store.forgetCloud()
-            store.updateCloudState { CloudSyncState(enabled = true, account = account) }
+            // C1: the relay folder may have trimmed changes while Drive was off; the unlocked app
+            // rebuilds it in full before the next upload ([LockedSyncStore.refillRelayIfNeeded]).
+            store.updateCloudState { CloudSyncState(enabled = true, account = account, relayRefill = true) }
             listedSinceStart = false
         }
         mutableStatus.value = CloudSyncStatus(connected = true, account = account)
@@ -184,7 +186,9 @@ internal object CloudSyncRunner {
                 round++
                 report.removed?.let { LanSyncService.recordRemoval(app, it); return }
                 if (report.queueFull) { error = QUEUE_FULL; break }
-                if (report.complete || round >= PASSES_PER_REQUEST) break
+                // M6/C1: a file nobody can read or a gap in this device's history needs another device
+                // (or a later re-upload), so running again now would only repeat it.
+                if (report.complete || report.stuckAuthors.isNotEmpty() || round >= PASSES_PER_REQUEST) break
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: CloudException) {

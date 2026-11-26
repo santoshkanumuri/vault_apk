@@ -40,7 +40,12 @@ internal fun syncOverviewText(facts: SyncFacts, overview: SyncOverview, words: S
             AttentionCause.WIFI_ONLY_FAILED -> words.plural(R.plurals.sync_detail_wifi_only_failed, noteCount, noteDevices)
             AttentionCause.DRIVE_ONLY_FAILED -> words.text(R.string.sync_detail_drive_only_failed)
             AttentionCause.LOCAL_PROBLEM -> facts.localProblem.orEmpty()
-            AttentionCause.REJECTED -> words.plural(R.plurals.sync_detail_rejected, facts.rejected, facts.rejected)
+            AttentionCause.REJECTED -> facts.peers.filter { it.blocked > 0 }.maxByOrNull { it.blocked }?.let { peer ->
+                words.plural(R.plurals.sync_detail_rejected_from, peer.blocked.toCount(), peer.blocked, peer.name)
+            } ?: words.plural(R.plurals.sync_detail_rejected, facts.rejected, facts.rejected)
+            AttentionCause.APP_UPDATE -> overview.updateFrom.first().let { peer ->
+                words.plural(R.plurals.sync_detail_app_update, peer.needsUpdate.toCount(), peer.needsUpdate, peer.name)
+            }
             AttentionCause.DEVICE_SILENT, null -> {
                 val silent = overview.waitingFor.first { overview.peers[it.deviceId] == PeerAck.SILENT }
                 words.text(R.string.sync_detail_device_silent, silent.name, overview.days.toInt())
@@ -56,7 +61,14 @@ internal fun syncOverviewText(facts: SyncFacts, overview: SyncOverview, words: S
                 overview.waitingChanges, waitingName)
             else words.plural(R.plurals.sync_detail_waiting_many, overview.waitingChanges.toCount(), overview.waitingChanges))
         OverallSync.WAITING_HERE -> Triple(StatusKind.WARNING, words.text(R.string.sync_state_waiting_here),
-            words.text(R.string.sync_detail_waiting_here))
+            overview.missingFrom.let { from ->
+                val missing = from.sumOf { it.missingHere }
+                when {
+                    from.isEmpty() -> words.text(R.string.sync_detail_waiting_here)
+                    from.size == 1 -> words.plural(R.plurals.sync_detail_missing_from, missing.toCount(), missing, from.single().name)
+                    else -> words.plural(R.plurals.sync_detail_missing_many, missing.toCount(), missing)
+                }
+            })
         OverallSync.STALE -> Triple(StatusKind.WARNING, words.text(R.string.sync_state_stale, overview.days.toInt()),
             words.text(if (facts.drive != TransportHealth.OFF) R.string.sync_detail_stale_drive else R.string.sync_detail_stale_wifi))
         OverallSync.NOT_YET -> Triple(StatusKind.NEUTRAL, words.text(R.string.sync_state_not_yet), words.text(R.string.sync_detail_not_yet))

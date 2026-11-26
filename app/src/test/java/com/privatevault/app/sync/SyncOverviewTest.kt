@@ -176,4 +176,41 @@ class SyncOverviewTest {
         assertTrue(facts(DeviceSyncStatus(DeviceSyncPhase.TRANSFERRING, "")).busy)
         assertTrue(facts(DeviceSyncStatus(DeviceSyncPhase.RECEIVED, "")).waitingHere)
     }
+
+    private fun progress(received: Map<String, Long> = emptyMap(), applied: Map<String, Long> = emptyMap()) =
+        SyncProgress(received.mapValues { SyncChainHead(it.value, "r${it.value}") },
+            applied.mapValues { SyncChainHead(it.value, "a${it.value}") })
+
+    /** H1: another device applied changes that never arrived here, so this device is not up to date. */
+    @Test fun changesAnotherDeviceAppliedButThisOneLacksAreWaitingHere() {
+        val local = progress(received = mapOf("id-pc" to 10, "id-me" to 4), applied = mapOf("id-pc" to 10, "id-me" to 4))
+        val tablet = progress(applied = mapOf("id-pc" to 30, "id-me" to 4))
+        val pc = progress(applied = mapOf("id-pc" to 30, "id-me" to 4))
+        assertEquals(20L, SyncOverviewRules.missingHere("id-pc", local, listOf(tablet, pc)))
+        assertEquals(0L, SyncOverviewRules.missingHere("id-me", local, listOf(tablet, pc)))
+        val facts = SyncOverviewRules.facts(now, listOf("id-me" to "Phone", "id-pc" to "PC", "id-tab" to "Tablet"), "id-me",
+            local, mapOf("id-pc" to pc, "id-tab" to tablet), mapOf("id-pc" to now - minute, "id-tab" to now - minute),
+            emptyMap(), DeviceSyncStatus(DeviceSyncPhase.CHECKED, ""), emptyMap(), CloudSyncStatus())
+        val result = SyncOverviewRules.overview(facts)
+        assertEquals("every device confirmed this phone's own changes", 0L, result.waitingChanges)
+        assertEquals(OverallSync.WAITING_HERE, result.state)
+        assertEquals(listOf("PC"), result.missingFrom.map { it.name })
+        assertEquals(20L, result.missingFrom.single().missingHere)
+        // Once they arrive, it is up to date again.
+        val caughtUp = SyncOverviewRules.facts(now, listOf("id-me" to "Phone", "id-pc" to "PC"), "id-me",
+            progress(received = mapOf("id-pc" to 30), applied = mapOf("id-pc" to 30)), mapOf("id-pc" to pc),
+            mapOf("id-pc" to now - minute), emptyMap(), DeviceSyncStatus(DeviceSyncPhase.CHECKED, ""), emptyMap(),
+            CloudSyncStatus())
+        assertEquals(OverallSync.UP_TO_DATE, SyncOverviewRules.overview(caughtUp).state)
+    }
+
+    /** M4: a change of a kind this version doesn't know waits for an update, and says so. */
+    @Test fun changesWaitingForAnAppUpdateNeedAttention() {
+        val result = overview(peer("PC").copy(needsUpdate = 3))
+        assertEquals(OverallSync.ATTENTION, result.state)
+        assertEquals(AttentionCause.APP_UPDATE, result.cause)
+        assertEquals(listOf("PC"), result.updateFrom.map { it.name })
+        // A change that was set aside still comes first: it needs a decision, not an update.
+        assertEquals(AttentionCause.REJECTED, overview(peer("PC").copy(needsUpdate = 3)) { copy(rejected = 1) }.cause)
+    }
 }

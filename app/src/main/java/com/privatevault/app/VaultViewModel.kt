@@ -262,7 +262,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { lockedSyncStore.progress() }.getOrNull(), mirror.peerProgress, mirror.lastContactAt,
             mirror.lastExchangeAt, lan, peerStatus, cloud, conflicts, rejected,
             runCatching { lockedSyncStore.waitingForKeys() }.getOrDefault(false),
-            runCatching { deviceSyncQueueStatus() != null }.getOrDefault(false))
+            runCatching { deviceSyncQueueStatus() != null }.getOrDefault(false),
+            runCatching { lockedSyncStore.waitingForUpdate() }.getOrDefault(emptyMap()),
+            runCatching { lockedSyncStore.blockedBehindSetAside() }.getOrDefault(emptyMap()))
     }.getOrNull()
 
     fun deviceSyncAddress(deviceId: String): String =
@@ -990,7 +992,18 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             val runner = com.privatevault.app.sync.CloudSyncRunner
             runner.loadCheckInterval(getApplication())
             runner.refresh(getApplication())
+            // C1: after Drive was connected, or a pass found the drive emptied, the relay folder is
+            // rebuilt from the vault so the next pass can upload every change the drive lacks.
+            suspend fun refillRelay(): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { lockedSyncStore.refillRelayIfNeeded(db) }.getOrDefault(false)
+            }
+            refillRelay()
             runner.request(getApplication())
+            launch {
+                runner.status.collect { status ->
+                    if (!status.syncing && database === db && refillRelay()) runner.request(getApplication())
+                }
+            }
             while (database === db && _status.value is VaultStatus.Unlocked) {
                 val every = runner.checkInterval.value
                 val changed = kotlinx.coroutines.withTimeoutOrNull(if (every > 0) every else Long.MAX_VALUE) {

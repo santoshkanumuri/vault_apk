@@ -288,7 +288,7 @@ internal object LanSyncExchange {
     private fun sendBatch(channel: EncryptedSyncChannel, store: SyncSessionStore, peerDeviceId: String,
         relayRemoved: Boolean): Int {
         val progress = SyncProgress.parse(channel.receive())
-        store.recordPeerProgress(peerDeviceId, progress)
+        store.recordLivePeerProgress(peerDeviceId, progress)
         val frontier = SyncFrontier(progress.received.mapValues { it.value.sequence })
         val pending = store.pending(frontier, relayRemoved).take(MAX_BATCH)
         channel.send(pending.size.toString().toByteArray())

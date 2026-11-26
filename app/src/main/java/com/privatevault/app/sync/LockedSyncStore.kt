@@ -193,6 +193,8 @@ internal class LockedSyncStore(private val context: Context,
     private var outgoingIndex: List<OperationPointer>? = null
     /** Chain coordinates of the incoming folder, so each received change is not a full rescan. */
     private var incomingIndex: List<QueuedPointer>? = null
+    /** Chain coordinates of the set-aside folder: they count as received ([progress]). */
+    private var rejectedIndex: List<Pair<String, ChainLink>>? = null
     @Volatile private var cachedWrappingKey: SecretKey? = null
 
     /** Serializes [publish] with the moves of applied changes into the relay folder ([applyQueued]). */
@@ -602,7 +604,11 @@ internal class LockedSyncStore(private val context: Context,
         // heads catch up, so both folders count; the reported frontier never moves backward.
         val relayed = outgoingPointers().filter { it.vaultId == mirror.vaultId }
             .map { ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) }
-        val queued = incomingPointers().filter { it.vaultId == mirror.vaultId }.map { it.link }
+        // A set-aside change was verified and stored like any other, so it counts as received, as on
+        // Windows (H2): dropping it here made the reported head move backward and the sender refuse
+        // every later session. What waits behind it shows on Home ([blockedChanges]).
+        val queued = incomingPointers().filter { it.vaultId == mirror.vaultId }.map { it.link } +
+            rejectedPointers(mirror.vaultId)
         return SyncProgress(IncomingChain.received(applied, relayed, queued), applied).also { it.validate() }
     }
 
@@ -790,7 +796,13 @@ internal class LockedSyncStore(private val context: Context,
         .pendingPhotoHashes.sorted().filter { photoBlobs.file(it) == null }.take(32)
         .map { it to photoBlobs.partialSize(it) }
 
-    @Synchronized override fun recordPeerProgress(deviceId: String, progress: SyncProgress) {
+    @Synchronized override fun recordPeerProgress(deviceId: String, progress: SyncProgress) =
+        recordPeer(deviceId, progress, live = false)
+
+    @Synchronized override fun recordLivePeerProgress(deviceId: String, progress: SyncProgress) =
+        recordPeer(deviceId, progress, live = true)
+
+    private fun recordPeer(deviceId: String, progress: SyncProgress, live: Boolean) {
         progress.validate()
         val mirror = requireNotNull(snapshot())
         require(mirror.members.any { it.deviceId == deviceId && it.status == MemberStatus.ACTIVE.name })
@@ -809,16 +821,20 @@ internal class LockedSyncStore(private val context: Context,
         }
         val previous = mirror.peerProgress[deviceId]
         if (previous != null) {
-            progress.received.forEach { (author, head) ->
-                val old = previous.received[author]
-                require(old == null || head.sequence >= old.sequence) { "Peer received progress moved backward" }
-                require(old == null || head.sequence != old.sequence || head.hash == old.hash)
+            var lostGround = false
+            fun check(heads: Map<String, SyncChainHead>, old: Map<String, SyncChainHead>, what: String) = heads.forEach { (author, head) ->
+                val before = old[author] ?: return@forEach
+                // The same sequence with another change is a fork: always refused.
+                require(head.sequence != before.sequence || head.hash == before.hash) { "Peer reported a conflicting change head" }
+                if (head.sequence < before.sequence) {
+                    // A Drive report may be an old copy; a live peer that lost ground is told the truth.
+                    require(live) { "Peer $what progress moved backward" }
+                    lostGround = true
+                }
             }
-            progress.applied.forEach { (author, head) ->
-                val old = previous.applied[author]
-                require(old == null || head.sequence >= old.sequence) { "Peer applied progress moved backward" }
-                require(old == null || head.sequence != old.sequence || head.hash == old.hash)
-            }
+            check(progress.received, previous.received, "received")
+            check(progress.applied, previous.applied, "applied")
+            if (lostGround) runCatching { android.util.Log.w("NuvoriSync", "A peer reported less than before; its changes go again") }
         }
         writeProtected(File(directory, "peers"), gson.toJson(mirror.copy(
             peerProgress = mirror.peerProgress + (deviceId to progress))).toByteArray(Charsets.UTF_8))
@@ -860,8 +876,8 @@ internal class LockedSyncStore(private val context: Context,
         verifyIncomingOperation(mirror, operation)
         val change = operation.toSyncChange()
         val file = File(incoming, change.hash)
-        // A resend of something already held is acknowledged again without a second copy.
-        if (file.exists() || File(outgoing, change.hash).exists()) return
+        // A resend of something already held (or set aside) is acknowledged again without a second copy.
+        if (file.exists() || File(outgoing, change.hash).exists() || File(rejected, change.hash).exists()) return
         val link = ChainLink(change.deviceId, change.sequence, change.hash, change.previousHash)
         // An older change resent (its relay file may be gone) is acknowledged, never stored again.
         if (IncomingChain.admit(link, progress().received, emptySet()) != IncomingChain.Admission.STORE) return
@@ -877,7 +893,52 @@ internal class LockedSyncStore(private val context: Context,
         } finally { bytes.fill(0) }
     }
 
-    suspend fun applyQueued(database: VaultDatabase, localKey: ByteArray): Int {
+    /**
+     * Rebuilds the relay folder from the vault when a Drive pass asked for it, or Drive was just
+     * connected ([CloudSyncState.relayRefill]), so the next pass can upload what the drive lacks (C1).
+     * The flag goes first: a pass that raises it again meanwhile is not lost. True when it ran.
+     */
+    suspend fun refillRelayIfNeeded(database: VaultDatabase): Boolean {
+        if (!cloudState().normalized().relayRefill) return false
+        updateCloudState { it.copy(relayRefill = false) }
+        try { publish(database, full = true) }
+        catch (failure: Exception) { updateCloudState { it.copy(relayRefill = true) }; throw failure }
+        return true
+    }
+
+    /**
+     * Per author, the stored changes that wait for an app update: the next change to apply is of a
+     * kind this version doesn't know ([UnsupportedSyncEntityException]).
+     */
+    @Synchronized fun waitingForUpdate(): Map<String, Long> {
+        val mirror = snapshot() ?: return emptyMap()
+        val progress = progress()
+        val queued = incomingPointers().filter { it.vaultId == mirror.vaultId }
+        return queued.filter { pointer ->
+            pointer.meta.entityType !in SUPPORTED_ENTITY_TYPES &&
+                pointer.link.sequence == (progress.applied[pointer.link.deviceId]?.sequence ?: 0L) + 1
+        }.associate { pointer ->
+            pointer.link.deviceId to (progress.received[pointer.link.deviceId]?.sequence ?: 0L) - pointer.link.sequence + 1
+        }
+    }
+
+    /** Per author, the stored changes that wait behind one set aside here: they apply after a retry. */
+    @Synchronized fun blockedBehindSetAside(): Map<String, Long> {
+        val mirror = snapshot() ?: return emptyMap()
+        val progress = progress()
+        return rejectedPointers(mirror.vaultId).map { it.deviceId }.distinct().associateWith { author ->
+            (progress.received[author]?.sequence ?: 0L) - (progress.applied[author]?.sequence ?: 0L)
+        }.filterValues { it > 0 }
+    }
+
+    /**
+     * Applies the stored changes that can apply now. One run at a time in this process: the main app
+     * and autofill both apply ([APPLY_LOCK]), and two runs could apply the same change twice.
+     */
+    suspend fun applyQueued(database: VaultDatabase, localKey: ByteArray): Int =
+        APPLY_LOCK.withLock { applyQueuedLocked(database, localKey) }
+
+    private suspend fun applyQueuedLocked(database: VaultDatabase, localKey: ByteArray): Int {
         missingEpochs = emptySet()
         val mirror = requireNotNull(snapshot())
         database.withTransaction {
@@ -981,6 +1042,8 @@ internal class LockedSyncStore(private val context: Context,
         } else { requestPhoto(missing.hash); null }
     }
     catch (_: MissingPhotoDependencyException) { null }
+    // A newer kind of change waits for an app update; it is counted as received meanwhile (M4).
+    catch (_: UnsupportedSyncEntityException) { null }
     catch (_: MissingRecordDependencyException) { null }
     // A change of an epoch whose key has not arrived yet waits for its package ([EpochKeys]), never set aside.
     catch (missing: MissingEpochKeyException) { missingEpochs = missingEpochs + missing.epoch; null }
@@ -1003,6 +1066,7 @@ internal class LockedSyncStore(private val context: Context,
                 else check(file.renameTo(target)) { "Could not retry rejected sync change" }
             }
         incomingIndex = null
+        rejectedIndex = null
     }
 
     @Synchronized private fun quarantine(hash: String) {
@@ -1011,6 +1075,7 @@ internal class LockedSyncStore(private val context: Context,
         rejected.mkdirs()
         check(file.renameTo(File(rejected, hash))) { "Could not isolate rejected sync change" }
         incomingIndex = incomingIndex?.filterNot { it.link.hash == hash }
+        rejectedIndex = null
     }
 
     /** Clears the group's transport state. Leave and removal notices survive on purpose. */
@@ -1024,6 +1089,7 @@ internal class LockedSyncStore(private val context: Context,
         AtomicFile(relayIndexFile).delete()
         outgoingIndex = null
         incomingIndex = null
+        rejectedIndex = null
         generation++
         fullScanFor = null
     }
@@ -1146,6 +1212,10 @@ internal class LockedSyncStore(private val context: Context,
         .map { QueuedPointer(it.vaultId, ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash), meta(it)) }
         .also { incomingIndex = it }
 
+    private fun rejectedPointers(vaultId: String): List<ChainLink> = (rejectedIndex ?: readOperations(rejected)
+        .map { it.vaultId to ChainLink(it.deviceId, it.sequence, it.hash, it.previousHash) }
+        .also { rejectedIndex = it }).filter { it.first == vaultId }.map { it.second }
+
     private fun meta(operation: SyncOperationEntity) = QueuedOperationMeta(operation.deviceId, operation.sequence,
         operation.entityType, operation.entityId, operation.kind)
 
@@ -1199,6 +1269,8 @@ internal class LockedSyncStore(private val context: Context,
     }
 
     private companion object {
+        /** Serializes [applyQueued] across every store instance in the process. */
+        val APPLY_LOCK = Mutex()
         const val KEY_ALIAS = "nuvori_sync_transport_v1"
         /** The cached Drive file list (about 150 bytes a file); Windows stops listing at 200,000 files. */
         const val CLOUD_FILES_LIMIT = 32 * 1024 * 1024

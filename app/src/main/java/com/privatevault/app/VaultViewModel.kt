@@ -56,6 +56,9 @@ enum class LockReason { STARTUP, BACKGROUND, INACTIVITY, SCREEN_OFF, MANUAL, RES
 
 data class AuthorityTransferState(val targetDeviceId: String, val accepted: Boolean)
 
+/** The managing device changed the shared master password and this phone hasn't switched yet ([com.privatevault.app.sync.MasterPasswordSync]). */
+data class MasterPasswordSwitchState(val managerName: String, val epoch: Long)
+
 internal data class DraftPhoto(val id: String, val encryptedFileName: String, val encryptedThumbnailFileName: String)
 
 sealed interface VaultStatus {
@@ -180,6 +183,15 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val syncManagerDeviceId = _syncManagerDeviceId.asStateFlow()
     private val _authorityTransfer = MutableStateFlow<AuthorityTransferState?>(null)
     val authorityTransfer = _authorityTransfer.asStateFlow()
+    private val _masterPasswordSwitch = MutableStateFlow<MasterPasswordSwitchState?>(null)
+    /** Non-null while this phone owes a switch to its managing device's new master password; sync waits until then. */
+    val masterPasswordSwitch = _masterPasswordSwitch.asStateFlow()
+    private val _switchingMasterPassword = MutableStateFlow(false)
+    val switchingMasterPassword = _switchingMasterPassword.asStateFlow()
+    private val _masterPasswordSwitchError = MutableStateFlow<String?>(null)
+    /** Why the last switch failed, shown in the switch dialog. */
+    val masterPasswordSwitchError = _masterPasswordSwitchError.asStateFlow()
+    fun clearMasterPasswordSwitchError() { _masterPasswordSwitchError.value = null }
     private val _canHostDevicePairing = MutableStateFlow(false)
     val canHostDevicePairing = _canHostDevicePairing.asStateFlow()
     /** Set after a verified removal by the managing device; stays until [dismissRemovedNotice]. */
@@ -861,6 +873,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 open(it)
                 _requestDailyBiometric.value = _securitySettings.value.masterPasswordIntervalMs > 0
                 strengthenDriveBackupKey(password.copyOf(), it.copyOf())
+                settleMasterPassword(password.copyOf())
             }
             .onFailure {
                 // A newer format or a Keystore failure is not a wrong password: retrying can't help.
@@ -879,6 +892,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val UNLOCK_FAILURES = "unlock_failures"
         const val UNLOCK_FAILED_AT = "unlock_failed_at"
+        /** The vault ID while this managing phone owes its group a password check ([settleMasterPassword]). */
+        const val MASTER_PASSWORD_CHECK_OWED = "master_password_check_owed"
+        private const val MASTER_PASSWORD_SWITCH_FAILURES = "master_password_switch_failures"
+        private const val MASTER_PASSWORD_SWITCH_FAILED_AT = "master_password_switch_failed_at"
     }
 
     /** In the background after an unlock: moves an older Drive backup key to the timed settings. */
@@ -1109,6 +1126,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _lostManager.value = null
         _syncManagerDeviceId.value = null
         _authorityTransfer.value = null
+        _masterPasswordSwitch.value = null
         _canHostDevicePairing.value = false
         _syncConflicts.value = emptyList()
         _rejectedSyncChanges.value = 0
@@ -1536,24 +1554,174 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val db = requireNotNull(database)
             val vaultId = requireNotNull(db.dao().settings()).vaultId
-            require(db.syncDao().activeMembershipCount(vaultId) <= 1) {
-                "Master password changes are unavailable while devices share a vault. Remove paired devices first."
-            }
+            // While devices share the vault, all of them keep the managing device's password: only it changes the
+            // password, and it writes a password check that the others switch to (MasterPasswordSync).
+            val group = if (db.syncDao().activeMembershipCount(vaultId) > 1) {
+                val key = requireNotNull(sessionKey).copyOf()
+                val state = try {
+                    masterPasswordState(db, key)
+                } finally { key.fill(0) }
+                requireNotNull(state) { "Sync once with your other devices, then try again." }
+                if (!state.manages) {
+                    val manager = db.syncDao().membership(vaultId, state.managerDeviceId)?.displayName?.ifBlank { null }
+                    throw IllegalArgumentException(
+                        "Change the master password on ${manager ?: "your managing device"}. This phone then asks for the new one.")
+                }
+                require(!state.transferPending) { "Finish or cancel the managing-role transfer first." }
+                val older = requireNotNull(lockedSyncStore.devicesWithoutMasterPasswordSync()) {
+                    "Sync once with your other devices, then try again."
+                }
+                require(older.isEmpty()) {
+                    "Update Nuvori on ${older.joinToString()} and sync once first. Older versions can't learn a new password."
+                }
+                state
+            } else null
+            // Saved before the change: if the check isn't written, the next unlock with the new password writes it.
+            if (group != null) preferences.edit().putString(MASTER_PASSWORD_CHECK_OWED, vaultId).commit()
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.changePassword(current, replacement) }
+            val checkSaved = group == null || runCatching {
+                val key = requireNotNull(sessionKey).copyOf()
+                try { writeMasterPasswordCheck(db, key, group, replacement) } finally { key.fill(0) }
+                preferences.edit().remove(MASTER_PASSWORD_CHECK_OWED).commit()
+                runCatching { com.privatevault.app.sync.LanSyncService.syncNow(getApplication()) }
+            }.isSuccess
             biometricGate.clearDailySession()
             _requestDailyBiometric.value = true
             val driveBackup = com.privatevault.app.backup.DriveBackupRunner.status.value.enabled
-            // Later Drive backups open with the new password. Once one is saved, this phone's Drive
-            // backups with the old password are deleted (L-16); one runs now so that happens soon.
+            // Later Drive backups open with the new password. Once one is saved, this phone's Drive backups with the
+            // old password are deleted (L-16); one runs now so that happens soon.
             val key = requireNotNull(sessionKey).copyOf()
             try { com.privatevault.app.backup.DriveBackupRunner.changePassword(getApplication(), replacement, key) }
             finally { key.fill(0) }
             if (driveBackup) requestDriveBackup(force = true)
-            notify(if (driveBackup) "Master password changed. Nuvori makes a new Google Drive backup now and then deletes this phone's Drive backups that use the old password. Backup files you saved yourself keep their original password."
-                else "Master password changed. Backup files you saved yourself keep their original password.", StatusKind.SUCCESS)
+            val devices = when {
+                group == null -> ""
+                checkSaved -> " Your other devices ask for the new password the next time they open and sync."
+                else -> " Your other devices learn it after you next unlock this phone with the new password."
+            }
+            notify(if (driveBackup) "Master password changed. Nuvori makes a new Google Drive backup now and then deletes this phone's Drive backups that use the old password. Backup files you saved yourself keep their original password.$devices"
+                else "Master password changed. Backup files you saved yourself keep their original password.$devices",
+                if (checkSaved) StatusKind.SUCCESS else StatusKind.WARNING)
         } finally {
             current.fill('\u0000'); replacement.fill('\u0000')
         }
+    }
+
+    /**
+     * The managing device's password check for [password] ([com.privatevault.app.sync.MasterPasswordRules]): a fresh
+     * salt and the Argon2id passes of this phone's own vault key, under the next epoch and the newest membership event.
+     */
+    private suspend fun writeMasterPasswordCheck(db: VaultDatabase, key: ByteArray,
+        state: com.privatevault.app.sync.MasterPasswordSync.State, password: CharArray) {
+        val rules = com.privatevault.app.sync.MasterPasswordRules
+        val salt = ByteArray(16).also(java.security.SecureRandom()::nextBytes)
+        val iterations = keyManager.kdf.iterations.coerceIn(rules.MIN_ITERATIONS, rules.MAX_ITERATIONS)
+        val check = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            rules.create(state.vaultId, password, state.nextEpoch, state.membershipSequence, salt, iterations)
+        }
+        com.privatevault.app.sync.MasterPasswordSync.writeCheck(db, deviceIdentityStore, key, check)
+    }
+
+    /**
+     * Switches this phone to the managing device's new master password: [password] must pass its check. The vault key
+     * stays the same and is saved under [password]; the old password isn't needed, because the vault is open.
+     */
+    fun switchMasterPassword(password: CharArray) = viewModelScope.launch {
+        touch()
+        if (_switchingMasterPassword.value) { password.fill('\u0000'); return@launch }
+        // Wrong tries wait as they do at unlock (UnlockThrottle), counted apart and kept across restarts, so the
+        // check can't be guessed quickly from an open phone.
+        val failures = preferences.getInt(MASTER_PASSWORD_SWITCH_FAILURES, 0)
+        val wait = com.privatevault.app.security.UnlockThrottle.waitMillis(failures,
+            preferences.getLong(MASTER_PASSWORD_SWITCH_FAILED_AT, 0L), System.currentTimeMillis())
+        if (wait > 0) {
+            password.fill('\u0000')
+            _masterPasswordSwitchError.value =
+                "Too many wrong passwords. Try again in ${com.privatevault.app.security.UnlockThrottle.describe(wait)}."
+            return@launch
+        }
+        _switchingMasterPassword.value = true
+        _masterPasswordSwitchError.value = null
+        var driveMoved = true
+        try {
+            val db = requireNotNull(database) { "Vault is locked" }
+            val key = requireNotNull(sessionKey) { "Vault is locked" }.copyOf()
+            try {
+                val pending = masterPasswordState(db, key)?.pending
+                if (pending != null) {
+                    val matches = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { pending.matches(password) }
+                    if (!matches) preferences.edit().putInt(MASTER_PASSWORD_SWITCH_FAILURES, (failures + 1).coerceAtMost(1000))
+                        .putLong(MASTER_PASSWORD_SWITCH_FAILED_AT, System.currentTimeMillis()).commit()
+                    require(matches) {
+                        "That isn't the new master password from ${pending.managerName.ifBlank { "your managing device" }}. Try again."
+                    }
+                    preferences.edit().remove(MASTER_PASSWORD_SWITCH_FAILURES).remove(MASTER_PASSWORD_SWITCH_FAILED_AT).commit()
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { keyManager.adoptPassword(key, password) }
+                    com.privatevault.app.sync.MasterPasswordSync.writeSwitched(db, deviceIdentityStore, key, pending.epoch)
+                    biometricGate.clearDailySession()
+                    _requestDailyBiometric.value = true
+                    // Drive backups move to the new password too, as on the managing device.
+                    val driveBackup = com.privatevault.app.backup.DriveBackupRunner.status.value.enabled
+                    driveMoved = runCatching {
+                        com.privatevault.app.backup.DriveBackupRunner.changePassword(getApplication(), password, key)
+                    }.isSuccess
+                    if (driveBackup) requestDriveBackup(force = true)
+                }
+            } finally { key.fill(0) }
+            refresh()
+            runCatching { com.privatevault.app.sync.LanSyncService.syncNow(getApplication()) }
+            if (driveMoved) notify("This phone now opens with the new master password, and sync continues. Backup files you saved yourself keep their original password.",
+                StatusKind.SUCCESS)
+            else notify("This phone now opens with the new master password, and sync continues. Google Drive backups couldn't move to it yet: turn Drive backup off and on to try again.",
+                StatusKind.WARNING)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            _masterPasswordSwitchError.value = failure.userMessage("Couldn't switch to the new master password. Try again.")
+        } finally {
+            password.fill('\u0000')
+            _switchingMasterPassword.value = false
+        }
+    }
+
+    /**
+     * After a password unlock ([com.privatevault.app.sync.MasterPasswordSync]). A phone that owes a switch to the
+     * check [password] passes already opens with that password (a switch stopped after its key was saved), so it
+     * records the switch. On the managing phone, a change stopped before its check was saved writes the check now.
+     */
+    /**
+     * The shared master password as this phone sees it ([com.privatevault.app.sync.MasterPasswordSync.state]), with
+     * the check it was last asked for, which still counts until the managing device has a check of its own.
+     */
+    private suspend fun masterPasswordState(db: VaultDatabase, key: ByteArray,
+        self: String? = null): com.privatevault.app.sync.MasterPasswordSync.State? =
+        com.privatevault.app.sync.MasterPasswordSync.state(db, key, self ?: deviceIdentityStore.getOrCreate().deviceId) {
+            lockedSyncStore.masterPasswordSwitchHeld(it)
+        }
+
+    private fun settleMasterPassword(password: CharArray) = viewModelScope.launch {
+        try {
+            val db = database ?: return@launch
+            val key = sessionKey?.copyOf() ?: return@launch
+            try {
+                val state = masterPasswordState(db, key)
+                    ?: return@launch
+                val pending = state.pending
+                val cpu = kotlinx.coroutines.Dispatchers.Default
+                if (pending != null) {
+                    if (kotlinx.coroutines.withContext(cpu) { pending.matches(password) }) {
+                        com.privatevault.app.sync.MasterPasswordSync.writeSwitched(db, deviceIdentityStore, key, pending.epoch)
+                        if (database === db) refresh()
+                    }
+                } else if (state.manages && preferences.getString(MASTER_PASSWORD_CHECK_OWED, null) == state.vaultId) {
+                    val current = state.current
+                    if (current == null || !kotlinx.coroutines.withContext(cpu) { current.check.matches(state.vaultId, password) })
+                        writeMasterPasswordCheck(db, key, state, password)
+                    preferences.edit().remove(MASTER_PASSWORD_CHECK_OWED).commit()
+                }
+            } finally { key.fill(0) }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { /* The next unlock with the master password tries again. */ }
+        finally { password.fill('\u0000') }
     }
 
     fun exportBackup(uri: Uri, password: CharArray) = securedLaunch("Couldn't create the backup. Check your master password and the chosen location.") {
@@ -1902,6 +2070,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             lockedSyncStore.photoBlobs, getApplication())
             .reviews(requireNotNull(sessionKey))
         val lostManager = syncDatabase.syncDao().lostManager(vaultId)
+        // The shared master password (MasterPasswordSync): a failed read leaves the last known state as it is.
+        val masterPassword = runCatching {
+            val key = requireNotNull(sessionKey).copyOf()
+            try { masterPasswordState(syncDatabase, key, self) } finally { key.fill(0) }
+        }
         if (database !== syncDatabase || _status.value !is VaultStatus.Unlocked) return
         _lostManager.value = lostManager
         _passkeys.value = passkeys
@@ -1917,6 +2090,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _syncManagerDeviceId.value = membership?.managerDeviceId
         _authorityTransfer.value = membership?.pendingTransferDeviceId?.let {
             AuthorityTransferState(it, membership.transferAccepted)
+        }
+        masterPassword.onSuccess { state ->
+            val pending = state?.pending
+            _masterPasswordSwitch.value = pending?.let { MasterPasswordSwitchState(it.managerName, it.epoch) }
+            // Sync waits, locked or not, until this phone switches.
+            runCatching { lockedSyncStore.setMasterPasswordSwitchPending(pending?.vaultId, pending?.current?.hash) }
         }
         _canHostDevicePairing.value = canHostPairing
         _removedNotice.value = lockedSyncStore.removalNotice()
@@ -1977,6 +2156,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             val activeDatabase = requireNotNull(database) { "Unlock your vault before pairing" }
             val activeKey = requireNotNull(sessionKey) { "Unlock your vault before pairing" }
             require(_canHostDevicePairing.value) { "Add devices from the managing device" }
+            // A new device proves the group's current password while pairing, so this phone must hold it.
+            require(_masterPasswordSwitch.value == null) { "Enter the new master password first, then add the device." }
             val matches = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 val verifiedKey = try { keyManager.unlock(password) }
                 catch (_: java.security.GeneralSecurityException) {
@@ -2177,9 +2358,24 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun acceptAuthorityTransfer() = securedLaunch {
+        // The managing device's password is the group's password, so this phone must hold the current one first.
+        require(_masterPasswordSwitch.value == null) { "Enter the new master password first, then accept the managing role." }
         val manager = requireNotNull(_syncManagerDeviceId.value)
         requireAuthorityTransferReady(manager)
         val db = requireNotNull(database)
+        // Only the managing device's password checks count (MasterPasswordRules.current), so before the role
+        // moves here this phone signs a copy of the current check: the group keeps the same password, and the
+        // current managing device completes the handoff only once it holds that copy.
+        val key = requireNotNull(sessionKey).copyOf()
+        try {
+            val state = masterPasswordState(db, key)
+            if (state != null) {
+                require(state.pending == null) { "Enter the new master password first, then accept the managing role." }
+                val current = state.current?.takeIf { it.author == state.managerDeviceId }
+                if (current != null && !state.carriedOverBy(state.localDeviceId))
+                    com.privatevault.app.sync.MasterPasswordSync.writeCarryOver(db, deviceIdentityStore, key, current.check)
+            }
+        } finally { key.fill(0) }
         db.acceptAuthorityTransfer(deviceIdentityStore)
         com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         refresh()
@@ -2190,6 +2386,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         val target = requireNotNull(_authorityTransfer.value?.takeIf { it.accepted }?.targetDeviceId)
         requireAuthorityTransferReady(target)
         val db = requireNotNull(database)
+        // The other device signs a copy of the current password check when it accepts (acceptAuthorityTransfer).
+        // Without it, the group would have no check its new managing device signed.
+        val key = requireNotNull(sessionKey).copyOf()
+        val state = try { masterPasswordState(db, key) } finally { key.fill(0) }
+        if (state != null) require(state.carriedOverBy(target)) {
+            val name = db.syncDao().membership(state.vaultId, target)?.displayName?.ifBlank { null }
+            "Sync once with ${name ?: "the other device"} first, then complete the handoff."
+        }
         db.completeAuthorityTransfer(deviceIdentityStore)
         com.privatevault.app.sync.LanSyncService.publishCredentialChanges(getApplication(), db)
         refresh()

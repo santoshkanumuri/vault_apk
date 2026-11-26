@@ -722,6 +722,7 @@ internal fun DeviceSyncSettings(viewModel: VaultViewModel, copyLink: (String) ->
 
     // A persistent removed/left notice comes before everything else.
     membershipNotice?.let { MembershipNoticeBanner(it, onDismiss = { dismissMembershipNotice(viewModel, it, context) }) }
+    MasterPasswordSwitchBanner(viewModel)
 
     // Not paired yet: pairing is the only thing to do, so it comes first.
     if (devices.isEmpty()) addDeviceCard()

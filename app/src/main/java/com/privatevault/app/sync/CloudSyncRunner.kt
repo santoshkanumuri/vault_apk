@@ -191,6 +191,13 @@ internal object CloudSyncRunner {
         val state = runCatching { store.cloudState() }.getOrNull()
         if (state == null || !state.enabled) { mutableStatus.value = CloudSyncStatus(); return PassOutcome.DONE }
         uploadPendingLeave(store, app)
+        // Drive sync waits too until this phone switches to the managing device's new master password.
+        if (store.masterPasswordSwitchPending()) {
+            mutableStatus.update { it.copy(connected = true, account = state.account, syncing = false,
+                lastError = MasterPasswordSync.SWITCH_FIRST) }
+            // Needs the person: the switch prompt shows after unlock, and the next pass after it syncs.
+            return PassOutcome.STOP
+        }
         val mirror = runCatching { store.snapshot() }.getOrNull() ?: return PassOutcome.DONE
         if (!MembershipChoices.cloudPassNeeded(mirror.localDeviceId, mirror.members,
                 driveHasCurrentMembership(store, state, mirror))) return PassOutcome.DONE

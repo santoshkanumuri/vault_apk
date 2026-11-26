@@ -296,6 +296,20 @@ internal class VaultKeyFile(
         try { persistWrappedKey(vaultKey, replacement, PasswordCrypto.calibrated(targetMillis)) } finally { vaultKey.fill(0) }
     }
 
+    /**
+     * Saves [vaultKey] under [replacement] without the current password: the managing device of this phone's sync
+     * group changed the master password, and [replacement] passed its password check (`MasterPasswordRules`).
+     * [vaultKey] is the key of the open vault, from this session's unlock. The new wrap is opened again in memory
+     * before anything is saved, so a wrong key or a fault can't leave an unopenable vault.
+     */
+    fun adoptPassword(vaultKey: ByteArray, replacement: CharArray) {
+        require(vaultKey.size == 32 && replacement.size >= PasswordCrypto.MIN_PASSWORD_LENGTH)
+        check(isInitialized)
+        // Keeps the timed settings (no benchmark); a 2.3.1 vault gets timed settings now.
+        val settings = if (format == 1) PasswordCrypto.calibrated(targetMillis) else this.kdf
+        persistWrappedKey(vaultKey, replacement, settings, verify = true)
+    }
+
     private fun openHardwareLayer(stored: ByteArray): ByteArray {
         val iv = decode(records.string("hw_iv") ?: throw VaultKeyUnavailableException())
         val layer = hardware ?: throw VaultKeyUnavailableException()
@@ -322,10 +336,15 @@ internal class VaultKeyFile(
         )
     }
 
-    private fun persistWrappedKey(vaultKey: ByteArray, password: CharArray, kdf: KdfParams) {
+    private fun persistWrappedKey(vaultKey: ByteArray, password: CharArray, kdf: KdfParams, verify: Boolean = false) {
         check(kdf.valid)
         val salt = ByteArray(16).also(random::nextBytes)
         val wrapped = PasswordCrypto.wrap(vaultKey, password, salt, random, kdf)
+        if (verify) {
+            val reopened = PasswordCrypto.unwrap(WrappedSecret(wrapped.nonce.copyOf(), wrapped.ciphertext.copyOf()), password, salt, kdf)
+            try { check(java.security.MessageDigest.isEqual(reopened, vaultKey)) { "The new password wrap did not open" } }
+            finally { reopened.fill(0) }
+        }
         val sealed = sealedInHardware(wrapped.ciphertext)
         val strings = mutableMapOf(
             "salt" to encode(salt),
@@ -382,6 +401,9 @@ class VaultKeyManager internal constructor(
     fun unlock(password: CharArray): ByteArray = file.unlock(password)
 
     fun changePassword(current: CharArray, replacement: CharArray) = file.changePassword(current, replacement)
+
+    /** Slow on purpose (two Argon2id runs): call off the main thread. See [VaultKeyFile.adoptPassword]. */
+    fun adoptPassword(vaultKey: ByteArray, replacement: CharArray) = file.adoptPassword(vaultKey, replacement)
 }
 
 /**

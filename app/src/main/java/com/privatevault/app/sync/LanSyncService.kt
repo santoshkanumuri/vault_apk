@@ -596,6 +596,8 @@ class LanSyncService : Service() {
             signals.trySend(Unit)
         } catch (_: LanSyncExchange.MembershipMessageServed) {
             return true
+        } catch (_: LanSyncExchange.MasterPasswordSwitchPending) {
+            setStatus(DeviceSyncPhase.ATTENTION, MasterPasswordSync.SWITCH_FIRST)
         } catch (failure: Exception) {
             // M12: a refusal (signature, forked history, bad frame) is not a Wi-Fi problem, and retrying
             // at once changes nothing; it is shown on that device's card.

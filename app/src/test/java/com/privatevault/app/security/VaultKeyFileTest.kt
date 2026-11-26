@@ -202,6 +202,32 @@ class VaultKeyFileTest {
         assertArrayEquals(key, file(records, null).unlock(replacement))
     }
 
+    @Test fun anAdoptedPasswordOpensTheSameKeyWithoutTheOldPassword() {
+        val records = MemoryRecords()
+        val hardware = SoftwareHardware()
+        val key = file(records, hardware).create(password)
+        val kdf = file(records, hardware).kdf
+        val replacement = "the-managing-device-password".toCharArray()
+        file(records, hardware).adoptPassword(key.copyOf(), replacement)
+        assertEquals(3, file(records, hardware).format)
+        assertEquals(kdf, file(records, hardware).kdf)
+        assertArrayEquals(key, file(records, hardware).unlock(replacement))
+        assertThrows(AEADBadTagException::class.java) { file(records, hardware).unlock(password) }
+    }
+
+    @Test fun aPasswordIsNeverAdoptedForAnotherKeyOrWhenItsWrapFails() {
+        val records = MemoryRecords()
+        val hardware = SoftwareHardware()
+        val key = file(records, hardware).create(password)
+        val before = records.snapshot()
+        val replacement = "the-managing-device-password".toCharArray()
+        assertThrows(IllegalArgumentException::class.java) { file(records, hardware).adoptPassword(ByteArray(16), replacement) }
+        assertThrows(IllegalArgumentException::class.java) { file(records, hardware).adoptPassword(key, "short".toCharArray()) }
+        assertThrows(IllegalStateException::class.java) { file(MemoryRecords(), hardware).adoptPassword(key, replacement) }
+        assertEquals(before, records.snapshot())
+        assertArrayEquals(key, file(records, hardware).unlock(password))
+    }
+
     @Test fun aNewerFormatIsRefusedBeforeAnyKeyDerivation() {
         val records = MemoryRecords()
         val hardware = SoftwareHardware()

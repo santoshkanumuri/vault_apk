@@ -354,6 +354,8 @@ internal fun HomeScreen(
     onAdd: () -> Unit = {},
     onSyncNow: () -> Unit = {},
     onScanImport: () -> Unit = {},
+    /** A switch to the managing device's new master password, when one is owed. */
+    switchBanner: @Composable () -> Unit = {},
 ) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(30_000); now = System.currentTimeMillis() } }
@@ -389,6 +391,7 @@ internal fun HomeScreen(
             item(key = "status") {
                 Column(Modifier.animateContentSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     membershipNotice?.let { MembershipNoticeBanner(it, onDismiss = dismissMembershipNotice, onOpenDevices = openDevices) }
+                    switchBanner()
                     if (attention.isEmpty()) CalmStatusLine(calmLine(sync, entries.size, now))
                     else attention.forEach { AttentionRow(it) }
                 }

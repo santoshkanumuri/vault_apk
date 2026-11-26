@@ -37,7 +37,8 @@ internal class UnsupportedSyncEntityException(val entityType: String) : Exceptio
 
 /** The kinds of change this app version applies. Anything else waits ([UnsupportedSyncEntityException]). */
 internal val SUPPORTED_ENTITY_TYPES = setOf("entry", "group", "passkey", "photo", "photo_cover", "device_name",
-    AppearanceSyncRules.ENTITY_TYPE, SiteIconSyncRules.ENTITY_TYPE, SignInMethodSyncRules.ENTITY_TYPE)
+    AppearanceSyncRules.ENTITY_TYPE, SiteIconSyncRules.ENTITY_TYPE, SignInMethodSyncRules.ENTITY_TYPE,
+    MasterPasswordRules.ENTITY_TYPE)
 
 internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
     private val photoBlobs: PhotoSyncBlobs? = null, private val context: Context? = null,
@@ -97,8 +98,19 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
         // method, so the row it removes is found by its id (recomputed when the row came from another group's key).
         var signIn: SignInMethodSyncRules.Method? = null
         var signInRow: SignInMethodKey? = null
+        // A password check or a switch (MasterPasswordRules.read); which check counts is decided when it is read.
+        var masterPassword: MasterPasswordRules.Record? = null
         val payload = try {
-            decrypt(change, keyring).also {
+            if (change.entityType == MasterPasswordRules.ENTITY_TYPE) {
+                // From the exact bytes, as Windows reads them: org.json would read 2.0 as 2.
+                val plaintext = decryptBytes(change, keyring)
+                masterPassword = try {
+                    MasterPasswordRules.read(change.vaultId, change.deviceId, change.entityId,
+                        change.kind == ChangeKind.UPSERT, plaintext.toString(Charsets.UTF_8))
+                } finally { plaintext.fill(0) }
+                requireNotNull(masterPassword) { "Invalid master password change" }
+                JSONObject()
+            } else decrypt(change, keyring).also {
                 if (change.entityType == SiteIconSyncRules.ENTITY_TYPE) {
                     require(change.kind == ChangeKind.UPSERT) { "Invalid site icon change" }
                     siteIcon = SiteIconSyncRules.parsePayload(it.toString(), change.entityId, contentKey)
@@ -183,7 +195,10 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             val localVersion = state?.let { RecordVersion.parse(it.recordVersionJson) }
                 ?: RecordVersion(emptyMap())
             val relation = ConflictVersions.incomingRelation(change.recordVersion, state?.let { localVersion })
-            val result = if (appearance != null) {
+            val result = if (masterPassword != null) {
+                // Kept in the history only: MasterPasswordSync reads the checks and switches from there.
+                IncomingResult.APPLIED
+            } else if (appearance != null) {
                 // Never a conflict to review: last writer wins (AppearanceSyncRules.decide). The stored
                 // value is read and set inside this transaction, so a local write cannot interleave.
                 // Applying never marks the value pending and never writes a change: no echo.

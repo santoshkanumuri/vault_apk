@@ -19,6 +19,27 @@ internal class MissingPhotoBlobException(val hash: String, val photoId: String =
     Exception("Photo data is still transferring")
 internal class PhotoStorageFullException : Exception("Free space is too low to receive this photo")
 
+/** The peer broke a photo transfer's rules: a chunk of the wrong size, or a receipt that doesn't match (M12). */
+internal class PhotoTransferInvalid(message: String) : IllegalArgumentException(message)
+
+/**
+ * M11, rule `photo-receipts-v1` (vectors: `scripts/sync-vectors/sync_refusal.py`), used when the peer
+ * announced it too. The device receiving a photo confirms after every [EVERY] chunks how many of the
+ * photo's bytes it holds; the sending device waits for that receipt before it goes on. A device that left
+ * the network mid-photo then shows as a read timeout within seconds, and the sender is never more than
+ * about 1 MB ahead of what the other device received. The photo's hash acknowledgement is unchanged.
+ */
+internal object PhotoReceipts {
+    const val FEATURE = "photo-receipts-v1"
+    const val EVERY = 16
+
+    /** True after the [chunks]th chunk of a photo when a receipt follows it. */
+    fun due(chunks: Int): Boolean = chunks > 0 && chunks % EVERY == 0
+
+    /** The receipt for [held] bytes of the photo (the request's offset and the bytes received since). */
+    fun encode(held: Long): ByteArray = held.toString().toByteArray(Charsets.US_ASCII)
+}
+
 /** The files here are encrypted with the shared content key, never a phone's local vault key. */
 internal class PhotoSyncBlobs(private val directory: File) {
     private val hashPattern = Regex("[a-f0-9]{64}")
@@ -127,7 +148,8 @@ internal class PhotoSyncBlobs(private val directory: File) {
             digest(it) == hash }
     }
 
-    fun receive(channel: EncryptedSyncChannel, ref: PhotoBlobRef, offset: Long) {
+    /** [receipts]: confirm every [PhotoReceipts.EVERY] chunks ([PhotoReceipts]). */
+    fun receive(channel: EncryptedSyncChannel, ref: PhotoBlobRef, offset: Long, receipts: Boolean = false) {
         require(valid(ref) && offset in 0..ref.size)
         directory.mkdirs()
         val partial = File(directory, "${ref.hash}.part")
@@ -135,11 +157,17 @@ internal class PhotoSyncBlobs(private val directory: File) {
         if (directory.usableSpace < ref.size - offset) throw PhotoStorageFullException()
         FileOutputStream(partial, true).use { output ->
             var remaining = ref.size - offset
+            var chunks = 0
             while (remaining > 0) {
                 val bytes = channel.receive()
-                require(bytes.size in 1..minOf(64 * 1024L, remaining).toInt()) { "Invalid photo chunk" }
+                if (bytes.size !in 1..minOf(64 * 1024L, remaining).toInt()) {
+                    bytes.fill(0)
+                    throw PhotoTransferInvalid("Invalid photo chunk")
+                }
                 try { output.write(bytes) } finally { bytes.fill(0) }
                 remaining -= bytes.size
+                chunks++
+                if (receipts && PhotoReceipts.due(chunks)) channel.send(PhotoReceipts.encode(ref.size - remaining))
             }
             output.fd.sync()
         }
@@ -190,17 +218,27 @@ internal class PhotoSyncBlobs(private val directory: File) {
         else check(partial.renameTo(target)) { "Could not finish photo transfer" }
     }
 
-    fun send(channel: EncryptedSyncChannel, file: File, offset: Long) {
+    /** [receipts]: wait for the peer's receipt every [PhotoReceipts.EVERY] chunks ([PhotoReceipts]). */
+    fun send(channel: EncryptedSyncChannel, file: File, offset: Long, receipts: Boolean = false) {
         require(offset in 0..file.length())
         file.inputStream().use { input ->
             var skipped = 0L
             while (skipped < offset) skipped += input.skip(offset - skipped).also { require(it > 0) }
             val buffer = ByteArray(64 * 1024)
             try {
+                var sent = offset
+                var chunks = 0
                 while (true) {
                     val count = input.read(buffer)
                     if (count < 0) break
+                    if (count == 0) continue
                     channel.send(buffer.copyOf(count))
+                    sent += count
+                    chunks++
+                    if (receipts && PhotoReceipts.due(chunks) &&
+                        !channel.receive().contentEquals(PhotoReceipts.encode(sent))) {
+                        throw PhotoTransferInvalid("Photo receipt doesn't match what was sent")
+                    }
                 }
             } finally { buffer.fill(0) }
         }
@@ -233,5 +271,9 @@ internal class PhotoSyncBlobs(private val directory: File) {
         return md.digest().joinToString("") { "%02x".format(it) }
     }
 
-    companion object { const val MAX_PHOTO_BYTES = 128L * 1024 * 1024 }
+    companion object {
+        const val MAX_PHOTO_BYTES = 128L * 1024 * 1024
+        /** The smallest blob: a nonce and tag around no bytes. */
+        const val MIN_PHOTO_FILE = 28L
+    }
 }

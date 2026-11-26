@@ -190,6 +190,10 @@ internal class LockedSyncStore(private val context: Context,
     private val cloudFilesFile = File(directory, "cloud-files")
     /** The sealed chain coordinates of the relay folder ([outgoingPointers]). */
     private val relayIndexFile = File(directory, "outgoing-index")
+    /** M4: the kinds of change this device applied when it last applied ([applyDeferred]). */
+    private val knownTypesFile = File(directory, "entity-types")
+    /** M4: per author, the stored changes that wait for an app update, read while locked ([waitingForUpdate]). */
+    private val waitingUpdateFile = File(directory, "waiting-update")
     override val photoBlobs = PhotoSyncBlobs(File(directory, "blobs"))
     private val gson = Gson()
     private var outgoingIndex: List<OperationPointer>? = null
@@ -942,19 +946,74 @@ internal class LockedSyncStore(private val context: Context,
     }
 
     /**
-     * Per author, the stored changes that wait for an app update: the next change to apply is of a
-     * kind this version doesn't know ([UnsupportedSyncEntityException]).
+     * Per author, the changes that wait for an app update (M4): stored unapplied because this version
+     * doesn't know their kind ([IncomingResult.DEFERRED], counted at the last unlocked apply), and
+     * queued ones of such a kind that arrived since.
      */
     @Synchronized fun waitingForUpdate(): Map<String, Long> {
         val mirror = snapshot() ?: return emptyMap()
-        val progress = progress()
-        val queued = incomingPointers().filter { it.vaultId == mirror.vaultId }
-        return queued.filter { pointer ->
-            pointer.meta.entityType !in SUPPORTED_ENTITY_TYPES &&
-                pointer.link.sequence == (progress.applied[pointer.link.deviceId]?.sequence ?: 0L) + 1
-        }.associate { pointer ->
-            pointer.link.deviceId to (progress.received[pointer.link.deviceId]?.sequence ?: 0L) - pointer.link.sequence + 1
+        val stored = waitingUpdate()?.takeIf { it.first == mirror.vaultId }?.second.orEmpty()
+        val queued = incomingPointers().filter { it.vaultId == mirror.vaultId && it.meta.entityType !in SUPPORTED_ENTITY_TYPES }
+            .groupingBy { it.link.deviceId }.eachCount()
+        return (stored.keys + queued.keys).associateWith { (stored[it] ?: 0L) + (queued[it] ?: 0) }.filterValues { it > 0 }
+    }
+
+    private fun waitingUpdate(): Pair<String, Map<String, Long>>? {
+        if (!waitingUpdateFile.exists() && !File(waitingUpdateFile.path + ".bak").exists()) return null
+        return runCatching {
+            val bytes = readProtected(waitingUpdateFile)
+            try {
+                val json = org.json.JSONObject(bytes.toString(Charsets.UTF_8))
+                val counts = json.getJSONObject("counts")
+                json.getString("vaultId") to counts.keys().asSequence().associateWith { counts.getLong(it) }
+            } finally { bytes.fill(0) }
+        }.getOrNull()
+    }
+
+    private fun knownEntityTypes(): Set<String>? {
+        if (!knownTypesFile.exists() && !File(knownTypesFile.path + ".bak").exists()) return null
+        return runCatching {
+            val bytes = readProtected(knownTypesFile)
+            try {
+                val types = org.json.JSONArray(bytes.toString(Charsets.UTF_8))
+                (0 until types.length()).map(types::getString).toSet()
+            } finally { bytes.fill(0) }
+        }.getOrNull()
+    }
+
+    @Synchronized private fun saveKnownEntityTypes(types: Set<String>) =
+        writeProtected(knownTypesFile, org.json.JSONArray(types.sorted()).toString().toByteArray(Charsets.UTF_8))
+
+    /**
+     * M4: after an app update, the stored changes of kinds the earlier version didn't apply apply now,
+     * in the order they arrived, as if they had just arrived. Applying one again is harmless (it is
+     * outdated against what it already set), so a run that has to wait for something (a folder, a
+     * photo, a key) leaves the list of known kinds as it was and the next run tries them all again.
+     * A change that can't be read stays stored and relayed, as before, and isn't applied here.
+     */
+    private suspend fun applyDeferred(database: VaultDatabase, applier: IncomingEntryChangeApplier,
+        localKey: ByteArray, vaultId: String): Int {
+        val known = synchronized(this) { knownEntityTypes() }
+        val newer = SUPPORTED_ENTITY_TYPES - known.orEmpty()
+        if (known == null || newer.isEmpty()) {
+            if (known != SUPPORTED_ENTITY_TYPES) saveKnownEntityTypes(SUPPORTED_ENTITY_TYPES)
+            return 0
         }
+        var waiting = false
+        var applied = 0
+        for (operation in database.syncDao().operationsOfTypes(vaultId, newer.sorted())) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val result = try { applier.apply(operation, localKey, stored = true) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (missing: MissingPhotoBlobException) { requestPhoto(missing.hash); waiting = true; null }
+            catch (_: MissingPhotoDependencyException) { waiting = true; null }
+            catch (_: MissingRecordDependencyException) { waiting = true; null }
+            catch (missing: MissingEpochKeyException) { missingEpochs = missingEpochs + missing.epoch; waiting = true; null }
+            catch (_: Exception) { null }
+            if (result == IncomingResult.APPLIED || result == IncomingResult.CONFLICT) applied++
+        }
+        if (!waiting) saveKnownEntityTypes(SUPPORTED_ENTITY_TYPES)
+        return applied
     }
 
     /** Per author, the stored changes that wait behind one set aside here: they apply after a retry. */
@@ -992,6 +1051,8 @@ internal class LockedSyncStore(private val context: Context,
         runCatching { EpochKeyRotation.coverRemovals(database, AndroidDeviceIdentityStore(context), keyStatements()) }
         runCatching { installEpochKeys(database) }
         val applier = IncomingEntryChangeApplier(database, photoBlobs, context)
+        // M4: the kinds this version applies are recorded before it first stores one it doesn't.
+        if (synchronized(this) { knownEntityTypes() } == null) saveKnownEntityTypes(SUPPORTED_ENTITY_TYPES)
         var applied = 0
         var progress: Boolean
         do {
@@ -1017,10 +1078,23 @@ internal class LockedSyncStore(private val context: Context,
                         incomingIndex = incomingIndex?.filterNot { it.link.hash == operation.hash }
                     }
                 } }
-                if (result != IncomingResult.REPLAY) applied++
+                if (result != IncomingResult.REPLAY && result != IncomingResult.DEFERRED) applied++
                 progress = true
             }
         } while (progress)
+        // M4: after an app update, changes stored unapplied by the earlier version apply now.
+        applied += applyDeferred(database, applier, localKey, mirror.vaultId)
+        runCatching {
+            val counts = database.syncDao().otherTypeCounts(mirror.vaultId, SUPPORTED_ENTITY_TYPES.sorted())
+            val json = org.json.JSONObject().put("vaultId", mirror.vaultId)
+                .put("counts", org.json.JSONObject(counts.associate { it.deviceId to it.count }))
+            synchronized(this) { writeProtected(waitingUpdateFile, json.toString().toByteArray(Charsets.UTF_8)) }
+        }
+        // M2: concurrent edits of different fields of one item merge into one signed change, sent with
+        // the publish below. A conflict that can't merge stays for the user. Never stops the pass.
+        if (database.syncDao().conflicts().any { it.resolvedAtUtc.isEmpty() && it.entityType in EntryFieldMerge.ENTITY_TYPES })
+            runCatching { SyncConflictResolver(database, AndroidDeviceIdentityStore(context), photoBlobs, context).autoMerge(localKey) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         // M13: every queued photo's image is asked for now, not only the first one each device's chain
         // stops at, so N photos arrive in one session instead of N.
         val queuedPhotos = synchronized(this) { readOperations(incoming) }.filter { it.entityType == "photo" && it.kind == "upsert" }
@@ -1084,7 +1158,8 @@ internal class LockedSyncStore(private val context: Context,
         } else { requestPhoto(missing.hash); null }
     }
     catch (_: MissingPhotoDependencyException) { null }
-    // A newer kind of change waits for an app update; it is counted as received meanwhile (M4).
+    // M4: a newer kind of change is stored unapplied ([IncomingResult.DEFERRED]), never thrown here;
+    // kept as a guard so one can never be set aside.
     catch (_: UnsupportedSyncEntityException) { null }
     catch (_: MissingRecordDependencyException) { null }
     // A change of an epoch whose key has not arrived yet waits for its package ([EpochKeys]), never set aside.
@@ -1130,6 +1205,7 @@ internal class LockedSyncStore(private val context: Context,
         }
         AtomicFile(relayIndexFile).delete()
         AtomicFile(masterPasswordFile).delete()
+        AtomicFile(waitingUpdateFile).delete()
         outgoingIndex = null
         incomingIndex = null
         rejectedIndex = null

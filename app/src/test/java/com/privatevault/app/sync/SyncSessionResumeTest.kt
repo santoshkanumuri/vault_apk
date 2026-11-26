@@ -134,12 +134,123 @@ class SyncSessionResumeTest {
         assertNotNull(requester.photoBlobs.file(hash))
     }
 
-    private data class SessionResult(val serverFinished: Boolean?, val clientFinished: Boolean?,
-        val serverFailed: Boolean, val clientFailed: Boolean, val serverBytes: Long)
+    /** M12: a change the receiving device refuses is told to the sender, which shows it instead of retrying. */
+    @Test fun aRefusedChangeIsToldToTheSenderWhenBothDevicesReadRefusals() {
+        val sender = MemoryStore(File(folder.root, "a")).apply { own(chain("phone", 10)) }
+        val receiver = MemoryStore(File(folder.root, "b")).apply { refuse = { it.sequence == 4L } }
+        val result = session(sender, receiver, refusals = true to true)
+        val told = result.serverError
+        assertTrue("$told", told is PeerRefused && told.code == SyncRefusal.CHANGE)
+        val local = result.clientError
+        assertTrue("$local", local is LocalRefusal && local.code == SyncRefusal.CHANGE)
+        assertEquals(SessionFailure.REFUSED, SessionFailure.of(told!!))
+        assertEquals(SessionFailure.REFUSED, SessionFailure.of(local!!))
+        // What arrived before the refused change is kept.
+        assertEquals(3, receiver.held.size)
+    }
 
-    /** [server] accepts; [client] connects. Optionally the server's socket dies after [serverOutputLimit] bytes. */
+    /**
+     * An older build doesn't read the frame, so it is never sent there: the sender sees the connection
+     * close (a frame would have reached it as a refusal or as a bad acknowledgement), as before.
+     */
+    @Test fun aDeviceThatDidNotAnnounceRefusalsGetsNoRefusalFrame() {
+        for (refusals in listOf(false to false, true to false)) {
+            val sender = MemoryStore(File(folder.root, "a$refusals")).apply { own(chain("phone", 10)) }
+            val receiver = MemoryStore(File(folder.root, "b$refusals")).apply { refuse = { it.sequence == 4L } }
+            val result = session(sender, receiver, refusals = refusals)
+            assertTrue("${result.serverError}", result.serverError is IOException)
+            assertTrue("${result.clientError}", result.clientError is LocalRefusal)
+        }
+    }
+
+    /** A problem on the receiving device (storage, a full queue) is never told to the sender as a refusal. */
+    @Test fun aProblemOnTheReceivingDeviceIsNotARefusal() {
+        for (problem in listOf<Exception>(IOException("disk"), SyncQueueFullException())) {
+            val sender = MemoryStore(File(folder.root, "a${problem.javaClass.simpleName}")).apply { own(chain("phone", 10)) }
+            val receiver = MemoryStore(File(folder.root, "b${problem.javaClass.simpleName}"))
+            receiver.onQueued = { count -> if (count == 3) throw problem }
+            val result = session(sender, receiver, refusals = true to true)
+            assertTrue("${result.serverError}", result.serverError is IOException)
+            assertEquals(problem.javaClass, result.clientError?.javaClass)
+        }
+    }
+
+    /** M12: the device that refuses never refuses back a refusal, and a bad frame is refused as a protocol error. */
+    @Test fun aBadFrameIsRefusedAsAProtocolErrorAndARefusalIsNeverAnsweredWithOne() {
+        val sender = MemoryStore(File(folder.root, "a")).apply { own(chain("phone", 3)) }
+        val receiver = MemoryStore(File(folder.root, "b"))
+        sender.mangle = { operation -> operation.copy(hash = "not-a-hash") }
+        val result = session(sender, receiver, refusals = true to true)
+        val told = result.serverError
+        assertTrue("$told", told is PeerRefused && told.code == SyncRefusal.PROTOCOL)
+        assertTrue("${result.clientError}", (result.clientError as? LocalRefusal)?.code == SyncRefusal.PROTOCOL)
+    }
+
+    /** M11: with receipts on both sides a photo of several megabytes arrives whole, also resumed from a partial file. */
+    @Test fun photoReceiptsKeepTheSenderInStepAndAResumedPhotoStillArrives() {
+        val owner = MemoryStore(File(folder.root, "a"))
+        val requester = MemoryStore(File(folder.root, "b"))
+        val bytes = ByteArray(3 * 1024 * 1024 + 123) { (it * 13 + 5).toByte() }
+        val hash = sha256(bytes)
+        File(owner.blobDirectory, hash).apply { parentFile!!.mkdirs(); writeBytes(bytes) }
+        requester.wanted += hash
+        val first = session(owner, requester, photos = true, receipts = true, serverOutputLimit = 1_500_000)
+        assertTrue(first.serverFailed)
+        val partial = requester.photoBlobs.partialSize(hash)
+        assertTrue("partial $partial", partial in 1 until bytes.size)
+        val second = session(owner, requester, photos = true, receipts = true, refusals = true to true)
+        assertFalse("${second.serverError} ${second.clientError}", second.serverFailed || second.clientFailed)
+        // Both sides counted the same chunks: a missing or extra receipt would have broken the exchange.
+        assertNotNull(requester.photoBlobs.file(hash))
+        assertTrue(hash !in requester.wanted)
+    }
+
+    @Test fun refusalFramesAndPhotoReceiptsMatchTheSharedVectors() {
+        val vectors = org.json.JSONObject(requireNotNull(javaClass.classLoader?.getResource("sync-vectors/sync-session-v1.json")).readText())
+        assertEquals(listOf(SyncRefusal.FEATURE, PhotoReceipts.FEATURE),
+            vectors.getJSONArray("rules").let { rules -> (0 until rules.length()).map(rules::getString) })
+        assertTrue(SyncRefusal.FEATURE in SyncFeatures.ANNOUNCED && PhotoReceipts.FEATURE in SyncFeatures.ANNOUNCED)
+        val frames = vectors.getJSONArray("refusalFrames")
+        for (index in 0 until frames.length()) {
+            val frame = frames.getJSONObject(index)
+            assertEquals(frame.getString("hex"), SyncRefusal.encode(frame.getString("code")).joinToString("") { "%02x".format(it) })
+        }
+        val decoding = vectors.getJSONArray("refusalDecoding")
+        for (index in 0 until decoding.length()) {
+            val case = decoding.getJSONObject(index)
+            val bytes = case.getString("hex").chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            assertEquals(case.getString("hex"), case.optString("code").takeIf { !case.isNull("code") }, SyncRefusal.decode(bytes))
+        }
+        assertEquals(PhotoReceipts.EVERY, vectors.getInt("receiptEvery"))
+        val photos = vectors.getJSONArray("photoReceipts")
+        for (index in 0 until photos.length()) {
+            val case = photos.getJSONObject(index)
+            var held = case.getLong("offset")
+            val chunks = case.getJSONArray("chunks")
+            val receipts = mutableListOf<Pair<Int, String>>()
+            for (chunk in 1..chunks.length()) {
+                held += chunks.getLong(chunk - 1)
+                if (PhotoReceipts.due(chunk)) receipts += chunk to PhotoReceipts.encode(held).toString(Charsets.US_ASCII)
+            }
+            val expected = case.getJSONArray("receipts").let { list ->
+                (0 until list.length()).map { list.getJSONObject(it).let { r -> r.getInt("afterChunk") to r.getString("frame") } }
+            }
+            assertEquals(expected, receipts)
+        }
+    }
+
+    private data class SessionResult(val serverFinished: Boolean?, val clientFinished: Boolean?,
+        val serverFailed: Boolean, val clientFailed: Boolean, val serverBytes: Long,
+        val serverError: Throwable? = null, val clientError: Throwable? = null)
+
+    /**
+     * [server] accepts; [client] connects. Optionally the server's socket dies after [serverOutputLimit] bytes.
+     * [refusals]: whether the server and the client turn refusals on, as each does when the other announced
+     * [SyncRefusal.FEATURE]. [receipts]: both announced [PhotoReceipts.FEATURE].
+     */
     private fun session(server: MemoryStore, client: MemoryStore, photos: Boolean = false,
-        serverOutputLimit: Long = Long.MAX_VALUE): SessionResult {
+        serverOutputLimit: Long = Long.MAX_VALUE, refusals: Pair<Boolean, Boolean> = false to false,
+        receipts: Boolean = false): SessionResult {
         val executor = Executors.newSingleThreadExecutor()
         try {
             ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { listener ->
@@ -150,7 +261,8 @@ class SyncSessionResumeTest {
                         val output = LimitedOutput(socket.getOutputStream(), serverOutputLimit) { socket.close() }
                         try {
                             EncryptedSyncChannel(SyncFrames(socket.getInputStream(), output), key, true).use { channel ->
-                                if (photos) { LanSyncExchange.exchangePhotos(channel, server, true); true }
+                                channel.refusals = refusals.first
+                                if (photos) { LanSyncExchange.exchangePhotos(channel, server, true, receipts); true }
                                 else LanSyncExchange.exchangeChanges(channel, server, true, "client")
                             }
                         } finally { serverBytes = output.written }
@@ -161,14 +273,17 @@ class SyncSessionResumeTest {
                         socket.soTimeout = 20_000
                         EncryptedSyncChannel(SyncFrames(socket.getInputStream(), socket.getOutputStream()), key, false)
                             .use { channel ->
-                                if (photos) { LanSyncExchange.exchangePhotos(channel, client, false); true }
+                                channel.refusals = refusals.second
+                                if (photos) { LanSyncExchange.exchangePhotos(channel, client, false, receipts); true }
                                 else LanSyncExchange.exchangeChanges(channel, client, false, "server")
                             }
                     }
                 }
                 val serverResult = runCatching { serverFuture.get(60, TimeUnit.SECONDS) }
                 return SessionResult(serverResult.getOrNull(), clientResult.getOrNull(),
-                    serverResult.isFailure, clientResult.isFailure, serverBytes)
+                    serverResult.isFailure, clientResult.isFailure, serverBytes,
+                    serverResult.exceptionOrNull()?.let { (it as? java.util.concurrent.ExecutionException)?.cause ?: it },
+                    clientResult.exceptionOrNull())
             }
         } finally { executor.shutdownNow() }
     }
@@ -200,6 +315,10 @@ class SyncSessionResumeTest {
         val frontiersSeen = mutableListOf<Long>()
         /** Held changes this store leaves out of its report, as a pre-2.3.5 build did with a set-aside change. */
         var hidden: (SyncOperationEntity) -> Boolean = { false }
+        /** A change this store refuses, as a bad signature is refused. */
+        var refuse: (SyncOperationEntity) -> Boolean = { false }
+        /** What this store sends instead of each change, to send a bad frame. */
+        var mangle: (SyncOperationEntity) -> SyncOperationEntity = { it }
         override val photoBlobs = PhotoSyncBlobs(blobDirectory)
 
         fun own(operations: List<SyncOperationEntity>) = operations.forEach { held[it.hash] = it }
@@ -212,10 +331,11 @@ class SyncSessionResumeTest {
         override fun pending(frontier: SyncFrontier, relayRemoved: Boolean): List<SyncOperationEntity> {
             frontiersSeen += frontier.counters.values.maxOrNull() ?: 0L
             return held.values.filter { it.sequence > (frontier.counters[it.deviceId] ?: 0L) }
-                .sortedWith(compareBy({ it.deviceId }, { it.sequence })).take(100)
+                .sortedWith(compareBy({ it.deviceId }, { it.sequence })).take(100).map(mangle)
         }
 
         override fun queue(operation: SyncOperationEntity) {
+            if (refuse(operation)) throw SecurityException("Invalid sender signature")
             if (operation.hash in held) { duplicates++; return }
             IncomingChain.admit(ChainLink(operation.deviceId, operation.sequence, operation.hash,
                 operation.previousHash), progress().received, emptySet())

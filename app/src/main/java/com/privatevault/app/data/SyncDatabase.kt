@@ -131,6 +131,9 @@ data class SyncOperationPointer(val vaultId: String, val deviceId: String, val s
 data class SyncOperationSummary(val deviceId: String, val sequence: Long, val hash: String, val entityType: String,
     val entityId: String, val kind: String, val recordVersionJson: String, val occurredAtUtc: String)
 
+/** A number of stored changes of one author. */
+data class SyncAuthorCount(val deviceId: String, val count: Long)
+
 @Entity(tableName = "sync_device_heads", primaryKeys = ["vaultId", "deviceId"])
 data class SyncDeviceHeadEntity(
     val vaultId: String,
@@ -351,6 +354,10 @@ abstract class SyncDao {
     @Query("SELECT * FROM sync_conflicts")
     abstract suspend fun conflicts(): List<SyncConflictEntity>
 
+    /** M4: a conflict (open or settled) already names this change, so applying it again adds none. */
+    @Query("SELECT EXISTS (SELECT 1 FROM sync_conflicts WHERE remoteChangeHash = :hash OR localChangeHash = :hash)")
+    abstract suspend fun hasConflictWith(hash: String): Boolean
+
     @Query("UPDATE sync_conflicts SET resolvedAtUtc = :resolvedAt WHERE conflictId = :conflictId")
     abstract suspend fun resolveConflict(conflictId: String, resolvedAt: String)
 
@@ -445,6 +452,14 @@ abstract class SyncDao {
 
     @Query("SELECT * FROM sync_operations WHERE mutationId = :mutationId")
     abstract suspend fun operation(mutationId: String): SyncOperationEntity?
+
+    /** M4: the stored changes of these kinds, in the order they arrived (to apply after an app update). */
+    @Query("SELECT * FROM sync_operations WHERE vaultId = :vaultId AND entityType IN (:entityTypes) ORDER BY rowid")
+    abstract suspend fun operationsOfTypes(vaultId: String, entityTypes: List<String>): List<SyncOperationEntity>
+
+    /** M4: per author, the stored changes of a kind this app version doesn't apply (none of [entityTypes]). */
+    @Query("SELECT deviceId, count(*) AS count FROM sync_operations WHERE vaultId = :vaultId AND entityType NOT IN (:entityTypes) GROUP BY deviceId")
+    abstract suspend fun otherTypeCounts(vaultId: String, entityTypes: List<String>): List<SyncAuthorCount>
 
     @Query("SELECT * FROM sync_operations WHERE entityType = :entityType AND entityId = :entityId ORDER BY rowid DESC LIMIT 1")
     abstract suspend fun lastOperationForEntity(entityType: String, entityId: String): SyncOperationEntity?

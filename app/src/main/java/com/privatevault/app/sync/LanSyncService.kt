@@ -245,28 +245,30 @@ class LanSyncService : Service() {
             discoveryNeedsRestart = true
             coroutineScope {
                 var retryDelayMs = 5_000L
+                launch { acceptFrom(listener) }
+                // L5: also listen on the port older versions use, while a paired device may.
                 launch {
-                    while (isActive) {
-                        val socket = try { listener.accept() } catch (_: java.net.SocketTimeoutException) { continue }
-                        if (!isPrivateAddress(socket.inetAddress)) { socket.close(); continue }
-                        // L-06: the exchange lock is held only by proved devices (or this device's own
-                        // attempts), so a busy reply before the challenge, which every version
-                        // understands, can't be caused by a stranger.
-                        if (exchange.isLocked) {
-                            closeOverdueExchange()
-                            socket.use {
-                                runCatching { SyncFrames(socket.getInputStream(), socket.getOutputStream())
-                                    .send(MembershipWire.BUSY.toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME) }
+                    var legacy: ServerSocket? = null
+                    try {
+                        while (isActive) {
+                            val current = runCatching { store(this@LanSyncService).snapshot() }.getOrNull() ?: mirror
+                            val port = SyncPorts.legacy(mirror.vaultId)
+                            val needed = port != listener.localPort &&
+                                SyncPorts.legacyNeeded(current.localDeviceId, current.members, current.peerFeatures)
+                            if (needed && legacy == null) {
+                                legacy = runCatching { ServerSocket().apply {
+                                    reuseAddress = true
+                                    try { bind(InetSocketAddress(port)) } catch (error: Exception) { close(); throw error }
+                                    soTimeout = 1000
+                                } }.getOrNull()
+                                legacy?.let { opened -> launch { acceptFrom(opened, untilClosed = true) } }
+                            } else if (!needed && legacy != null) {
+                                runCatching { legacy?.close() }
+                                legacy = null
                             }
-                            continue
+                            delay(LEGACY_PORT_CHECK_MS)
                         }
-                        // M7: an IPv6 host's whole /64 is one source; a paired device's last address has reserved slots.
-                        val source = sourceKey(socket.inetAddress)
-                        val known = runCatching { store(this@LanSyncService).snapshot()?.peerAddresses?.values
-                            ?.contains(socket.inetAddress.hostAddress) == true }.getOrDefault(false)
-                        if (!preAuth.tryStart(source, android.os.SystemClock.elapsedRealtime(), known)) { socket.close(); continue }
-                        launch { serveIncoming(socket, source) }
-                    }
+                    } finally { runCatching { legacy?.close() } }
                 }
                 while (isActive) {
                     if (discoveryNeedsRestart) {
@@ -305,14 +307,16 @@ class LanSyncService : Service() {
                         // Prefer a confirmed address; discovery remains a fallback if its address or port changed.
                         lastFailureRefused = false
                         exchanged {
-                            val socket = Socket()
-                            connections.add(socket)
+                            var socket: Socket? = null
                             try {
                                 setStatus(DeviceSyncPhase.CONNECTING, "Trying the last confirmed Wi-Fi address.")
                                 setPeerStatus(deviceId, DeviceSyncPhase.CONNECTING, "Trying its saved Wi-Fi address.")
-                                bindSyncSocket(connectivity, socket, peerAddress)
-                                socket.connect(InetSocketAddress(peerAddress,
-                                    peerPort(this@LanSyncService, deviceId) ?: syncPort(mirror.vaultId)), 3000)
+                                // L5: the port it was last reached on, then this group's ports, then the older one.
+                                socket = connectFirst(peerAddress,
+                                    SyncPorts.targets(peerPort(this@LanSyncService, deviceId), mirror.vaultId), 3000) {
+                                    connections.add(it)
+                                    bindSyncSocket(connectivity, it, peerAddress)
+                                }
                                 if (!transfer(socket, false)) {
                                     needsRetry = !lastFailureRefused
                                     if (mutablePeerStatus.value[deviceId]?.phase == DeviceSyncPhase.CONNECTING)
@@ -325,7 +329,10 @@ class LanSyncService : Service() {
                                     "Saved address did not answer. Looking for this device on Wi-Fi.")
                                 setPeerStatus(deviceId, DeviceSyncPhase.SEARCHING,
                                     "Saved address did not answer. Looking on Wi-Fi.")
-                            } finally { connections.remove(socket); socket.close() }
+                            } finally {
+                                connections.removeIf { it.isClosed }
+                                socket?.let { connections.remove(it); it.close() }
+                            }
                         }
                     }
                     for (info in discovered.values.toList()) {
@@ -420,6 +427,36 @@ class LanSyncService : Service() {
             server?.close(); server = null
             stopDiscovery()
             multicastLock?.let { if (it.isHeld) it.release() }; multicastLock = null
+        }
+    }
+
+    /**
+     * Accepts connections on [listener] until the pass ends: each from a private address takes a
+     * pre-authentication slot and proves membership before anything else ([serveIncoming]). L5: the
+     * listener on the older port uses the same path, and with [untilClosed] stops when it closes.
+     */
+    private fun CoroutineScope.acceptFrom(listener: ServerSocket, untilClosed: Boolean = false) {
+        while (isActive) {
+            val socket = try { listener.accept() } catch (_: java.net.SocketTimeoutException) { continue }
+            catch (error: java.net.SocketException) { if (untilClosed && listener.isClosed) return else throw error }
+            if (!isPrivateAddress(socket.inetAddress)) { socket.close(); continue }
+            // L-06: the exchange lock is held only by proved devices (or this device's own
+            // attempts), so a busy reply before the challenge, which every version
+            // understands, can't be caused by a stranger.
+            if (exchange.isLocked) {
+                closeOverdueExchange()
+                socket.use {
+                    runCatching { SyncFrames(socket.getInputStream(), socket.getOutputStream())
+                        .send(MembershipWire.BUSY.toByteArray(Charsets.US_ASCII), MembershipWire.CONTROL_FRAME) }
+                }
+                continue
+            }
+            // M7: an IPv6 host's whole /64 is one source; a paired device's last address has reserved slots.
+            val source = sourceKey(socket.inetAddress)
+            val known = runCatching { store(this@LanSyncService).snapshot()?.peerAddresses?.values
+                ?.contains(socket.inetAddress.hostAddress) == true }.getOrDefault(false)
+            if (!preAuth.tryStart(source, android.os.SystemClock.elapsedRealtime(), known)) { socket.close(); continue }
+            launch { serveIncoming(socket, source) }
         }
     }
 
@@ -598,6 +635,13 @@ class LanSyncService : Service() {
             return true
         } catch (_: LanSyncExchange.MasterPasswordSwitchPending) {
             setStatus(DeviceSyncPhase.ATTENTION, MasterPasswordSync.SWITCH_FIRST)
+        } catch (refused: PeerRefused) {
+            // M12: the other device refused what this one sent and said so ([SyncRefusal]). Not a Wi-Fi
+            // problem and not retried at once; shown on that device's card.
+            lastFailureRefused = true
+            android.util.Log.w(TAG, "A paired device refused this device's session (${refused.code})")
+            peerId?.let { setPeerStatus(it, DeviceSyncPhase.ATTENTION, PEER_REFUSED_OURS) }
+            setStatus(DeviceSyncPhase.ATTENTION, DEVICE_REFUSED_OURS)
         } catch (failure: Exception) {
             // M12: a refusal (signature, forked history, bad frame) is not a Wi-Fi problem, and retrying
             // at once changes nothing; it is shown on that device's card.
@@ -634,21 +678,27 @@ class LanSyncService : Service() {
         val notice = runCatching { store(this).pendingLeave() }.getOrNull() ?: return
         if (System.currentTimeMillis() - notice.lastAttemptAt < LEAVE_RETRY_MS) return
         runCatching { store(this).recordLeaveAttempt() }
-        val targets = endpoints.values.flatten().map { it.address to it.port } + notice.addresses.mapNotNull { hint ->
+        // L5: a saved address is tried on the saved port, then the group's ports and the older one.
+        val targets = endpoints.values.flatten().map { it.address to listOf(it.port) } + notice.addresses.mapNotNull { hint ->
             runCatching { android.net.InetAddresses.parseNumericAddress(hint) }.getOrNull()
-                ?.takeIf { isPrivateAddress(it) && !it.isLinkLocalAddress }?.let { it to notice.port }
+                ?.takeIf { isPrivateAddress(it) && !it.isLinkLocalAddress }
+                ?.let { it to SyncPorts.targets(notice.port.takeIf { port -> port in 1024..65535 }, notice.vaultId) }
         }
-        for ((address, port) in targets.distinct()) {
+        for ((address, ports) in targets.distinct()) {
             val reply = exchanged {
-                val socket = Socket()
-                connections.add(socket)
+                var socket: Socket? = null
                 try {
-                    bindSyncSocket(connectivity, socket, address)
-                    socket.connect(InetSocketAddress(address, port), 3000)
+                    socket = connectFirst(address, ports, 3000) {
+                        connections.add(it)
+                        bindSyncSocket(connectivity, it, address)
+                    }
                     socket.soTimeout = PRE_AUTH_TIMEOUT_MS
                     LanSyncExchange.sendLeave(SyncFrames(socket.getInputStream(), socket.getOutputStream()), notice)
                 } catch (_: Exception) { null }
-                finally { connections.remove(socket); runCatching { socket.close() } }
+                finally {
+                    connections.removeIf { it.isClosed }
+                    socket?.let { connections.remove(it); runCatching { it.close() } }
+                }
             }
             if (reply == MembershipWire.LEFT) {
                 runCatching { store(this).clearPendingLeave() }
@@ -813,7 +863,10 @@ class LanSyncService : Service() {
         const val NO_DEVICE_ANSWERED = "No paired device answered. Check Wi-Fi on both devices and try again."
         const val CONNECTION_CLOSED = "The connection closed before the check finished. Retrying on Wi-Fi."
         const val PEER_CONNECTION_CLOSED = "Connection closed before the check finished."
-        internal fun syncPort(vaultId: String): Int = 20_000 + Math.floorMod(vaultId.hashCode(), 30_000)
+        /** L5: this group's Wi-Fi port, in 20000-32767 ([SyncPorts]). */
+        internal fun syncPort(vaultId: String): Int = SyncPorts.port(vaultId)
+        /** L5: how often the phone checks whether a paired device may still use the older port. */
+        private const val LEGACY_PORT_CHECK_MS = 10_000L
 
         /** L5: the port a paired device was last reached on, when it differs from [syncPort]. */
         private fun peerPort(context: Context, deviceId: String): Int? =
@@ -837,6 +890,9 @@ class LanSyncService : Service() {
         /** M12: a device sent something this one refuses; updating or re-pairing fixes it, not Wi-Fi. */
         const val DEVICE_REFUSED = "A paired device sent changes Nuvori here can't accept. Update Nuvori on both devices."
         const val PEER_REFUSED = "Sent changes this device can't accept. Update Nuvori on both. If it keeps happening, pair it again."
+        /** M12: the other device refused what this one sent, and said so ([SyncRefusal]). */
+        const val DEVICE_REFUSED_OURS = "A paired device can't accept changes from this device. Update Nuvori on both devices."
+        const val PEER_REFUSED_OURS = "Can't accept changes from this device. Update Nuvori on both. If it keeps happening, pair it again."
         private const val FOLLOW_UP_DEBOUNCE_MS = 750L
         private const val LEAVE_RETRY_MS = 60_000L
         private const val TRANSFER_LOCK_MS = 15L * 60 * 1000

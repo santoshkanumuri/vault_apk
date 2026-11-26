@@ -56,6 +56,7 @@ internal enum class SessionFailure {
 
     companion object {
         fun of(failure: Throwable): SessionFailure = when (failure) {
+            is PeerRefused -> REFUSED
             is IOException -> TEMPORARY
             is IllegalArgumentException, is IllegalStateException, is SecurityException,
             is java.security.GeneralSecurityException, is com.google.gson.JsonParseException -> REFUSED

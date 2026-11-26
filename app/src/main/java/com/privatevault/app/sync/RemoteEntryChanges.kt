@@ -49,15 +49,16 @@ object RemoteEntryChanges {
         mutableChanges.value = emptyMap()
     }
 
+    /** [settled]: the item's open conflict was merged ([EntryFieldMerge]), so no review waits any more. */
     @Synchronized internal fun record(entryId: String, deleted: Boolean, conflict: Boolean = false,
-        photosOnly: Boolean = false) {
+        photosOnly: Boolean = false, settled: Boolean = false) {
         if (entryId.isBlank()) return
         val revision = mutableRevision.value + 1
         mutableRevision.value = revision
         mutableChanges.update { current ->
             val previous = current[entryId]
             val change = RemoteEntryChange(entryId, revision, deleted,
-                conflict || (previous?.conflict == true && !deleted),
+                conflict || (previous?.conflict == true && !deleted && !settled),
                 photosOnly && (previous == null || previous.photosOnly))
             val next = LinkedHashMap(current)
             next.remove(entryId)

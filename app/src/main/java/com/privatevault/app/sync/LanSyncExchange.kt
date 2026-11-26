@@ -161,6 +161,8 @@ internal object LanSyncExchange {
                     identityProof(session.key, accepted.vaultId, session.peer.deviceId, identity.deviceId),
                     remoteSignature)) { "Peer identity proof failed" }
                 runCatching { store.recordPeerFeatures(member.deviceId, session.peerFeatures) }
+                // M12: both devices proved who they are; a refusal from now on is told to a peer that reads it.
+                channel.refusals = SyncRefusal.FEATURE in session.peerFeatures
                 // Key statements and sealed key packages, when the peer announced epoch-keys-v1 (this
                 // build always does, so both sides send and both receive one frame).
                 if (EpochKeys.FEATURE in session.peerFeatures) {
@@ -173,11 +175,10 @@ internal object LanSyncExchange {
                 val membershipHead = accepted.membershipEvents.last().hash
                 val finished = exchangeChanges(channel, store, server, member.deviceId,
                     relayRemoved = RemovalCutoff.FEATURE in session.peerFeatures) {
-                    require(store.snapshot()?.membershipEvents?.last()?.hash == membershipHead) {
-                        "Membership changed during sync"
-                    }
+                    // The group changed on this device meanwhile (not a refusal of the peer): reconnect.
+                    if (store.snapshot()?.membershipEvents?.last()?.hash != membershipHead) throw MembershipCaughtUp()
                 }
-                exchangePhotos(channel, store, server)
+                exchangePhotos(channel, store, server, receipts = PhotoReceipts.FEATURE in session.peerFeatures)
                 if (!finished) throw BatchLimitReached()
             }
         } finally { session.key.fill(0) }
@@ -281,21 +282,42 @@ internal object LanSyncExchange {
         return false
     }
 
-    /** The phone that accepted the connection serves first; each side then asks for what it lacks. */
-    internal fun exchangePhotos(channel: EncryptedSyncChannel, store: SyncSessionStore, server: Boolean) {
+    /**
+     * The phone that accepted the connection serves first; each side then asks for what it lacks.
+     * [receipts]: the peer announced [PhotoReceipts.FEATURE] (M11).
+     */
+    internal fun exchangePhotos(channel: EncryptedSyncChannel, store: SyncSessionStore, server: Boolean,
+        receipts: Boolean = false) {
         if (server) {
-            servePhotos(channel, store)
-            requestPhotos(channel, store)
+            servePhotos(channel, store, receipts)
+            requestPhotos(channel, store, receipts)
         } else {
-            requestPhotos(channel, store)
-            servePhotos(channel, store)
+            requestPhotos(channel, store, receipts)
+            servePhotos(channel, store, receipts)
         }
     }
 
+    /**
+     * M12: a failure of [block] that refuses what the peer sent (by default every [SessionFailure.REFUSED]
+     * failure, or those [only] picks) is told to the peer ([EncryptedSyncChannel.refuse]) and ends the
+     * session as [LocalRefusal]. [block] only reads frames already received, so a dropped connection or
+     * the peer's own refusal never gets here, and a problem on this device (storage, a full queue) passes
+     * through unchanged.
+     */
+    private inline fun <T> refusing(channel: EncryptedSyncChannel, code: String,
+        only: (Exception) -> Boolean = { SessionFailure.of(it) == SessionFailure.REFUSED }, block: () -> T): T =
+        try { block() } catch (failure: Exception) {
+            if (failure is PeerRefused || failure is LocalRefusal || !only(failure)) throw failure
+            channel.refuse(code)
+            throw LocalRefusal(code, failure)
+        }
+
     private fun sendBatch(channel: EncryptedSyncChannel, store: SyncSessionStore, peerDeviceId: String,
         relayRemoved: Boolean, acknowledged: MutableMap<String, Long> = HashMap()): Int {
-        val progress = SyncProgress.parse(channel.receive())
-        store.recordLivePeerProgress(peerDeviceId, progress)
+        val reportFrame = channel.receive()
+        val progress = refusing(channel, SyncRefusal.PROTOCOL) { SyncProgress.parse(reportFrame) }
+        // A report that contradicts the chain this device holds is refused like a change.
+        refusing(channel, SyncRefusal.CHANGE) { store.recordLivePeerProgress(peerDeviceId, progress) }
         val reported = progress.received.mapValues { it.value.sequence }
         val frontier = SyncFrontier((reported.keys + acknowledged.keys).associateWith {
             maxOf(reported[it] ?: 0L, acknowledged[it] ?: 0L) })
@@ -303,7 +325,8 @@ internal object LanSyncExchange {
         channel.send(pending.size.toString().toByteArray())
         pending.forEach { operation ->
             channel.send(gson.toJson(operation).toByteArray(Charsets.UTF_8))
-            require(channel.receive().contentEquals(operation.hash.toByteArray(Charsets.US_ASCII)))
+            val ack = channel.receive()
+            refusing(channel, SyncRefusal.PROTOCOL) { require(ack.contentEquals(operation.hash.toByteArray(Charsets.US_ASCII))) }
             acknowledged[operation.deviceId] = maxOf(acknowledged[operation.deviceId] ?: 0L, operation.sequence)
         }
         return pending.size
@@ -311,53 +334,78 @@ internal object LanSyncExchange {
 
     private fun receiveBatch(channel: EncryptedSyncChannel, store: SyncSessionStore): Int {
         channel.send(store.progress().encode())
-        val count = channel.receive().toString(Charsets.US_ASCII).toInt()
-        require(count in 0..MAX_BATCH)
+        val countFrame = channel.receive()
+        val count = refusing(channel, SyncRefusal.PROTOCOL) {
+            countFrame.toString(Charsets.US_ASCII).toInt().also { require(it in 0..MAX_BATCH) }
+        }
         repeat(count) {
-            val operation = requireNotNull(gson.fromJson(channel.receive().toString(Charsets.UTF_8),
-                SyncOperationEntity::class.java)) { "Invalid sync change" }
-            require(operation.hash.matches(HASH)) { "Invalid sync change" }
-            store.queue(operation)
+            val frame = channel.receive()
+            val operation = refusing(channel, SyncRefusal.PROTOCOL) {
+                requireNotNull(gson.fromJson(frame.toString(Charsets.UTF_8), SyncOperationEntity::class.java)) {
+                    "Invalid sync change"
+                }.also { require(it.hash.matches(HASH)) { "Invalid sync change" } }
+            }
+            // A change that fails verification (signature, sender, chain) is refused; a full queue is not.
+            refusing(channel, SyncRefusal.CHANGE) { store.queue(operation) }
             // Acknowledge only after the authenticated ciphertext reaches durable storage.
             channel.send(operation.hash.toByteArray(Charsets.US_ASCII))
         }
         return count
     }
 
-    private fun requestPhotos(channel: EncryptedSyncChannel, store: SyncSessionStore) {
+    private fun requestPhotos(channel: EncryptedSyncChannel, store: SyncSessionStore, receipts: Boolean) {
         val requests = store.missingPhotos().map { PhotoRequest(it.first, it.second) }
         channel.send(gson.toJson(requests).toByteArray(Charsets.UTF_8))
         requests.forEach { request ->
-            val size = channel.receive().toString(Charsets.US_ASCII).toLong()
+            val sizeFrame = channel.receive()
+            val size = refusing(channel, SyncRefusal.PROTOCOL) {
+                sizeFrame.toString(Charsets.US_ASCII).toLong().also {
+                    require(it == -1L || it == -2L || (it in PhotoSyncBlobs.MIN_PHOTO_FILE..PhotoSyncBlobs.MAX_PHOTO_BYTES + 28 &&
+                        it >= request.offset)) { "Invalid photo size" }
+                }
+            }
             if (size == -2L) {
                 store.photoBlobs.discardPartial(request.hash)
                 return@forEach
             }
             if (size < 0) { store.photoUnavailable(request.hash); return@forEach }
             val ref = PhotoBlobRef(request.hash, size)
-            store.photoBlobs.receive(channel, ref, request.offset)
+            // Only the peer's bytes breaking the transfer's rules are refused; a partial copy here that
+            // fails its check is dropped and fetched again, as before.
+            refusing(channel, SyncRefusal.PROTOCOL, only = { it is PhotoTransferInvalid }) {
+                store.photoBlobs.receive(channel, ref, request.offset, receipts)
+            }
             store.receivedPhoto(request.hash)
             channel.send(request.hash.toByteArray(Charsets.US_ASCII))
         }
     }
 
-    private fun servePhotos(channel: EncryptedSyncChannel, store: SyncSessionStore) {
-        val requests = requireNotNull(gson.fromJson(channel.receive().toString(Charsets.UTF_8),
-            Array<PhotoRequest?>::class.java)) { "Invalid photo request" }.toList()
-        require(requests.size <= MAX_PHOTO_REQUESTS)
+    private fun servePhotos(channel: EncryptedSyncChannel, store: SyncSessionStore, receipts: Boolean) {
+        val requestFrame = channel.receive()
+        val requests = refusing(channel, SyncRefusal.PROTOCOL) {
+            requireNotNull(gson.fromJson(requestFrame.toString(Charsets.UTF_8),
+                Array<PhotoRequest?>::class.java)) { "Invalid photo request" }.toList().also { requests ->
+                require(requests.size <= MAX_PHOTO_REQUESTS)
+                requests.forEach { request ->
+                    @Suppress("SENSELESS_COMPARISON")
+                    require(request != null && request.hash != null && request.hash.matches(HASH) && request.offset >= 0) {
+                        "Invalid photo request"
+                    }
+                }
+            }.filterNotNull()
+        }
         requests.forEach { request ->
-            @Suppress("SENSELESS_COMPARISON")
-            require(request != null && request.hash != null && request.hash.matches(HASH) && request.offset >= 0) {
-                "Invalid photo request"
-            }
             val available = store.photoBlobs.file(request.hash)
             val file = available?.takeIf { request.offset <= it.length() }
             val size = if (available != null && file == null) -2L else file?.length() ?: -1L
             channel.send(size.toString().toByteArray(Charsets.US_ASCII))
             if (file != null) {
-                store.photoBlobs.send(channel, file, request.offset)
-                require(channel.receive().contentEquals(request.hash.toByteArray(Charsets.US_ASCII))) {
-                    "Photo transfer was not acknowledged"
+                refusing(channel, SyncRefusal.PROTOCOL, only = { it is PhotoTransferInvalid }) {
+                    store.photoBlobs.send(channel, file, request.offset, receipts)
+                }
+                val ack = channel.receive()
+                refusing(channel, SyncRefusal.PROTOCOL) {
+                    require(ack.contentEquals(request.hash.toByteArray(Charsets.US_ASCII))) { "Photo transfer was not acknowledged" }
                 }
             }
         }

@@ -29,13 +29,24 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-enum class IncomingResult { APPLIED, REPLAY, CONFLICT, OBSOLETE }
+/**
+ * [DEFERRED]: M4, a kind of change this app version doesn't know. It joined its author's chain (so the
+ * changes after it apply, it counts as applied and it is relayed) and applies after an app update
+ * ([LockedSyncStore.applyDeferred]).
+ */
+enum class IncomingResult { APPLIED, REPLAY, CONFLICT, OBSOLETE, DEFERRED }
 internal class MissingPhotoDependencyException : Exception("Cover photo is still waiting for its image")
 internal class MissingRecordDependencyException : Exception("A linked item is still waiting to sync")
-/** A change of a kind this app version doesn't know: it waits for an app update ([SUPPORTED_ENTITY_TYPES]). */
+/** A stored change of a kind this app version doesn't know: it waits for an app update ([SUPPORTED_ENTITY_TYPES]). */
 internal class UnsupportedSyncEntityException(val entityType: String) : Exception("Update this app to apply a newer kind of change")
 
-/** The kinds of change this app version applies. Anything else waits ([UnsupportedSyncEntityException]). */
+/**
+ * The kinds of change this app version applies. Anything else is stored without applying (M4,
+ * [IncomingResult.DEFERRED]). A build writes a new kind only when every other active member announced
+ * the feature that reads it ([SyncFeatures]), as appearance, site icons and sign-in methods do. The
+ * version that adds a kind must also apply held changes of that kind after a pairing snapshot: an
+ * older host stored them without applying them.
+ */
 internal val SUPPORTED_ENTITY_TYPES = setOf("entry", "group", "passkey", "photo", "photo_cover", "device_name",
     AppearanceSyncRules.ENTITY_TYPE, SiteIconSyncRules.ENTITY_TYPE, SignInMethodSyncRules.ENTITY_TYPE,
     MasterPasswordRules.ENTITY_TYPE)
@@ -62,8 +73,13 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             .takeIf { it.matches(Regex("[0-9a-f]{64}")) }
     }
 
+    /**
+     * [stored]: M4, a change already in its author's chain (deferred by an earlier app version, or
+     * held in a pairing snapshot) applies now, after an app update. Its chain place is not checked
+     * again or stored twice; applied a second time, it is outdated against what it already set.
+     */
     suspend fun apply(operation: SyncOperationEntity, vaultKey: ByteArray,
-        skipPhotoBlob: Boolean = false): IncomingResult {
+        skipPhotoBlob: Boolean = false, stored: Boolean = false): IncomingResult {
         require(vaultKey.size == 32) { "Invalid vault key" }
         val member = requireNotNull(database.syncDao().membership(operation.vaultId, operation.deviceId)) {
             "Device is not a vault member"
@@ -86,9 +102,13 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
         require(DeviceIdentityCrypto.verify(Base64.getUrlDecoder().decode(member.identityPublicKey), change.signingBytes(), signature)) {
             "Invalid device signature"
         }
-        // A kind of change a newer app version made: it waits here until this app is updated, on
-        // Android and on Windows alike (M4). Setting it aside would drop it for good.
-        if (operation.entityType !in SUPPORTED_ENTITY_TYPES) throw UnsupportedSyncEntityException(operation.entityType)
+        // M4: a kind of change a newer app version made. It joins its author's chain unapplied, so the
+        // author's later changes still apply here, it counts as applied and it is relayed; it applies
+        // after an app update. The rule is shared with Windows. Setting it aside would drop it.
+        if (operation.entityType !in SUPPORTED_ENTITY_TYPES) {
+            if (stored) throw UnsupportedSyncEntityException(operation.entityType)
+            return defer(operation, member, withinCutoff)
+        }
         // Entity-ID HMACs use the epoch-1 key; the payload uses the key of its own epoch ([SyncKeyring]).
         val contentKey = database.syncContentKey(vaultKey)
         val keyring = database.syncKeyring(vaultKey)
@@ -183,13 +203,16 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
             require(currentMember == member && (currentMember.status == MemberStatus.ACTIVE || withinCutoff)) {
                 "Device membership changed"
             }
-            syncDao.operation(change.mutationId)?.let { existing ->
-                require(existing.hash == change.hash) { "Mutation ID was reused" }
-                return@withTransaction IncomingResult.REPLAY
-            }
-            val head = syncDao.deviceHead(change.vaultId, change.deviceId)
-            require(change.sequence == (head?.sequence ?: 0L) + 1L && change.previousHash == (head?.hash ?: GENESIS_HASH)) {
-                "Broken device change chain"
+            if (stored) require(syncDao.operation(change.mutationId)?.hash == change.hash) { "Deferred change is not stored" }
+            else {
+                syncDao.operation(change.mutationId)?.let { existing ->
+                    require(existing.hash == change.hash) { "Mutation ID was reused" }
+                    return@withTransaction IncomingResult.REPLAY
+                }
+                val head = syncDao.deviceHead(change.vaultId, change.deviceId)
+                require(change.sequence == (head?.sequence ?: 0L) + 1L && change.previousHash == (head?.hash ?: GENESIS_HASH)) {
+                    "Broken device change chain"
+                }
             }
             val state = syncDao.recordState(change.entityType, change.entityId)
             val localVersion = state?.let { RecordVersion.parse(it.recordVersionJson) }
@@ -337,7 +360,9 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
                     }
                     IncomingResult.APPLIED
                 }
-                VersionRelation.CONCURRENT -> {
+                // M4: a stored change tried again after an app update (applyDeferred retries until
+                // nothing waits) makes its conflict once.
+                VersionRelation.CONCURRENT -> if (stored && syncDao.hasConflictWith(change.hash)) IncomingResult.OBSOLETE else {
                     syncDao.insertConflict(SyncConflictEntity(UUID.randomUUID().toString(), change.entityType, change.entityId,
                         syncDao.operationsForEntity(change.entityType, change.entityId).firstOrNull {
                             RecordVersion.parse(it.recordVersionJson).relationTo(localVersion) == VersionRelation.EQUAL
@@ -347,8 +372,10 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
                 }
                 else -> IncomingResult.OBSOLETE
             }
-            syncDao.insertOperation(operation)
-            syncDao.upsertDeviceHead(SyncDeviceHeadEntity(change.vaultId, change.deviceId, change.sequence, change.hash))
+            if (!stored) {
+                syncDao.insertOperation(operation)
+                syncDao.upsertDeviceHead(SyncDeviceHeadEntity(change.vaultId, change.deviceId, change.sequence, change.hash))
+            }
             result
         }
         if (announceRemoteChanges) when {
@@ -369,6 +396,34 @@ internal class IncomingEntryChangeApplier(private val database: VaultDatabase,
         }
         return outcome
     }
+
+    /**
+     * M4: stores a verified change of an unknown kind in its author's chain without reading its
+     * payload: the same membership, replay and chain checks as any change, so the chain stays intact.
+     */
+    private suspend fun defer(operation: SyncOperationEntity, member: DeviceMembership, withinCutoff: Boolean): IncomingResult =
+        database.withTransaction {
+            val settings = requireNotNull(database.dao().settings()) { "Vault settings are missing" }
+            require(settings.vaultId == operation.vaultId) { "Wrong vault" }
+            val syncDao = database.syncDao()
+            val currentMember = requireNotNull(syncDao.membership(operation.vaultId, operation.deviceId)) {
+                "Device is not a vault member"
+            }.toMembership()
+            require(currentMember == member && (currentMember.status == MemberStatus.ACTIVE || withinCutoff)) {
+                "Device membership changed"
+            }
+            syncDao.operation(operation.mutationId)?.let { existing ->
+                require(existing.hash == operation.hash) { "Mutation ID was reused" }
+                return@withTransaction IncomingResult.REPLAY
+            }
+            val head = syncDao.deviceHead(operation.vaultId, operation.deviceId)
+            require(operation.sequence == (head?.sequence ?: 0L) + 1L && operation.previousHash == (head?.hash ?: GENESIS_HASH)) {
+                "Broken device change chain"
+            }
+            syncDao.insertOperation(operation)
+            syncDao.upsertDeviceHead(SyncDeviceHeadEntity(operation.vaultId, operation.deviceId, operation.sequence, operation.hash))
+            IncomingResult.DEFERRED
+        }
 
     internal fun decrypt(change: SyncChangeRecord, keyring: SyncKeyring): JSONObject {
         val plaintext = SyncPayloadCrypto.decrypt(change, keyring)

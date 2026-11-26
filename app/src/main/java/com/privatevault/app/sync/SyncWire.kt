@@ -135,6 +135,14 @@ internal class EncryptedSyncChannel(private val frames: SyncFrames, sessionKey: 
     private var sendSequence = 0L
     private var receiveSequence = 0L
     private var closed = false
+    private var peerRefused = false
+
+    /**
+     * M12: on once both devices proved who they are and the peer announced [SyncRefusal.FEATURE].
+     * A refusal frame from the peer then ends the session as [PeerRefused], and [refuse] tells the
+     * peer when this device refuses what it sent.
+     */
+    var refusals = false
 
     fun send(bytes: ByteArray) {
         check(!closed && sendSequence < Long.MAX_VALUE)
@@ -145,7 +153,18 @@ internal class EncryptedSyncChannel(private val frames: SyncFrames, sessionKey: 
 
     fun receive(): ByteArray {
         check(!closed && receiveSequence < Long.MAX_VALUE)
-        return cipher(Cipher.DECRYPT_MODE, receiveKey, receiveSequence++).doFinal(frames.receive())
+        val plaintext = cipher(Cipher.DECRYPT_MODE, receiveKey, receiveSequence++).doFinal(frames.receive())
+        if (refusals) SyncRefusal.decode(plaintext)?.let { code -> peerRefused = true; throw PeerRefused(code) }
+        return plaintext
+    }
+
+    /**
+     * Sends a refusal frame when [refusals] is on, never in answer to the peer's own refusal. Best
+     * effort: the session ends either way, so a failed send is ignored.
+     */
+    fun refuse(code: String) {
+        if (!refusals || peerRefused || closed) return
+        runCatching { send(SyncRefusal.encode(code)) }
     }
 
     override fun close() {

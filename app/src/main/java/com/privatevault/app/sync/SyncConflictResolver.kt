@@ -40,6 +40,18 @@ internal object ConflictVersions {
         return RecordVersion(counters)
     }
 
+    /** The pointwise maximum of both histories: the version of a field merge ([EntryFieldMerge]), with no extra count. */
+    fun join(local: RecordVersion, remote: RecordVersion): RecordVersion =
+        RecordVersion((local.counters.keys + remote.counters.keys).associateWith {
+            maxOf(local.counters[it] ?: 0L, remote.counters[it] ?: 0L)
+        })
+
+    /** The pointwise minimum, zero counters dropped: the version of the change both sides started from. */
+    fun meet(local: RecordVersion, remote: RecordVersion): RecordVersion =
+        RecordVersion((local.counters.keys intersect remote.counters.keys).associateWith {
+            minOf(local.counters.getValue(it), remote.counters.getValue(it))
+        }.filterValues { it > 0L })
+
     /** A later change settles an open conflict when it includes both reviewed versions. */
     fun settles(change: RecordVersion, conflictLocal: RecordVersion, conflictRemote: RecordVersion): Boolean =
         listOf(conflictLocal, conflictRemote).all {
@@ -94,12 +106,9 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
         val operations = dao.operationsForEntity(conflict.entityType, conflict.entityId)
         val selected = if (useIncoming) operations.first { it.hash == conflict.remoteChangeHash }
             else operations.first { RecordVersion.parse(it.recordVersionJson) == local }
-        val device = identity.getOrCreate()
-        val resolution = ConflictVersions.resolution(local, remote, device.deviceId)
-        val head = dao.deviceHead(selected.vaultId, device.deviceId)
-        val mutation = UUID.randomUUID().toString()
+        val resolution = ConflictVersions.resolution(local, remote, identity.getOrCreate().deviceId)
         val key = database.syncKeyring(localKey)
-        val encrypted = try {
+        val chosen = try {
             val chosen = IncomingEntryChangeApplier(database).decrypt(selected.toSyncChange(), key)
             if (combineNotes) {
                 val incoming = operations.first { it.hash == conflict.remoteChangeHash }
@@ -110,15 +119,80 @@ internal class SyncConflictResolver(private val database: VaultDatabase, private
                     other.optString("notes"), other.optString("fourthValue"))
                 entry.put("notes", plain).put("fourthValue", json).put("updatedAt", System.currentTimeMillis())
             }
-            val plaintext = chosen.toString().toByteArray(Charsets.UTF_8)
+            chosen
+        } finally { key.wipe() }
+        writeChange(selected, state, resolution, chosen, if (selected.kind == "delete") ChangeKind.DELETE else ChangeKind.UPSERT,
+            localKey, announce = false)
+    }
+
+    /**
+     * M2: merges every open conflict of an entry or folder whose two versions changed different
+     * fields ([EntryFieldMerge]), as a signed change of this device that every peer applies, older
+     * versions included. Runs after each apply pass. A conflict that can't merge stays for the user,
+     * unchanged. Returns how many merged.
+     */
+    suspend fun autoMerge(localKey: ByteArray): Int {
+        var merged = 0
+        val open = database.syncDao().conflicts()
+            .filter { it.resolvedAtUtc.isEmpty() && it.entityType in EntryFieldMerge.ENTITY_TYPES }
+        for (conflict in open) {
+            val done = try { mergeOne(conflict.conflictId, localKey) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { false }
+            if (done) merged++
+        }
+        return merged
+    }
+
+    private suspend fun mergeOne(id: String, localKey: ByteArray): Boolean = database.withTransaction {
+        val dao = database.syncDao()
+        val conflict = dao.conflicts().firstOrNull { it.conflictId == id && it.resolvedAtUtc.isEmpty() }
+            ?: return@withTransaction false
+        val state = dao.recordState(conflict.entityType, conflict.entityId) ?: return@withTransaction false
+        val local = RecordVersion.parse(state.recordVersionJson)
+        val remote = RecordVersion.parse(conflict.remoteVersionJson)
+        if (local.relationTo(remote) != VersionRelation.CONCURRENT) return@withTransaction false
+        val operations = dao.operationsForEntity(conflict.entityType, conflict.entityId)
+        val current = operations.firstOrNull { RecordVersion.parse(it.recordVersionJson) == local } ?: return@withTransaction false
+        val incoming = operations.firstOrNull { it.hash == conflict.remoteChangeHash } ?: return@withTransaction false
+        // The change both sides started from, when this device still holds it.
+        val meet = ConflictVersions.meet(local, remote)
+        val base = operations.filter { it.kind == "upsert" && meet.counters.isNotEmpty() &&
+            RecordVersion.parse(it.recordVersionJson) == meet }.minWithOrNull(compareBy({ it.deviceId }, { it.sequence }))
+        // Only an active member writes changes (a removed device keeps its items but stops syncing).
+        database.requireLocalSyncAuthor(current.vaultId, identity.getOrCreate().deviceId)
+        val key = database.syncKeyring(localKey)
+        val merged = (try {
+            val applier = IncomingEntryChangeApplier(database)
+            EntryFieldMerge.merge(conflict.entityType, base?.let { applier.decrypt(it.toSyncChange(), key) },
+                applier.decrypt(current.toSyncChange(), key), applier.decrypt(incoming.toSyncChange(), key))
+        } finally { key.wipe() }) ?: return@withTransaction false
+        val deleted = !merged.has(if (conflict.entityType == "entry") "entry" else "group")
+        // No extra count: a device that merges the same pair writes the same version, and neither
+        // sees the other's merge as a new conflict.
+        writeChange(current, state, ConflictVersions.join(local, remote), merged,
+            if (deleted) ChangeKind.DELETE else ChangeKind.UPSERT, localKey, announce = false)
+        if (conflict.entityType == "entry") RemoteEntryChanges.record(conflict.entityId, deleted = deleted, settled = true)
+        true
+    }
+
+    /** Signs [payload] as this device's next change of [selected]'s record, and applies it here. */
+    private suspend fun writeChange(selected: SyncOperationEntity, state: com.privatevault.app.data.SyncRecordStateEntity,
+        version: RecordVersion, payload: org.json.JSONObject, kind: ChangeKind, localKey: ByteArray, announce: Boolean) {
+        val device = identity.getOrCreate()
+        val head = database.syncDao().deviceHead(selected.vaultId, device.deviceId)
+        val mutation = UUID.randomUUID().toString()
+        val key = database.syncKeyring(localKey)
+        val encrypted = try {
+            val plaintext = payload.toString().toByteArray(Charsets.UTF_8)
             try { SyncPayloadCrypto.encrypt(key.writing(), selected.entityType, selected.vaultId, mutation, selected.entityId, plaintext) }
             finally { plaintext.fill(0) }
         } finally { key.wipe() }
         val change = SyncChangeRecord.createSigned(selected.vaultId, device.deviceId,
             Math.addExact(head?.sequence ?: 0L, 1L), head?.hash ?: GENESIS_HASH, mutation,
-            selected.entityType, selected.entityId, if (selected.kind == "delete") ChangeKind.DELETE else ChangeKind.UPSERT,
-            state.revision, resolution, Instant.now().toString(), encrypted.ciphertext, encrypted.nonce, identity::sign)
-        check(IncomingEntryChangeApplier(database, photoBlobs, context, announceRemoteChanges = false).apply(SyncOperationEntity(change.mutationId, change.formatVersion,
+            selected.entityType, selected.entityId, kind,
+            state.revision, version, Instant.now().toString(), encrypted.ciphertext, encrypted.nonce, identity::sign)
+        check(IncomingEntryChangeApplier(database, photoBlobs, context, announceRemoteChanges = announce).apply(SyncOperationEntity(change.mutationId, change.formatVersion,
             change.vaultId, change.deviceId, change.sequence, change.previousHash, change.entityType, change.entityId,
             change.kind.name.lowercase(), change.baseRevision, change.recordVersion.toJson(), change.occurredAtUtc,
             change.payloadCiphertext, change.payloadNonce, change.deviceSignature, change.hash), localKey) == IncomingResult.APPLIED)
